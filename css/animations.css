@@ -1,0 +1,144 @@
+/* ===========================================================================
+   ALPHA AIRCRAFT RACE 3D — animations.css
+   Every keyframe in the game. Kept in one place so motion stays consistent
+   and so `prefers-reduced-motion` has a single surface to disable.
+   ======================================================================== */
+
+@keyframes gridDrift {
+  from { background-position: 0 0, 0 0; }
+  to   { background-position: 0 64px, 64px 0; }
+}
+
+@keyframes burnerPulse {
+  from { opacity: 0.55; transform: scaleY(0.82); }
+  to   { opacity: 1;    transform: scaleY(1.35); }
+}
+
+@keyframes rotateHint {
+  0%, 100% { transform: rotate(0deg); }
+  45%      { transform: rotate(-90deg); }
+  55%      { transform: rotate(-90deg); }
+}
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(14px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes toastOut {
+  to { opacity: 0; transform: translateY(-8px) scale(0.98); }
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-26px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(26px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes panelSweep {
+  from { opacity: 0; transform: translateY(10px) scale(0.99); filter: blur(3px); }
+  to   { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+}
+
+@keyframes cardPop {
+  0%   { opacity: 0; transform: scale(0.90) translateY(12px); }
+  60%  { opacity: 1; transform: scale(1.015) translateY(0); }
+  100% { transform: scale(1); }
+}
+
+@keyframes scanLine {
+  from { transform: translateY(-100%); }
+  to   { transform: translateY(600%); }
+}
+
+@keyframes borderPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(57, 245, 255, 0.35); }
+  50%      { box-shadow: 0 0 22px 2px rgba(57, 245, 255, 0.22); }
+}
+
+@keyframes notifIn {
+  from { opacity: 0; transform: translateX(38px) skewX(-8deg); }
+  to   { opacity: 1; transform: translateX(0) skewX(0); }
+}
+@keyframes notifOut {
+  to { opacity: 0; transform: translateX(-18px); }
+}
+
+@keyframes countPop {
+  0%   { opacity: 0; transform: scale(2.1); letter-spacing: 0.5em; }
+  22%  { opacity: 1; transform: scale(1); letter-spacing: 0.14em; }
+  78%  { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(0.86); }
+}
+
+@keyframes bannerIn {
+  0%   { opacity: 0; transform: translateY(-16px) scaleX(0.7); }
+  18%  { opacity: 1; transform: translateY(0) scaleX(1); }
+  82%  { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-8px); }
+}
+
+@keyframes warnFlash {
+  0%, 100% { opacity: 0.25; }
+  50%      { opacity: 1; }
+}
+
+@keyframes damagePulse {
+  0%, 100% { opacity: 0; }
+  50%      { opacity: 1; }
+}
+
+@keyframes markerPulse {
+  0%, 100% { transform: scale(1); opacity: 0.85; }
+  50%      { transform: scale(1.11); opacity: 1; }
+}
+
+@keyframes cooldownSweep {
+  from { transform: rotate(0turn); }
+  to   { transform: rotate(1turn); }
+}
+
+@keyframes readyFlash {
+  0%   { box-shadow: 0 0 0 0 rgba(57, 245, 255, 0.7); }
+  100% { box-shadow: 0 0 0 16px rgba(57, 245, 255, 0); }
+}
+
+@keyframes shimmer {
+  from { background-position: -180% 0; }
+  to   { background-position: 280% 0; }
+}
+
+@keyframes floatY {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-7px); }
+}
+
+@keyframes spinSlow { to { transform: rotate(360deg); } }
+
+@keyframes recordGlow {
+  0%, 100% { text-shadow: 0 0 8px rgba(255, 182, 72, 0.5); }
+  50%      { text-shadow: 0 0 22px rgba(255, 182, 72, 0.95); }
+}
+
+/* ---- reusable animation classes ---------------------------------------- */
+.anim-fade-up { animation: fadeUp 320ms var(--ease) both; }
+.anim-pop { animation: cardPop 300ms var(--ease) both; }
+.anim-sweep { animation: panelSweep 260ms var(--ease) both; }
+.stagger > * { animation: fadeUp 300ms var(--ease) both; }
+.stagger > *:nth-child(1) { animation-delay: 20ms; }
+.stagger > *:nth-child(2) { animation-delay: 55ms; }
+.stagger > *:nth-child(3) { animation-delay: 90ms; }
+.stagger > *:nth-child(4) { animation-delay: 125ms; }
+.stagger > *:nth-child(5) { animation-delay: 160ms; }
+.stagger > *:nth-child(6) { animation-delay: 195ms; }
+.stagger > *:nth-child(7) { animation-delay: 230ms; }
+.stagger > *:nth-child(8) { animation-delay: 265ms; }
+.stagger > *:nth-child(n+9) { animation-delay: 300ms; }

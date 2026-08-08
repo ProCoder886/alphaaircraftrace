@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "generator": "tools/tripo/generate-assets.mjs",
+  "modelVersion": "v3.1-20260211",
+  "generatedAt": null,
+  "note": "Written by the Tripo3D pipeline. An empty `assets` array is the shipped default: the game builds every airframe and prop procedurally at runtime and only loads GLBs listed here with `status: \"ready\"`. Nothing in this file is required for the game to run — see tools/tripo/README.md.",
+  "assets": []
+}

@@ -1,0 +1,77 @@
+{
+  "$comment": "Asset generation definitions for tools/tripo/generate-assets.mjs. Each entry becomes one Tripo3D text-to-model job. `id` must match an aircraft id in js/config.js for airframes; anything else is loaded as scenery. Run: TRIPO_API_KEY=... node tools/tripo/generate-assets.mjs",
+  "modelVersion": "v3.1-20260211",
+  "defaults": {
+    "priority": "optional",
+    "targetTriangles": 20000,
+    "textureSize": 1024,
+    "lods": [1.0, 0.45, 0.18]
+  },
+  "assets": [
+    {
+      "id": "vector", "category": "aircraft", "priority": "critical",
+      "prompt": "futuristic single-seat racing jet aircraft, sleek aerodynamic delta wing airframe with forward canards, twin canted vertical stabilisers, twin round afterburner nozzles, bubble glass canopy, brushed grey metal fuselage with cyan accent stripes, clean hard-surface game asset, symmetrical, nose pointing forward, neutral pose, no background, no landing gear"
+    },
+    {
+      "id": "talon", "category": "aircraft", "priority": "optional",
+      "prompt": "futuristic hypersonic racing jet, extremely long narrow fuselage, heavily swept trapezoidal wings, twin oversized reheat engine nozzles at the tail, chin air intake, crimson red and matte black livery, sharp needle nose, hard-surface sci-fi racing aircraft, symmetrical, no background"
+    },
+    {
+      "id": "kestrel", "category": "aircraft", "priority": "optional",
+      "prompt": "futuristic agile racing aircraft, large forward canards, wide short-span delta wings with pronounced dihedral, twin canted tail fins, compact twin engines, green and dark grey splinter camouflage livery, hard-surface game model, symmetrical, no background"
+    },
+    {
+      "id": "bastion", "category": "aircraft", "priority": "optional",
+      "prompt": "heavy armoured futuristic racing aircraft, thick reinforced fuselage, broad swept wings with armoured leading edges, twin large engine nacelles, yellow and black hazard stripe livery, blocky industrial hard-surface design, symmetrical, no background"
+    },
+    {
+      "id": "wraith", "category": "aircraft", "priority": "optional",
+      "prompt": "stealth prototype racing aircraft, faceted angular low-observable fuselage, blended wing body, V-tail, flat rectangular exhaust nozzles, dorsal air intake, dark radar-absorbent grey finish, hard-surface sci-fi model, symmetrical, no background"
+    },
+    {
+      "id": "cargoLifter", "category": "vehicles", "priority": "optional",
+      "targetTriangles": 9000,
+      "prompt": "futuristic heavy cargo transport aircraft, boxy fuselage, high straight wing, four turbofan engines, cargo ramp at the rear, weathered olive and grey utility livery, low poly game asset, no background"
+    },
+    {
+      "id": "civilianLiner", "category": "vehicles", "priority": "optional",
+      "targetTriangles": 9000,
+      "prompt": "sleek futuristic passenger airliner, tubular fuselage, swept wings, two under-wing engines, T-tail, white and blue commercial livery, low poly game asset, no background"
+    },
+    {
+      "id": "securityDrone", "category": "vehicles", "priority": "optional",
+      "targetTriangles": 4000,
+      "prompt": "small futuristic quadrotor security drone, octahedral central body, four arms with ducted rotors, sensor turret underneath, dark grey with orange warning stripes, low poly game asset, no background"
+    },
+    {
+      "id": "energyGate", "category": "obstacles", "priority": "optional",
+      "targetTriangles": 8000,
+      "prompt": "large futuristic circular energy race gate, heavy metal outer ring with structural struts and warning beacons, hollow centre, industrial sci-fi checkpoint marker, no background"
+    },
+    {
+      "id": "cargoContainer", "category": "obstacles", "priority": "optional",
+      "targetTriangles": 2500,
+      "prompt": "battered futuristic cargo shipping container, rectangular ribbed metal box with corner castings and faded paint, low poly game prop, no background"
+    },
+    {
+      "id": "commsTower", "category": "environment", "priority": "optional",
+      "targetTriangles": 9000,
+      "prompt": "tall futuristic communications relay tower, tapered lattice mast, three horizontal antenna arms, dish array, red aircraft warning light at the top, weathered concrete base, game asset, no background"
+    },
+    {
+      "id": "skyBridge", "category": "environment", "priority": "optional",
+      "targetTriangles": 12000,
+      "prompt": "massive futuristic elevated sky bridge span, suspension arch, wide roadway deck, support pylons, illuminated edge strips, industrial megastructure, game asset, no background"
+    },
+    {
+      "id": "windTurbine", "category": "props", "priority": "optional",
+      "targetTriangles": 4000,
+      "prompt": "large white wind turbine, tapered tower, nacelle, three long blades, clean industrial design, low poly game asset, no background"
+    },
+    {
+      "id": "rockSpire", "category": "props", "priority": "optional",
+      "targetTriangles": 3000,
+      "prompt": "tall jagged rock spire pinnacle, layered sedimentary stone, weathered eroded surface, natural stone formation, low poly stylised game asset, no background"
+    }
+  ]
+}

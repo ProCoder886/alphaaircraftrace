@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#05080d" />
+<meta name="description" content="Alpha Aircraft Race 3D — a procedurally generated high-speed aerial racing game running entirely in the browser." />
+<meta name="color-scheme" content="dark" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<title>ALPHA AIRCRAFT RACE 3D</title>
+
+<link rel="stylesheet" href="css/main.css" />
+<link rel="stylesheet" href="css/animations.css" />
+<link rel="stylesheet" href="css/menu.css" />
+<link rel="stylesheet" href="css/hud.css" />
+<link rel="stylesheet" href="css/mobile.css" />
+
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='12' fill='%23070b12'/><path d='M32 8 L38 30 L58 36 L38 38 L34 56 L30 38 L6 36 L26 30 Z' fill='%2339f5ff'/></svg>" />
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/build/three.module.min.js",
+    "three/addons/": "./vendor/three/addons/"
+  }
+}
+</script>
+</head>
+<body class="app-booting">
+
+<!-- ═══════════════════════════════ RENDER SURFACE ═══════════════════════ -->
+<div id="viewport">
+  <canvas id="game-canvas"></canvas>
+  <div id="vignette-overlay" aria-hidden="true"></div>
+</div>
+
+<!-- ═══════════════════════════════ LOADING ══════════════════════════════ -->
+<section id="loading-screen" class="screen active" role="status" aria-live="polite">
+  <div class="load-bg" aria-hidden="true">
+    <div class="load-grid"></div>
+    <div class="load-glow"></div>
+  </div>
+  <div class="load-inner">
+    <div class="load-mark" aria-hidden="true">
+      <svg viewBox="0 0 220 120" class="load-jet">
+        <path class="jet-body" d="M110 8 L124 62 L188 82 L124 88 L116 116 L110 96 L104 116 L96 88 L32 82 L96 62 Z" />
+        <path class="jet-glow" d="M104 96 L110 118 L116 96 Z" />
+      </svg>
+    </div>
+    <h1 class="load-title">ALPHA<span>AIRCRAFT RACE</span><em>3D</em></h1>
+    <div class="load-venue" id="load-venue">Preparing flight systems</div>
+    <div class="load-bar-wrap">
+      <div class="load-bar"><div class="load-bar-fill" id="load-bar-fill"></div></div>
+      <div class="load-bar-meta">
+        <span id="load-stage">Booting flight systems</span>
+        <span id="load-percent">0%</span>
+      </div>
+    </div>
+    <div class="load-tip" id="load-tip"></div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ ONBOARDING ═══════════════════════════ -->
+<section id="onboarding" class="screen" aria-label="Getting started">
+  <div class="ob-frame">
+    <div class="ob-slides" id="ob-slides"><!-- built by ui.js --></div>
+    <div class="ob-footer">
+      <div class="ob-dots" id="ob-dots"></div>
+      <div class="ob-actions">
+        <button class="btn btn-ghost" id="ob-skip" type="button">Skip</button>
+        <button class="btn btn-primary" id="ob-next" type="button">Next</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ MAIN MENU ════════════════════════════ -->
+<section id="main-menu" class="screen" aria-label="Main menu">
+  <div class="menu-topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"></div>
+      <div class="brand-text">ALPHA <b>AIRCRAFT RACE</b> <em>3D</em></div>
+    </div>
+    <div class="topbar-right">
+      <div class="credit-chip" title="Credits earned">
+        <span class="chip-icon" aria-hidden="true">◈</span>
+        <span id="credit-value">0</span>
+      </div>
+      <button class="icon-btn" id="btn-fullscreen" type="button" title="Toggle fullscreen (F)" aria-label="Toggle fullscreen">⛶</button>
+      <button class="icon-btn" id="btn-mute" type="button" title="Mute audio" aria-label="Mute audio">♪</button>
+    </div>
+  </div>
+
+  <div class="menu-body">
+    <nav class="menu-nav" id="menu-nav" aria-label="Menu sections"></nav>
+    <div class="menu-panel scroll-area" id="menu-panel"><!-- built by ui.js --></div>
+  </div>
+
+  <div class="menu-footer">
+    <div class="loadout" id="loadout-summary"></div>
+    <button class="btn btn-launch" id="btn-launch" type="button">
+      <span class="launch-label">LAUNCH</span>
+      <span class="launch-sub" id="launch-sub">Endless Flight · Elite · Random</span>
+    </button>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ HUD ══════════════════════════════════ -->
+<div id="hud" class="hud" aria-hidden="true">
+
+  <!-- top left: position + score -->
+  <div class="hud-tl">
+    <div class="hud-position">
+      <div class="hud-label">POSITION</div>
+      <div class="hud-position-value"><span id="hud-pos">1</span><em id="hud-grid">/ 8</em></div>
+    </div>
+    <div class="hud-score-block">
+      <div class="hud-score" id="hud-score">0</div>
+      <div class="hud-combo" id="hud-combo">x1.0</div>
+    </div>
+    <div class="hud-run-stats">
+      <span><i>DIST</i><b id="hud-distance">0.00 km</b></span>
+      <span><i>CP</i><b id="hud-checkpoints">0</b></span>
+    </div>
+  </div>
+
+  <!-- top centre: compass -->
+  <div class="hud-compass">
+    <div class="compass-strip" id="compass-strip"><div class="compass-tape" id="compass-tape"></div></div>
+    <div class="compass-heading"><span id="hud-heading">000</span></div>
+  </div>
+
+  <!-- top right: timers -->
+  <div class="hud-tr">
+    <div class="hud-laptime">
+      <div class="hud-label" id="hud-timer-label">LAP TIME</div>
+      <div class="hud-timer-value" id="hud-timer">00:00.000</div>
+    </div>
+    <div class="hud-panel-small">
+      <div class="row"><span>BEST LAP</span><b id="hud-best" class="good">--:--.---</b></div>
+      <div class="row"><span>PENALTY</span><b id="hud-penalty" class="bad">00:00.000</b></div>
+    </div>
+  </div>
+
+  <!-- centre: gauges + checkpoint marker -->
+  <div class="hud-centre">
+    <svg class="gauge gauge-left" viewBox="0 0 120 300" aria-hidden="true">
+      <path class="gauge-track" d="M96 22 A 150 150 0 0 0 96 278" />
+      <path class="gauge-fill" id="spd-arc" d="M96 22 A 150 150 0 0 0 96 278" />
+      <g id="spd-ticks" class="gauge-ticks"></g>
+    </svg>
+    <div class="gauge-readout readout-left">
+      <div class="readout-label">SPD</div>
+      <div class="readout-value" id="hud-speed">0</div>
+      <div class="readout-unit">km/h</div>
+    </div>
+
+    <svg class="gauge gauge-right" viewBox="0 0 120 300" aria-hidden="true">
+      <path class="gauge-track" d="M24 22 A 150 150 0 0 1 24 278" />
+      <path class="gauge-fill" id="alt-arc" d="M24 22 A 150 150 0 0 1 24 278" />
+      <g id="alt-ticks" class="gauge-ticks"></g>
+    </svg>
+    <div class="gauge-readout readout-right">
+      <div class="readout-label">ALT</div>
+      <div class="readout-value" id="hud-altitude">0</div>
+      <div class="readout-unit">m</div>
+    </div>
+
+    <div class="reticle" aria-hidden="true">
+      <span class="reticle-dot"></span>
+      <span class="reticle-wing left"></span>
+      <span class="reticle-wing right"></span>
+    </div>
+
+    <div class="cp-marker" id="cp-marker" aria-hidden="true">
+      <div class="cp-ring"></div>
+      <div class="cp-label" id="cp-label">CHECKPOINT</div>
+      <div class="cp-distance" id="cp-distance">0.0 KM</div>
+    </div>
+    <div class="cp-offscreen" id="cp-offscreen" aria-hidden="true"></div>
+  </div>
+
+  <!-- bottom left: radar -->
+  <div class="hud-bl">
+    <div class="radar-wrap">
+      <canvas id="radar" width="260" height="260"></canvas>
+      <div class="radar-labels" aria-hidden="true">
+        <span class="rl n">N</span><span class="rl e">E</span><span class="rl s">S</span><span class="rl w">W</span>
+      </div>
+    </div>
+    <div class="alt-tape" id="alt-tape" aria-hidden="true"><div class="alt-tape-fill" id="alt-tape-fill"></div><span class="alt-tape-mark" id="alt-tape-mark"></span></div>
+  </div>
+
+  <!-- bottom right: powers + damage -->
+  <div class="hud-br">
+    <div class="power-rack" id="power-rack"></div>
+    <div class="status-stack">
+      <div class="status-row">
+        <span class="status-key">BOOST</span>
+        <div class="bar boost"><div class="bar-fill" id="boost-fill"></div></div>
+      </div>
+      <div class="status-row">
+        <span class="status-key">HULL</span>
+        <div class="bar hull"><div class="bar-fill" id="hull-fill"></div></div>
+        <b class="status-num" id="hull-pct">100%</b>
+      </div>
+    </div>
+  </div>
+
+  <!-- bottom centre: objective + event feed -->
+  <div class="hud-bc">
+    <div class="objective-card" id="objective-card">
+      <div class="obj-head"><span class="obj-tag" id="obj-tag">OBJECTIVE</span><span class="obj-mode" id="obj-mode"></span></div>
+      <div class="obj-text" id="obj-text">—</div>
+      <div class="obj-bar"><div class="obj-bar-fill" id="obj-bar-fill"></div></div>
+    </div>
+  </div>
+
+  <div class="notif-stack" id="notif-stack" aria-live="polite"></div>
+  <div class="event-banner" id="event-banner"></div>
+  <div class="subtitle-bar" id="subtitle-bar"></div>
+  <div class="countdown" id="countdown"></div>
+  <div class="warn-strip" id="warn-strip"></div>
+  <div class="damage-vignette" id="damage-vignette" aria-hidden="true"></div>
+</div>
+
+<!-- ═══════════════════════════════ MOBILE CONTROLS ══════════════════════ -->
+<div id="mobile-controls" class="mobile-controls" aria-hidden="true">
+  <div class="stick-zone" id="stick-zone">
+    <div class="stick-base" id="stick-base"><div class="stick-knob" id="stick-knob"></div></div>
+    <div class="stick-hint">FLY</div>
+  </div>
+  <div class="touch-right">
+    <div class="touch-powers" id="touch-powers"></div>
+    <div class="touch-primary">
+      <button class="tbtn tbtn-brake" data-touch="brake" type="button">BRK</button>
+      <button class="tbtn tbtn-boost" data-touch="boost" type="button">BOOST</button>
+    </div>
+  </div>
+  <button class="tbtn tbtn-pause" data-touch="pause" id="touch-pause" type="button" aria-label="Pause">❚❚</button>
+</div>
+
+<!-- ═══════════════════════════════ PAUSE ════════════════════════════════ -->
+<section id="pause-menu" class="screen overlay" aria-label="Paused">
+  <div class="pause-card">
+    <header class="pause-head">
+      <h2>PAUSED</h2>
+      <div class="pause-context" id="pause-context"></div>
+    </header>
+    <div class="pause-stats" id="pause-stats"></div>
+    <div class="pause-actions">
+      <button class="btn btn-primary" data-pause="resume" type="button">Resume</button>
+      <button class="btn" data-pause="restart" type="button">Restart</button>
+      <button class="btn" data-pause="settings" type="button">Settings</button>
+      <button class="btn" data-pause="controls" type="button">Controls</button>
+      <button class="btn btn-danger" data-pause="menu" type="button">Main Menu</button>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ OVERLAY PANEL ════════════════════════ -->
+<section id="overlay-panel" class="screen overlay" aria-label="Panel">
+  <div class="overlay-card">
+    <header class="overlay-head">
+      <h2 id="overlay-title">Settings</h2>
+      <button class="icon-btn" id="overlay-close" type="button" aria-label="Close">✕</button>
+    </header>
+    <div class="overlay-body scroll-area" id="overlay-body"></div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ RESULTS ══════════════════════════════ -->
+<section id="results-screen" class="screen" aria-label="Run results">
+  <div class="results-card">
+    <div class="results-head">
+      <div class="results-verdict" id="results-verdict">RUN COMPLETE</div>
+      <div class="results-reason" id="results-reason"></div>
+    </div>
+    <div class="results-grid" id="results-grid"></div>
+    <div class="results-objectives" id="results-objectives"></div>
+    <div class="results-rewards" id="results-rewards"></div>
+    <div class="results-actions">
+      <button class="btn btn-primary" data-result="retry" type="button">Retry</button>
+      <button class="btn" data-result="newseed" type="button">New Route</button>
+      <button class="btn" data-result="mode" type="button">Change Mode</button>
+      <button class="btn" data-result="location" type="button">Change Location</button>
+      <button class="btn btn-ghost" data-result="menu" type="button">Main Menu</button>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ MISC OVERLAYS ════════════════════════ -->
+<div id="orientation-overlay" class="orientation-overlay" aria-hidden="true">
+  <div class="orient-inner">
+    <div class="orient-icon" aria-hidden="true">▭</div>
+    <h3>ROTATE YOUR DEVICE</h3>
+    <p>Alpha Aircraft Race 3D is played in landscape.</p>
+  </div>
+</div>
+
+<div id="debug-overlay" class="debug-overlay" aria-hidden="true"></div>
+
+<div id="toast-host" class="toast-host" aria-live="polite"></div>
+
+<noscript>
+  <div class="noscript-note">
+    <h2>ALPHA AIRCRAFT RACE 3D</h2>
+    <p>This game requires JavaScript and WebGL. Please enable JavaScript to play.</p>
+  </div>
+</noscript>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

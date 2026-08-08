@@ -1,0 +1,123 @@
+/* ===========================================================================
+   ALPHA AIRCRAFT RACE 3D — mobile.css
+   Touch controls and landscape-first layout tuning.
+   Gameplay is landscape only; portrait is gated by the orientation overlay.
+   ======================================================================== */
+
+.mobile-controls {
+  position: absolute; inset: 0; z-index: 25;
+  display: none;
+  pointer-events: none;
+  padding: max(10px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+  user-select: none; -webkit-user-select: none;
+}
+body.touch-mode .mobile-controls.enabled { display: block; }
+
+/* ---- flight stick -------------------------------------------------------- */
+.stick-zone {
+  position: absolute; left: 0; bottom: 0;
+  width: 42%; height: 62%;
+  pointer-events: auto;
+  touch-action: none;
+  display: flex; align-items: flex-end; justify-content: flex-start;
+  padding: 0 0 max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+.stick-base {
+  position: relative; width: 128px; height: 128px; border-radius: 50%;
+  border: 1.5px solid rgba(200, 235, 255, 0.28);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(57, 245, 255, 0.10), transparent 62%),
+    rgba(6, 12, 19, 0.34);
+  box-shadow: inset 0 0 26px rgba(57, 245, 255, 0.12);
+  transition: opacity var(--t-fast), transform var(--t-fast);
+  opacity: 0.62;
+}
+.stick-base::before, .stick-base::after { content: ""; position: absolute; background: rgba(200, 235, 255, 0.16); }
+.stick-base::before { left: 12%; right: 12%; top: 50%; height: 1px; }
+.stick-base::after { top: 12%; bottom: 12%; left: 50%; width: 1px; }
+.stick-zone.engaged .stick-base { opacity: 1; }
+.stick-knob {
+  position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px;
+  border-radius: 50%;
+  border: 1px solid rgba(220, 250, 255, 0.6);
+  background: radial-gradient(circle at 38% 34%, rgba(150, 245, 255, 0.55), rgba(12, 46, 60, 0.85));
+  box-shadow: 0 0 20px rgba(57, 245, 255, 0.45);
+  will-change: transform;
+}
+.stick-hint { position: absolute; left: 78px; bottom: 6px; font-size: 0.58rem; letter-spacing: 0.28em; color: rgba(200, 235, 255, 0.4); }
+
+/* ---- right cluster ------------------------------------------------------- */
+.touch-right {
+  position: absolute; right: max(14px, env(safe-area-inset-right)); bottom: max(12px, env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
+  pointer-events: none;
+}
+.touch-powers { display: flex; gap: 7px; pointer-events: auto; }
+.touch-primary { display: flex; gap: 10px; align-items: flex-end; pointer-events: auto; }
+
+.tbtn {
+  pointer-events: auto; touch-action: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1.5px solid rgba(200, 235, 255, 0.30);
+  border-radius: 50%;
+  background: rgba(8, 16, 25, 0.5);
+  color: rgba(225, 248, 255, 0.9);
+  font-size: 0.62rem; font-weight: 700; letter-spacing: 0.10em;
+  transition: transform 90ms var(--ease), background 90ms, border-color 90ms, box-shadow 90ms;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+}
+.tbtn:active, .tbtn.held { transform: scale(0.93); background: rgba(24, 88, 106, 0.75); border-color: var(--accent); box-shadow: 0 0 20px rgba(57, 245, 255, 0.5); }
+
+.tbtn-boost { width: 96px; height: 96px; font-size: 0.72rem; letter-spacing: 0.16em; border-color: rgba(57, 245, 255, 0.5); background: radial-gradient(circle at 40% 34%, rgba(57, 245, 255, 0.22), rgba(8, 26, 34, 0.6)); }
+.tbtn-brake { width: 62px; height: 62px; border-color: rgba(255, 182, 72, 0.42); }
+.tbtn-pause { position: absolute; top: max(10px, env(safe-area-inset-top)); right: max(14px, env(safe-area-inset-right)); width: 44px; height: 44px; font-size: 0.7rem; pointer-events: auto; }
+
+.touch-power {
+  position: relative; width: 52px; height: 52px; overflow: hidden;
+  border-radius: 10px;
+  flex-direction: column; gap: 1px;
+}
+.touch-power .tp-num { font-family: var(--font-num); font-size: 0.54rem; color: rgba(210, 240, 255, 0.55); }
+.touch-power .tp-name { font-size: 0.48rem; letter-spacing: 0.08em; }
+.touch-power .tp-cd { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.6); height: 0%; }
+.touch-power.ready { border-color: rgba(57, 245, 255, 0.6); }
+.touch-power.active { border-color: var(--lime); background: rgba(30, 62, 24, 0.6); }
+
+/* ---- portrait gate ------------------------------------------------------- */
+@media (orientation: portrait) {
+  body.touch-mode .orientation-overlay { display: flex; }
+}
+@media (orientation: portrait) and (min-width: 900px) {
+  body.touch-mode .orientation-overlay { display: none; }
+}
+
+/* ---- small landscape phones --------------------------------------------- */
+@media (max-height: 430px) {
+  .stick-base { width: 104px; height: 104px; }
+  .stick-knob { width: 44px; height: 44px; margin: -22px 0 0 -22px; }
+  .tbtn-boost { width: 78px; height: 78px; }
+  .tbtn-brake { width: 52px; height: 52px; }
+  .touch-power { width: 44px; height: 44px; }
+  .stick-hint { display: none; }
+}
+
+/* ---- ultrawide ----------------------------------------------------------- */
+@media (min-aspect-ratio: 21/9) {
+  .hud-tl, .hud-bl { left: max(4vw, 30px); }
+  .hud-tr, .hud-br { right: max(4vw, 30px); }
+  .gauge-left { left: 26%; } .gauge-right { right: 26%; }
+  .readout-left { left: calc(26% - 92px); } .readout-right { right: calc(26% - 92px); }
+}
+
+/* ---- tall / square displays ---------------------------------------------- */
+@media (max-aspect-ratio: 4/3) {
+  .gauge-left { left: 8%; } .gauge-right { right: 8%; }
+  .readout-left { left: calc(8% - 72px); } .readout-right { right: calc(8% - 72px); }
+}
+
+/* ---- when the on-screen controls are up, keep the HUD out of their way --- */
+body.touch-mode .hud-bl { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 128px); }
+body.touch-mode .hud-bc { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 4px); width: min(280px, 34%); }
+body.touch-mode .hud-br { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 118px); }
+body.touch-mode .subtitle-bar { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 172px); }

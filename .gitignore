@@ -1,0 +1,14 @@
+# Raw pre-optimisation downloads from the Tripo3D pipeline (regenerable)
+tools/tripo/.raw/
+
+# Node
+node_modules/
+npm-debug.log*
+package-lock.json
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
