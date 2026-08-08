@@ -1075,7 +1075,7 @@ export class World {
           vDist = -mv.z;
           // Soft-particle fade: a puff whose centre is nearly on the camera
           // would otherwise fill the screen with a flat white card.
-          vNear = smoothstep(aScale * 0.35, aScale * 2.4 + 160.0, camDist);
+          vNear = smoothstep(max(aScale * 0.5, 150.0), max(aScale * 2.4, 560.0), camDist);
           gl_Position = projectionMatrix * mv;
         }`,
       fragmentShader: /* glsl */`
@@ -1336,10 +1336,13 @@ export class World {
     for (let n = chunk.startNode; n < chunk.endNode; n++) {
       const node = this.path.nodes[n];
       if (!node) break;
+      // One chain every few nodes, not every node — ring chains should be
+      // punctuation along the route, not a tunnel of overlapping hoops.
+      if (n % 3 !== 0) continue;
       const seg = node.seg;
       const density = (seg.rings || 1) * 1.0;
-      if (rng.next() > density * 0.55) continue;
-      const chain = rng.int(2, 5);
+      if (rng.next() > density * 0.62) continue;
+      const chain = rng.int(2, 4);
       const lateralPhase = rng.float(0, TAU);
       const amp = node.radius * rng.float(0.15, 0.55);
       for (let k = 0; k < chain; k++) {
@@ -1368,7 +1371,7 @@ export class World {
       const node = this.path.nodes[n];
       if (!node) break;
       const seg = node.seg;
-      const count = Math.round((seg.obst || 1) * obsScale * rng.float(0.35, 1.15));
+      const count = Math.round((seg.obst || 1) * obsScale * rng.float(0.22, 0.85));
       if (count <= 0) continue;
       // Reserve a free sector so a flyable line always exists through the node.
       const freeAngle = rng.float(0, TAU);

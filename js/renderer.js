@@ -370,14 +370,16 @@ export class TextureFactory {
       const c = this._canvas(size, size);
       const ctx = c.getContext('2d');
       const rng = new RNG(99);
-      ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, size, size);
+      ctx.fillStyle = '#8a8a8a'; ctx.fillRect(0, 0, size, size);
       for (let i = 0; i < 5200; i++) {
-        const v = Math.floor(rng.float(60, 200));
-        ctx.fillStyle = `rgba(${v},${v},${v},${rng.float(0.05, 0.3)})`;
+        const v = Math.floor(rng.float(96, 176));
+        ctx.fillStyle = `rgba(${v},${v},${v},${rng.float(0.04, 0.18)})`;
         const s = rng.float(2, 22);
         ctx.fillRect(rng.float(0, size), rng.float(0, size), s, s * rng.float(0.4, 1.6));
       }
-      return this._finish(c, { repeat: 1, aniso: 8 });
+      // Tiled tightly across each terrain tile: at repeat 1 the pattern spans
+      // kilometres and reads as dithering rather than ground detail.
+      return this._finish(c, { repeat: 26, aniso: 8 });
     });
   }
 
@@ -725,9 +727,9 @@ export class SkySystem {
 
           // --- sun disc with soft limb
           float sunAng = acos(clamp(sunDot, -1.0, 1.0));
-          float disc = 1.0 - smoothstep(0.010 * uSunSize, 0.030 * uSunSize, sunAng);
-          float bloomRing = exp(-sunAng * 22.0 / uSunSize) * 0.55;
-          sky += uSunColor * (disc * 9.0 + bloomRing);
+          float disc = 1.0 - smoothstep(0.010 * uSunSize, 0.028 * uSunSize, sunAng);
+          float bloomRing = exp(-sunAng * 30.0 / uSunSize) * 0.38;
+          sky += uSunColor * (disc * 5.5 + bloomRing);
 
           // --- moon when the sun is below the horizon
           if (uStars > 0.02) {
@@ -1184,10 +1186,12 @@ export class PostFX {
  * Aircraft convention: nose = local -Z, up = +Y, right wing = +X.
  * ======================================================================== */
 
+// Distances are tuned so the airframe stays a large, readable subject rather
+// than a speck — the aircraft is the thing you are reading to fly.
 const CAM_MODES = [
-  { id: 'chase', name: 'Chase', dist: 26, height: 6.2, look: 42, fov: 66 },
-  { id: 'far', name: 'Wide Chase', dist: 40, height: 9.5, look: 60, fov: 70 },
-  { id: 'close', name: 'Close', dist: 15, height: 3.6, look: 30, fov: 62 },
+  { id: 'chase', name: 'Chase', dist: 17, height: 4.4, look: 46, fov: 66 },
+  { id: 'far', name: 'Wide Chase', dist: 29, height: 7.4, look: 62, fov: 70 },
+  { id: 'close', name: 'Close', dist: 11.5, height: 2.8, look: 32, fov: 62 },
   { id: 'cockpit', name: 'Cockpit', dist: -1.4, height: 1.35, look: 200, fov: 78, cockpit: true },
 ];
 
@@ -1245,8 +1249,8 @@ export class CameraRig {
     const q = target.quaternion;
 
     // --- desired camera position in aircraft space ------------------------
-    const distance = m.dist * (1 + speed01 * 0.34 + boost * 0.16) * (params.distanceScale ?? 1);
-    const height = m.height * (1 + speed01 * 0.12);
+    const distance = m.dist * (1 + speed01 * 0.20 + boost * 0.10) * (params.distanceScale ?? 1);
+    const height = m.height * (1 + speed01 * 0.10);
     this._offset.set(0, height, distance);
     // Trail slightly outside the turn so the airframe reads against the sky.
     this._offset.x += (params.lateral ?? 0) * -3.2;
@@ -2091,7 +2095,9 @@ export class Afterburner {
       const m = new THREE.ShaderMaterial({
         uniforms: this.uniforms,
         transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-        side: THREE.DoubleSide,
+        // Back faces only: you see through the near wall to the far one, which
+        // reads as a hollow glowing volume instead of a solid painted cone.
+        side: THREE.BackSide,
         vertexShader: /* glsl */`
           varying vec2 vUv; varying vec3 vN; varying vec3 vV;
           uniform float uIntensity, uBoost;
@@ -2636,22 +2642,27 @@ export class RenderSystem {
     this.lighting.configure(this.sky, this.quality.preset);
     const w = WEATHER[weatherId] || WEATHER.clear;
 
-    this.viewRange = 21000 * this.quality.viewDistance * lerp(0.35, 1.15, w.vis) * (biome.ceiling ? 0.35 : 1);
+    this.viewRange = 26000 * this.quality.viewDistance * lerp(0.35, 1.15, w.vis) * (biome.ceiling ? 0.35 : 1);
     this.scene.fog.color.copy(this.sky.fogColor);
-    this.scene.fog.density = 2.85 / this.viewRange;
+    // Aerial perspective should read as depth, not as a white sheet over the
+    // mid-distance — keep terrain colour alive well past the near field.
+    this.scene.fog.density = 2.35 / this.viewRange;
     this.camera.far = clamp(this.viewRange * 1.5, 6000, WORLD.farPlane);
     this.camera.updateProjectionMatrix();
     this.renderer.setClearColor(this.sky.fogColor, 1);
 
     // Per-venue colour grade.
     const acc = new THREE.Color(biome.accent);
-    this.grade.sat = w.sat * 1.05;
-    this.grade.contrast = lerp(1.02, 1.14, 1 - w.vis);
+    this.grade.sat = w.sat * 1.16;
+    this.grade.contrast = lerp(1.08, 1.18, 1 - w.vis);
     this.grade.lift.set(acc.r * 0.012, acc.g * 0.012, acc.b * 0.016);
     this.grade.gain.set(
       lerp(1, 1.03, acc.r), lerp(1, 1.01, acc.g), lerp(1, 1.05, acc.b),
     );
-    this.renderer.toneMappingExposure = w.exposure * (biome.ceiling ? 1.35 : 1);
+    // Bright, high-visibility conditions need to be pulled down or snowfields
+    // and clear skies clip to white under ACES.
+    this.renderer.toneMappingExposure = w.exposure * lerp(1.0, 0.86, clamp01(w.vis))
+      * (biome.ceiling ? 1.55 : 1);
 
     this.vfx.setWeather(weatherId, 1);
     this.updateEnvMap(true);

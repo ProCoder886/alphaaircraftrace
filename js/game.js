@@ -23,6 +23,11 @@ import { UI, formatTime, formatDistance } from './ui.js';
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
+const _v3 = new THREE.Vector3();
+const _zero = new THREE.Vector3();
+const _upVec = new THREE.Vector3(0, 1, 0);
+const _m4 = new THREE.Matrix4();
+const _quat = new THREE.Quaternion();
 const _screen = { x: 0, y: 0, visible: false, behind: false, dist: 0 };
 
 /* ===========================================================================
@@ -399,12 +404,23 @@ export class Game {
     const s = this.world.path.sample(m.distance, {});
     const lat = Math.sin(m.t * 0.24) * s.radius * 0.35;
     const vert = Math.cos(m.t * 0.19) * s.radius * 0.18;
+    // Hangar inspection climbs clear of the route so gates, rings, obstacles
+    // and cloud puffs cannot crowd the aircraft you are trying to look at.
+    m.lift = damp(m.lift || 0, this.hangarMode ? 1100 : 0, 1.4, dt);
     const prev = _v.copy(this.player.position);
-    this.player.position.copy(s.pos).addScaledVector(s.right, lat).addScaledVector(s.up, vert);
+    this.player.position.copy(s.pos)
+      .addScaledVector(s.right, lat)
+      .addScaledVector(s.up, vert + m.lift);
+    // Cinematic mode banks with the flight path; hangar mode holds a level,
+    // slightly nose-up presentation attitude so the airframe reads cleanly.
     _v2.subVectors(this.player.position, prev);
-    if (_v2.lengthSq() > 0.01) {
-      const mtx = new THREE.Matrix4().lookAt(_v2.clone().normalize(), new THREE.Vector3(), s.up);
-      this.player.quaternion.slerp(new THREE.Quaternion().setFromRotationMatrix(mtx), clamp01(dt * 4));
+    const heading = this.hangarMode
+      ? _v2.copy(s.tangent).setY(0.05).normalize()
+      : (_v2.lengthSq() > 0.01 ? _v2.normalize() : null);
+    if (heading) {
+      _m4.lookAt(heading, _zero, this.hangarMode ? _upVec : s.up);
+      _quat.setFromRotationMatrix(_m4);
+      this.player.quaternion.slerp(_quat, clamp01(dt * (this.hangarMode ? 2.5 : 4)));
     }
     this.player.speed = 210;
     this.player.visual.update(dt, {
@@ -420,13 +436,20 @@ export class Game {
       // reheat, trails and environment stay live behind it.
       this.hangarSpinVel = damp(this.hangarSpinVel || 0, 0, 2.6, dt);
       this.hangarSpin = (this.hangarSpin || 0) + (this.hangarSpinVel + 0.22) * dt;
-      const r = this.player.visual.length * 1.75;
-      // Framed to the right of centre so the detail panel does not cover it.
+      const r = this.player.visual.length * 2.25;
+      // Orbit in the aircraft's own frame, not world space, so the presentation
+      // angle stays constant as the route beneath it turns.
+      const q = this.player.quaternion;
+      const fwd = _v.set(0, 0, -1).applyQuaternion(q);
+      const rgt = _v2.set(1, 0, 0).applyQuaternion(q);
       cam.position.copy(this.player.position)
-        .add(_v.set(Math.cos(this.hangarSpin) * r, r * 0.30 + Math.sin(m.t * 0.4) * 1.2, Math.sin(this.hangarSpin) * r));
+        .addScaledVector(fwd, -Math.cos(this.hangarSpin) * r)
+        .addScaledVector(rgt, Math.sin(this.hangarSpin) * r)
+        .addScaledVector(_upVec, r * 0.24 + Math.sin(m.t * 0.4) * 0.8);
       cam.up.set(0, 1, 0);
       cam.lookAt(this.player.position);
-      if (cam.fov !== 42) { cam.fov = 42; cam.updateProjectionMatrix(); }
+      // A long lens keeps the airframe's proportions honest.
+      if (cam.fov !== 34) { cam.fov = 34; cam.updateProjectionMatrix(); }
     } else {
       if (cam.fov !== 66) { cam.fov = 66; cam.updateProjectionMatrix(); }
       // Slow cinematic orbit around the showcase aircraft.

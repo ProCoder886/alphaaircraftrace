@@ -316,12 +316,13 @@ export class AircraftVisual {
     for (const b of this.burners) b.update(dt, burn, state.boost || 0);
 
     // Trails.
-    const trailOpacity = state.alive ? clamp01((state.speed01 - 0.12) * 1.6) * (0.35 + (state.boost || 0) * 0.65) : 0;
+    const trailOpacity = state.alive
+      ? clamp01((state.speed01 - 0.12) * 1.6) * (0.18 + (state.boost || 0) * 0.34) : 0;
     for (const t of this.engineTrails) {
       this._wp.copy(t.anchor).applyQuaternion(state.quaternion).add(state.position);
       t.push(this._wp);
       t.setOpacity(damp(t.material.uniforms.uOpacity.value, trailOpacity, 6, dt));
-      t.setWidth(this.engineRadius * (0.55 + (state.boost || 0) * 0.55));
+      t.setWidth(this.engineRadius * (0.34 + (state.boost || 0) * 0.40));
     }
     // Wingtip vapour appears under load or at altitude — the physical cue that
     // the airframe is actually working.
@@ -525,7 +526,8 @@ export class Player {
       this.applySpec(spec);
       this.visual = new AircraftVisual(this.render, spec, 2);
     }
-    this.speed = PHYSICS.cruiseSpeed * 0.75;
+    // Match the rival grid's launch speed so the start is fair.
+    this.speed = PHYSICS.cruiseSpeed * 0.85;
     this.throttle = this.throttleTarget = 0.85;
     this.boostMeter = this.boostCapacity;
     this.health = this.maxHealth;
