@@ -187,12 +187,33 @@ export const PHYSICS = {
   baseThrust: 145,             // m/s^2 at full throttle
   brakeDecel: 190,
   dragCoefficient: 0.00042,
-  pitchRate: 1.62,             // rad/s at reference speed
-  yawRate: 0.52,
-  rollRate: 3.35,
-  turnCoupling: 0.85,          // how much bank converts into heading change
-  liftFromPitch: 0.92,
-  speedTurnFalloff: 0.55,      // agility lost at max speed
+  /* ---- flight dynamics --------------------------------------------------
+   * The airframe flies on a real fighter's turn equation rather than on a flat
+   * "pitch rate" number: the stick commands a LOAD FACTOR, and the resulting
+   * body pitch rate is  q = G·(n − upY)/V. Everything that makes a jet feel
+   * like a jet falls out of that one line — you turn far harder slow than
+   * fast, the nose falls when you stop pulling, banking curves the flight path
+   * without any special case, and holding G bleeds energy.
+   *
+   * `flightG` is a deliberately scaled gravity (real g would give ~14°/s at
+   * racing speed, which is unflyable inside a corridor). Scaling it keeps every
+   * relationship intact while landing the turn rates where the game needs them.
+   * The G-meter reports the true, unitless load factor.
+   * -------------------------------------------------------------------- */
+  flightG: 46,                 // m/s² — scaled gravity for the flight dynamics
+  gLimit: 9.0,                 // structural load factor at full pull
+  gLimitNeg: 3.2,              // negative-G limit on a push
+  cornerSpeed: 210,            // m/s — below this the wing cannot pull full G
+  pitchTau: 0.20,              // s — how quickly the airframe reaches its G
+  rollTau: 0.11,               // s — roll acceleration
+  yawRate: 0.52,               // rad/s of rudder authority at low speed
+  rollRate: 3.35,              // rad/s — ~190°/s, a real fighter roll rate
+  adverseYaw: 0.085,           // yaw induced by rolling
+  inducedDrag: 260,            // energy bled by pulling G
+  spoolUp: 1.30,               // s — dry thrust lag
+  spoolDown: 0.85,
+  burnerLight: 0.34,           // s — afterburner light-off delay
+  stallSink: 115,              // m/s of mush with no lift left
   autoLevel: 0.9,              // assist strength when the stick is centred
   boostAccel: 260,
   boostDrain: 26,              // boost units per second (meter is 0..100)
@@ -206,7 +227,8 @@ export const PHYSICS = {
 /* ===========================================================================
  * GRAPHICS QUALITY PRESETS
  * ------------------------------------------------------------------------
- * MEDIUM is the shipping default and must still look premium: it keeps bloom,
+ * EXTREME is the shipping default. MEDIUM is what the adaptive ladder falls
+ * back to on weaker hardware and must still look premium: it keeps bloom,
  * motion blur, reflections and volumetric-style clouds — it trades draw
  * distance, shadow resolution and particle counts instead.
  * ======================================================================== */
@@ -214,7 +236,7 @@ export const PHYSICS = {
 export const QUALITY_PRESETS = {
   low: {
     label: 'LOW', pixelRatio: 0.72, shadows: false, shadowMapSize: 1024, shadowDistance: 900,
-    bloom: true, bloomStrength: 0.5, motionBlur: false, chromatic: false, grain: false,
+    bloom: true, bloomStrength: 0.5, motionBlur: false, chromatic: false, grain: false, blurTaps: 6,
     reflections: false, envMapSize: 64, envUpdateInterval: 999,
     cloudQuality: 0.35, cloudLayers: 2, weatherParticles: 500, particleBudget: 400,
     viewDistance: 0.55, terrainLOD: 2, propDensity: 0.35, trafficDensity: 0.4,
@@ -222,7 +244,7 @@ export const QUALITY_PRESETS = {
   },
   medium: {
     label: 'MEDIUM', pixelRatio: 0.92, shadows: true, shadowMapSize: 1536, shadowDistance: 1500,
-    bloom: true, bloomStrength: 0.68, motionBlur: true, chromatic: true, grain: true,
+    bloom: true, bloomStrength: 0.68, motionBlur: true, chromatic: true, grain: true, blurTaps: 10,
     reflections: true, envMapSize: 128, envUpdateInterval: 6,
     cloudQuality: 0.7, cloudLayers: 3, weatherParticles: 1400, particleBudget: 1200,
     viewDistance: 0.78, terrainLOD: 3, propDensity: 0.7, trafficDensity: 0.75,
@@ -230,7 +252,7 @@ export const QUALITY_PRESETS = {
   },
   high: {
     label: 'HIGH', pixelRatio: 1.0, shadows: true, shadowMapSize: 2048, shadowDistance: 2200,
-    bloom: true, bloomStrength: 0.74, motionBlur: true, chromatic: true, grain: true,
+    bloom: true, bloomStrength: 0.74, motionBlur: true, chromatic: true, grain: true, blurTaps: 12,
     reflections: true, envMapSize: 256, envUpdateInterval: 4,
     cloudQuality: 1.0, cloudLayers: 4, weatherParticles: 2600, particleBudget: 2200,
     viewDistance: 1.0, terrainLOD: 3, propDensity: 1.0, trafficDensity: 1.0,
@@ -238,7 +260,7 @@ export const QUALITY_PRESETS = {
   },
   ultra: {
     label: 'ULTRA', pixelRatio: 1.25, shadows: true, shadowMapSize: 3072, shadowDistance: 3200,
-    bloom: true, bloomStrength: 0.8, motionBlur: true, chromatic: true, grain: true,
+    bloom: true, bloomStrength: 0.8, motionBlur: true, chromatic: true, grain: true, blurTaps: 16,
     reflections: true, envMapSize: 384, envUpdateInterval: 3,
     cloudQuality: 1.35, cloudLayers: 5, weatherParticles: 4200, particleBudget: 3600,
     viewDistance: 1.25, terrainLOD: 4, propDensity: 1.35, trafficDensity: 1.2,
@@ -246,7 +268,7 @@ export const QUALITY_PRESETS = {
   },
   extreme: {
     label: 'EXTREME', pixelRatio: 1.6, shadows: true, shadowMapSize: 4096, shadowDistance: 4200,
-    bloom: true, bloomStrength: 0.86, motionBlur: true, chromatic: true, grain: true,
+    bloom: true, bloomStrength: 0.86, motionBlur: true, chromatic: true, grain: true, blurTaps: 20,
     reflections: true, envMapSize: 512, envUpdateInterval: 2,
     cloudQuality: 1.7, cloudLayers: 6, weatherParticles: 6000, particleBudget: 5200,
     viewDistance: 1.5, terrainLOD: 4, propDensity: 1.7, trafficDensity: 1.4,
@@ -264,6 +286,100 @@ export const QUALITY_ORDER = ['low', 'medium', 'high', 'ultra', 'extreme'];
  * ======================================================================== */
 
 export const AIRCRAFT = [
+  /* ---------------------------------------------------------------------
+   * GLB airframes. These are real modelled aircraft loaded from
+   * /Assets/3d/aircraft/.
+   *
+   * `model.quat` puts each one into the game's frame (nose = -Z, up = +Y,
+   * right wing = +X). None of the three arrived axis-aligned — two are pitched
+   * several degrees in their own files — so the quaternions were solved rather
+   * than guessed: the direction in which an aircraft is thinnest is its "up",
+   * the widest direction perpendicular to that is the fuselage, the blunter end
+   * is the tail, and the fins point up. `model.length` is the fuselage length
+   * in metres; the mesh is scaled uniformly to it. `nozzles` and `engineRadius`
+   * are in those same metres, in the corrected frame. Wingtips are measured off
+   * the fitted mesh at load time — exactly half the span, wherever that lands.
+   *
+   * `shape` is still supplied: it drives the hangar silhouette and is the
+   * fallback airframe if a GLB ever fails to load.
+   * ------------------------------------------------------------------ */
+  {
+    id: 'raptor', name: 'FR-22 RAPTOR', class: 'Air Superiority Fighter',
+    desc: 'A twin-tail air superiority airframe in circuit livery. Thrust-vectoring nozzles and a huge control surface area make it the most obedient thing on the grid at high alpha.',
+    stats: { speed: 0.88, accel: 0.86, handling: 0.90, boost: 0.84, durability: 0.72 },
+    ability: 'Thrust Vectoring — 25% tighter turn radius while boosting.',
+    abilityKey: 'vector',
+    unlock: { type: 'default' },
+    colors: { primary: 0xb3202c, secondary: 0x15161a, accent: 0xff4152, emissive: 0xffa050, trail: 0xff8a6a },
+    model: {
+      file: 'Assets/3d/aircraft/raptor.glb',
+      lod1: 'Assets/3d/aircraft/raptor.lod1.glb',
+      // Authored nose +Y / dorsal +Z, pitched a few degrees. Fits to 14.8 m span.
+      quat: [-0.653743, -0.017117, -0.015360, 0.756367],
+      length: 19.4,
+      nozzles: [[0.85, -0.15, 8.95], [-0.85, -0.15, 8.95]],
+      engineRadius: 0.42,
+    },
+    shape: {
+      length: 19.4, noseLen: 0.32, noseSharp: 1.9, bodyW: 1.72, bodyH: 1.20,
+      wingSpan: 15.2, wingSweep: 0.70, wingRoot: 7.0, wingTip: 1.4, wingDihedral: 0.02, wingPos: 0.03,
+      canard: 0.5, canardSpan: 5.4, tail: 'twin', tailSize: 1.12, tailCant: 0.48,
+      engines: 2, engineSep: 1.44, engineR: 0.94, nozzleFlare: 1.24, intake: 'side',
+      strakes: 1.2, ventral: 0.6, livery: 'blade',
+    },
+  },
+  {
+    id: 'falcon', name: 'FA-19 FALCON', class: 'Carrier Strike Fighter',
+    desc: 'A navalised strike fighter in display-team colours. Built to be caught by a wire at sea, which makes it astonishingly stable in dirty air and at low speed.',
+    stats: { speed: 0.80, accel: 0.82, handling: 0.84, boost: 0.78, durability: 0.88 },
+    ability: 'Carrier Trim — auto-levelling assist is 30% stronger.',
+    abilityKey: 'trim',
+    unlock: { type: 'default' },
+    colors: { primary: 0x13182c, secondary: 0xf2c032, accent: 0xffd24a, emissive: 0x9fd8ff, trail: 0xffd98a },
+    model: {
+      file: 'Assets/3d/aircraft/falcon.glb',
+      lod1: 'Assets/3d/aircraft/falcon.lod1.glb',
+      // Authored nose +Z / dorsal +Y. The gear is down in the mesh, which is why
+      // the bounding box is tall and the nozzles sit well above its centre.
+      quat: [0.991796, -0.000038, 0.000005, 0.127829],
+      length: 17.6,
+      nozzles: [[0.60, 0.95, 8.20], [-0.60, 0.95, 8.20]],
+      engineRadius: 0.40,
+    },
+    shape: {
+      length: 17.6, noseLen: 0.30, noseSharp: 1.6, bodyW: 1.66, bodyH: 1.28,
+      wingSpan: 13.4, wingSweep: 0.52, wingRoot: 5.8, wingTip: 1.8, wingDihedral: 0.04, wingPos: 0.05,
+      canard: 0.0, canardSpan: 0, tail: 'twin', tailSize: 1.08, tailCant: 0.52,
+      engines: 2, engineSep: 1.30, engineR: 0.90, nozzleFlare: 1.14, intake: 'side',
+      strakes: 1.35, ventral: 0.4, livery: 'chevron',
+    },
+  },
+  {
+    id: 'warhawk', name: 'MK-29 WARHAWK', class: 'Heavy Interceptor',
+    desc: 'A big twin-engine interceptor built around two enormous powerplants. It does not turn so much as re-aim, but nothing on the grid accelerates through the top of the range like it does.',
+    stats: { speed: 0.94, accel: 0.90, handling: 0.66, boost: 0.92, durability: 0.82 },
+    ability: 'Ram Intakes — boost recharges 35% faster above 1400 km/h.',
+    abilityKey: 'ramair',
+    unlock: { type: 'default' },
+    colors: { primary: 0x9aa3ad, secondary: 0x353c45, accent: 0x7fb8e8, emissive: 0xbfe0ff, trail: 0xbcd8f2 },
+    model: {
+      file: 'Assets/3d/aircraft/warhawk.glb',
+      lod1: 'Assets/3d/aircraft/warhawk.lod1.glb',
+      // Authored nose +Y / dorsal +Z with a noticeable pitch. Fits to 17.2 m span
+      // — widely spaced engine nacelles, hence the wide, low nozzles.
+      quat: [-0.546387, -0.029391, 0.002659, 0.837013],
+      length: 21.2,
+      nozzles: [[1.15, -1.00, 9.60], [-1.15, -1.00, 9.60]],
+      engineRadius: 0.60,
+    },
+    shape: {
+      length: 21.2, noseLen: 0.28, noseSharp: 1.7, bodyW: 1.96, bodyH: 1.42,
+      wingSpan: 16.0, wingSweep: 0.62, wingRoot: 7.6, wingTip: 2.0, wingDihedral: 0.01, wingPos: 0.02,
+      canard: 0.0, canardSpan: 0, tail: 'twin', tailSize: 1.24, tailCant: 0.40,
+      engines: 2, engineSep: 1.70, engineR: 1.08, nozzleFlare: 1.30, intake: 'side',
+      strakes: 1.4, ventral: 0.8, livery: 'splinter',
+    },
+  },
   {
     id: 'vector', name: 'AX-01 VECTOR', class: 'Balanced Interceptor',
     desc: 'The reference airframe of the Alpha circuit. Neutral handling, forgiving recovery and a wide power band — everything a rookie needs and nothing they do not.',
@@ -948,7 +1064,7 @@ export const DEFAULT_SAVE = {
   achievements: [],
   dailyState: { date: null, completed: false, best: 0 },
   settings: {
-    graphics: 'medium',
+    graphics: 'extreme',
     resolutionScale: 1.0,
     shadows: true,
     reflections: true,
@@ -962,12 +1078,10 @@ export const DEFAULT_SAVE = {
     masterVolume: 0.85,
     musicVolume: 0.55,
     sfxVolume: 0.9,
-    commentaryVolume: 0.85,
     environmentVolume: 0.8,
     cameraSensitivity: 1.0,
     flightSensitivity: 1.0,
     vibration: true,
-    subtitles: true,
     reducedMotion: false,
     invertPitch: false,
     showDebug: false,
@@ -988,7 +1102,7 @@ export const DEFAULTS = {
   mode: 'endless',
   difficulty: 'elite',
   location: 'random',
-  graphics: 'medium',
+  graphics: 'extreme',
   aircraft: 'vector',
 };
 
@@ -1010,33 +1124,6 @@ export const LOADING_STAGES = [
   'Arming HUD',
   'Ready',
 ];
-
-export const COMMENTARY = {
-  raceStart: ['Grid is live — go, go, go!', 'Clear air ahead. Take it.', 'Race start! Everybody clean off the line.'],
-  countdown3: ['Three.'], countdown2: ['Two.'], countdown1: ['One.'], countdownGo: ['GO!'],
-  overtake: ['That is a clean pass!', 'Position gained — beautifully done.', 'Straight past them on the outside!', 'He is through! What a move.'],
-  overtaken: ['You have been passed.', 'They have got by you there.', 'Position lost — go again.'],
-  takeLead: ['You have the lead!', 'Out in front now — hold it.', 'Leading the field!'],
-  loseLead: ['The lead is gone.', 'They have taken the lead from you.'],
-  nearMiss: ['Ooh, that was close!', 'Paint on paint!', 'Inches. Absolute inches.', 'How did that miss?'],
-  bigCombo: ['The chain is enormous!', 'Combo is climbing fast!', 'Every gate, every ring — flawless.'],
-  highSpeed: ['That is serious speed.', 'The airframe is screaming.', 'Fastest anyone has gone through there.'],
-  crash: ['Big impact!', 'Heavy contact — damage report!', 'That is a serious hit.'],
-  criticalDamage: ['Hull is critical!', 'The airframe cannot take another one.', 'She is coming apart — be careful!'],
-  checkpointFinal: ['Final checkpoint coming up!', 'Last gate — everything on this one.'],
-  victory: ['Winner! Absolutely dominant.', 'Chequered flag — that is the win!', 'First place. Superb flying.'],
-  defeat: ['That is the end of the run.', 'Race over.', 'They are down. Reset and go again.'],
-  objective: ['Objective complete!', 'That is the target hit.'],
-  shortcut: ['They have taken the risky line!', 'Straight through the shortcut — brave.'],
-  weather: ['Weather is closing in.', 'Visibility is dropping fast.', 'Conditions are getting ugly out there.'],
-  boost: ['Reheat lit!', 'Overdrive engaged!'],
-  lastLap: ['Final lap!', 'Last time around — make it count.'],
-};
-
-/** Cooldown (seconds) per commentary channel so lines never spam. */
-export const COMMENTARY_COOLDOWN = {
-  default: 6, nearMiss: 9, overtake: 4, highSpeed: 22, bigCombo: 16, weather: 40, boost: 18, crash: 5,
-};
 
 export const TIPS = [
   'Bank into the turn — heading follows roll far faster than rudder alone.',

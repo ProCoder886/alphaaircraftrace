@@ -58,6 +58,23 @@ const ICONS = {
  * to a 100-unit fuselage and the viewBox is fitted to the drawn extents, so
  * wide-span frames read wide and long-bodied frames read long.
  * ----------------------------------------------------------------------- */
+/**
+ * Livery colours are chosen for the 3D airframe, where a near-black navy reads
+ * beautifully against sky. On a dark card it disappears, so the silhouette
+ * lifts anything too dark to a legible brightness without losing its hue.
+ */
+function legible(c) {
+  let r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
+  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  if (lum >= 0.34) return `#${c.toString(16).padStart(6, '0')}`;
+  const k = 0.34 / Math.max(0.04, lum);
+  const mix = Math.min(1, (0.34 - lum) * 1.6);          // pull greys toward blue-white
+  r = Math.min(255, Math.round(r * k * (1 - mix) + 150 * mix));
+  g = Math.min(255, Math.round(g * k * (1 - mix) + 172 * mix));
+  b = Math.min(255, Math.round(b * k * (1 - mix) + 196 * mix));
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+}
+
 function jetSilhouette(spec) {
   const s = spec.shape;
   const L = 100;                                  // fuselage length in view units
@@ -116,7 +133,7 @@ function jetSilhouette(spec) {
   const nozR = s.engineR * u * 0.55;
 
   return `
-    <svg class="mini-jet" viewBox="${-vw / 2} 0 ${vw} ${vh}" style="color:${hex(spec.colors.primary)}">
+    <svg class="mini-jet" viewBox="${-vw / 2} 0 ${vw} ${vh}" style="color:${legible(spec.colors.primary)}">
       <g fill="currentColor">
         <path d="${mirror(wing)}" opacity="0.94"/>
         ${canard ? `<path d="${mirror(canard)}" opacity="0.9"/>` : ''}
@@ -153,7 +170,6 @@ export class UI {
     this.menuSection = 'play';
     this.hangarSelection = save.data.selectedAircraft;
     this.notifications = [];
-    this.subtitleTimer = 0;
     this.listeningFor = null;
     this.hudVisible = false;
     this.lastRadarDraw = 0;
@@ -190,7 +206,6 @@ export class UI {
       toast: $('#toast-host'),
       notif: $('#notif-stack'),
       banner: $('#event-banner'),
-      subtitle: $('#subtitle-bar'),
       countdown: $('#countdown'),
       warn: $('#warn-strip'),
       damageVig: $('#damage-vignette'),
@@ -583,7 +598,7 @@ export class UI {
            <button class="btn ${canBuy ? 'btn-primary' : 'disabled'}" data-buy-craft="${sel.id}">Unlock</button>`
         : `<div class="daily-best">${sel.unlock.label}</div>`);
 
-    return `${this._head('HANGAR', 'Ten airframes with genuinely different geometry, mass and handling. The silhouette tells you how it flies.')}
+    return `${this._head('HANGAR', 'Thirteen airframes with genuinely different geometry, mass and handling — three of them modelled in full. The silhouette tells you how each one flies.')}
       <div class="hangar">
         <div class="hangar-list stagger">${list}</div>
         <aside class="hangar-detail">
@@ -890,7 +905,7 @@ export class UI {
 
     /* -- graphics -- */
     const gg = group('Graphics');
-    field(gg, 'Quality Preset', 'Medium is the shipping default and still runs the full effect stack.',
+    field(gg, 'Quality Preset', 'Extreme is the default; the adaptive ladder eases down on its own if frames get tight.',
       seg('graphics', QUALITY_ORDER.map((q) => [q, QUALITY_PRESETS[q].label])));
     field(gg, 'Resolution Scale', 'Renders below native resolution to buy frame time.',
       slider('resolutionScale', 0.5, 1.5, 0.05, (v) => `${Math.round(v * 100)}%`));
@@ -909,7 +924,6 @@ export class UI {
     field(ag, 'Master', 'Overall output level.', slider('masterVolume', 0, 1, 0.02, (v) => `${Math.round(v * 100)}%`));
     field(ag, 'Music', 'Adaptive generative score.', slider('musicVolume', 0, 1, 0.02, (v) => `${Math.round(v * 100)}%`));
     field(ag, 'Effects', 'Impacts, gates, powers, UI.', slider('sfxVolume', 0, 1, 0.02, (v) => `${Math.round(v * 100)}%`));
-    field(ag, 'Commentary', 'Race commentary voice.', slider('commentaryVolume', 0, 1, 0.02, (v) => `${Math.round(v * 100)}%`));
     field(ag, 'Environment', 'Engine, wind and weather bed.', slider('environmentVolume', 0, 1, 0.02, (v) => `${Math.round(v * 100)}%`));
 
     /* -- gameplay -- */
@@ -919,7 +933,6 @@ export class UI {
     field(pg, 'HUD Scale', 'Size of every HUD element.', slider('hudScale', 0.75, 1.4, 0.05, (v) => `${Math.round(v * 100)}%`));
     field(pg, 'Invert Pitch', 'Flip the pitch axis.', toggle('invertPitch'));
     field(pg, 'Vibration', 'Haptic feedback on impacts (supported devices).', toggle('vibration'));
-    field(pg, 'Subtitles', 'Show commentary and announcements as text.', toggle('subtitles'));
     field(pg, 'Reduced Motion', 'Damps camera shake, blur and UI animation.', toggle('reducedMotion'));
     field(pg, 'Debug Overlay', 'Show FPS, seed, draw calls and world stats.', toggle('showDebug'));
 
@@ -1335,15 +1348,6 @@ export class UI {
     b.classList.remove('show');
     void b.offsetWidth;
     b.classList.add('show');
-  }
-
-  subtitle(text) {
-    if (!this.save.data.settings.subtitles) return;
-    const s = this.dom.subtitle;
-    s.textContent = text;
-    s.classList.add('show');
-    clearTimeout(this._subTimer);
-    this._subTimer = setTimeout(() => s.classList.remove('show'), Math.max(2200, text.length * 62));
   }
 
   countdown(text, isGo = false) {

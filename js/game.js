@@ -8,7 +8,7 @@
 
 import * as THREE from 'three';
 import {
-  AIRCRAFT_BY_ID, BIOMES, BIOMES_BY_ID, MODES, DIFFICULTIES, WEATHER, TIME_OF_DAY,
+  AIRCRAFT, AIRCRAFT_BY_ID, BIOMES, BIOMES_BY_ID, MODES, DIFFICULTIES, WEATHER, TIME_OF_DAY,
   CAMPAIGN, OBJECTIVE_POOL, ACHIEVEMENTS, SCORE, CREDITS, POWERS, WORLD,
   DEFAULT_SAVE, STORAGE_KEY, LOADING_STAGES, DEFAULTS,
   RNG, hashSeed, clamp, clamp01, lerp, damp, TAU,
@@ -226,6 +226,12 @@ export class Game {
       await nextFrame();
     });
 
+    // Models first: an airframe with a GLB must not be built procedurally and
+    // then thrown away a stage later.
+    pipeline.stage('Loading aircraft models', 3, async (report) => {
+      await this._loadAssetManifest(report);
+    });
+
     pipeline.stage('Assembling airframes', 3, async () => {
       // Build every airframe template up front — a few ms each now beats a
       // hitch when a rival first comes into view.
@@ -234,10 +240,6 @@ export class Game {
         await nextFrame();
       }
       this.render.aircraftFactory.template(AIRCRAFT_BY_ID[this.save.data.selectedAircraft], 2);
-    });
-
-    pipeline.stage('Loading generated assets', 1, async () => {
-      await this._loadAssetManifest();
     });
 
     pipeline.stage('Preparing menu venue', 3, async (report) => {
@@ -259,30 +261,70 @@ export class Game {
   }
 
   /**
-   * Optional Tripo3D-generated models. If /Assets/3d/manifest.json lists any
-   * GLBs they are loaded and registered; if it is missing or empty the game
-   * runs on its procedural airframes, which is the shipped default.
+   * Real modelled airframes from /Assets/3d/aircraft/ (declared on the aircraft
+   * spec) plus anything the Tripo3D pipeline has written into
+   * /Assets/3d/manifest.json. Every one of them is optional: a model that fails
+   * to load leaves that airframe on its procedural hull, which still flies and
+   * still races, so a bad asset can never stop the game booting.
    */
-  async _loadAssetManifest() {
+  async _loadAssetManifest(report) {
     this.generatedAssets = { count: 0, entries: [] };
-    try {
-      const res = await fetch('Assets/3d/manifest.json', { cache: 'no-cache' });
-      if (!res.ok) return;
-      const manifest = await res.json();
-      const entries = (manifest.assets || []).filter((a) => a.status === 'ready' && a.file);
-      if (!entries.length) return;
+    let loader = null;
+    const getLoader = async () => {
+      if (loader) return loader;
       const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
-      const loader = new GLTFLoader();
+      loader = new GLTFLoader();
       try {
         const { DRACOLoader } = await import('three/addons/loaders/DRACOLoader.js');
         const draco = new DRACOLoader();
         draco.setDecoderPath('vendor/three/addons/libs/draco/gltf/');
         loader.setDRACOLoader(draco);
       } catch (e) { /* Draco optional */ }
-      for (const entry of entries.filter((e) => e.priority === 'critical')) {
+      return loader;
+    };
+
+    /* ---- modelled fighter jets shipped with the game ------------------- */
+    const modelled = AIRCRAFT.filter((a) => a.model?.file);
+    if (modelled.length) {
+      const gl = await getLoader();
+      let done = 0;
+      for (const spec of modelled) {
         try {
-          const gltf = await loader.loadAsync(entry.file);
-          this.render.aircraftFactory.registerExternal?.(entry.id, gltf.scene);
+          const gltf = await gl.loadAsync(spec.model.file);
+          this.render.aircraftFactory.registerExternal(spec.id, gltf.scene, 0);
+          // The reduced mesh is what rivals and distant traffic use. It is an
+          // optimisation, not a requirement — fall back to the hero mesh.
+          if (spec.model.lod1) {
+            try {
+              const lod = await gl.loadAsync(spec.model.lod1);
+              this.render.aircraftFactory.registerExternal(spec.id, lod.scene, 1);
+            } catch (e) { /* hero mesh covers every detail level */ }
+          }
+          this.generatedAssets.entries.push(spec.id);
+          this.generatedAssets.count++;
+        } catch (err) {
+          console.warn(`[Assets] aircraft "${spec.id}" failed to load, using procedural airframe:`, err.message);
+        }
+        report?.(++done / (modelled.length + 1));
+        await nextFrame();
+      }
+    }
+
+    /* ---- optional Tripo3D output -------------------------------------- */
+    try {
+      const res = await fetch('Assets/3d/manifest.json', { cache: 'no-cache' });
+      if (!res.ok) return;
+      const manifest = await res.json();
+      const entries = (manifest.assets || []).filter(
+        (a) => a.status === 'ready' && a.file && a.priority === 'critical'
+          && !this.generatedAssets.entries.includes(a.id),
+      );
+      if (!entries.length) return;
+      const gl = await getLoader();
+      for (const entry of entries) {
+        try {
+          const gltf = await gl.loadAsync(entry.file);
+          this.render.aircraftFactory.registerExternal(entry.id, gltf.scene, 0);
           this.generatedAssets.entries.push(entry.id);
           this.generatedAssets.count++;
         } catch (err) {
@@ -609,13 +651,12 @@ export class Game {
     this.countdownValue -= dt;
     const now = Math.ceil(this.countdownValue);
     if (now !== prev) {
-      if (now === 3) { this.ui.countdown('3'); this.audio.play('countdown'); this.audio.say('countdown3', true); }
+      if (now === 3) { this.ui.countdown('3'); this.audio.play('countdown'); }
       else if (now === 2) { this.ui.countdown('2'); this.audio.play('countdown'); }
       else if (now === 1) { this.ui.countdown('1'); this.audio.play('countdown'); }
       else if (now <= 0) {
         this.ui.countdown('GO', true);
         this.audio.play('go');
-        this.audio.say('raceStart', true);
         this.state = 'racing';
         this.lapStart = 0;
       }
@@ -708,7 +749,6 @@ export class Game {
         o.complete = true;
         this.score += 1200 * o.reward * this.combo;
         this.audio.play('objective');
-        this.audio.say('objective');
         this.ui.notify('OBJECTIVE COMPLETE', 'good');
         this.ui.banner('OBJECTIVE COMPLETE', o.text);
       }
@@ -760,11 +800,6 @@ export class Game {
       clamp01((player.speed01 - 0.45) * 1.8) * (this.save.data.settings.motionBlur ? 1 : 0.4),
       player.velocity,
     );
-
-    /* --- commentary triggers ---------------------------------------------- */
-    if (player.speedKmh > 1900) this.audio.say('highSpeed');
-    if (this.combo > 2.4) this.audio.say('bigCombo');
-    if (player.damage01 > 0.8) this.audio.say('criticalDamage');
   }
 
   _processEvents(events, dt) {
@@ -794,12 +829,9 @@ export class Game {
               this.lapStart = this.runTime;
               if (!this.bestLap || lapTime < this.bestLap) this.bestLap = lapTime;
               this.lapCount = lap;
-              if (lap === this.runConfig.laps - 1) this.audio.say('lastLap', true);
               this.ui.banner(`LAP ${lap + 1} / ${this.runConfig.laps}`, formatTime(lapTime));
             }
           }
-          if (this.metrics.checkpoints > 0 && this.targetCheckpoints
-            && this.metrics.checkpoints === this.targetCheckpoints - 1) this.audio.say('checkpointFinal', true);
           break;
         }
         case 'checkpointMissed':
@@ -826,7 +858,7 @@ export class Game {
           this.score += gain;
           this._bumpCombo(0.7);
           this.audio.play('nearMiss', { closeness: e.closeness });
-          if (e.closeness > 0.7) { this.audio.say('nearMiss'); this.ui.notify('NEAR MISS', 'gold', `+${Math.round(gain)}`); }
+          if (e.closeness > 0.7) { this.ui.notify('NEAR MISS', 'gold', `+${Math.round(gain)}`); }
           break;
         }
         case 'collision':
@@ -836,7 +868,6 @@ export class Game {
           this.combo = 1; this.comboSteps = 0;
           this.audio.play('collision');
           this.ui.vibrate(90);
-          if (!e.soft) this.audio.say('crash');
           break;
         case 'shielded':
           this.audio.play('shield');
@@ -850,7 +881,6 @@ export class Game {
           this.metrics.powerUses++;
           this.audio.play('power');
           this.ui.notify(e.power.name, 'good');
-          if (e.power.id === 'turbo') this.audio.say('boost');
           break;
         }
         case 'powerBlocked':
@@ -863,18 +893,15 @@ export class Game {
           this._bumpCombo();
           this.audio.play('overtake');
           this.ui.notify(`POSITION ${e.position}`, 'gold', `+${Math.round(gain)}`);
-          this.audio.say(e.position === 1 ? 'takeLead' : 'overtake');
           break;
         }
         case 'overtaken':
-          this.audio.say(e.from === 1 ? 'loseLead' : 'overtaken');
           this.ui.notify(`POSITION ${e.position}`, 'bad');
           break;
         case 'destroyed':
           this.metrics.cleanStreak = 0;
           this.audio.play('explosion');
           this.ui.vibrate(220);
-          this.audio.say('crash', true);
           break;
         case 'impact':
           this.audio.play('explosion', { volume: 0.8 });
@@ -893,7 +920,6 @@ export class Game {
 
   _onWorldEvent(ev) {
     this.ui.banner(ev.name, ev.desc);
-    if (ev.weather) this.audio.say('weather');
     if (ev.turb) this.world.turbulence = Math.min(1.4, this.world.turbulence * ev.turb);
     this.audio.play('alert');
   }
@@ -907,7 +933,6 @@ export class Game {
     this.ui.setHudVisible(false);
     this.audio.stopEngine();
     this.audio.play(success ? 'victory' : 'defeat');
-    this.audio.say(success ? 'victory' : 'defeat', true);
     this.audio.setMusic(success ? 'victory' : 'gameover', 0.5);
 
     const cfg = this.runConfig;
@@ -1118,7 +1143,10 @@ export class Game {
     this.render.render(dt);
     this.perf.readRenderer(this.render.renderer);
 
-    if (this.state === 'racing') this._pushHud();
+    // The world and player are torn down a frame before the state leaves
+    // 'racing' when a run is relaunched, and the HUD has nothing to draw
+    // without them.
+    if (this.state === 'racing' && this.player && this.world) this._pushHud();
     if (this.save.data.settings.showDebug) this._pushDebug();
 
     this.input.endFrame();
@@ -1283,6 +1311,8 @@ export class Game {
       `Altitude   ${pl ? `${pl.altitude.toFixed(0)} m (AGL ${pl.agl.toFixed(0)})` : '—'}`,
       `Along      ${pl ? pl.distanceAlong.toFixed(0) : '—'} m`,
       `Corridor   ${pl ? `${pl.pathOffset.toFixed(0)} / ${pl.pathRadius.toFixed(0)}` : '—'}`,
+      `Load       ${pl ? `${pl.loadFactor.toFixed(2)} G  (wing at ${Math.round(pl.aoa01 * 100)}% of lift limit)` : '—'}`,
+      `Engine     ${pl ? `throttle ${pl.throttle.toFixed(2)}  reheat ${pl.burner.toFixed(2)}` : '—'}`,
       `AI         ${this.director?.racers.length ?? 0}  Traffic ${this.director?.traffic.active.length ?? 0}`,
       `Weather    ${w ? `turb ${w.turbulence.toFixed(2)} wind ${w.windVec.length().toFixed(1)}` : '—'}`,
       `Event      ${w?.activeEvent?.name ?? 'none'}`,
@@ -1388,15 +1418,14 @@ export class Game {
           this.render.setVenue(this.world.biome, this.world.weatherId, this.world.timeId);
         }
         break;
-      case 'masterVolume': case 'musicVolume': case 'sfxVolume':
-      case 'commentaryVolume': case 'environmentVolume':
+      case 'masterVolume': case 'musicVolume': case 'sfxVolume': case 'environmentVolume':
         this.audio.applySettings(s);
         break;
       case 'reducedMotion':
         this.render.rig.reducedMotion = !!value;
         this.ui.applySettings();
         break;
-      case 'hudScale': case 'subtitles': case 'vibration':
+      case 'hudScale': case 'vibration':
         this.ui.applySettings();
         break;
       case 'touchControls':
@@ -1430,13 +1459,6 @@ export class Game {
     window.addEventListener('pointerdown', unlock, { once: true });
     window.addEventListener('keydown', unlock, { once: true });
     window.addEventListener('touchstart', unlock, { once: true });
-
-    // Commentary subtitles.
-    const bindSub = () => {
-      if (this.audio.commentary) this.audio.commentary.onSubtitle = (t) => this.ui.subtitle(t);
-      else setTimeout(bindSub, 400);
-    };
-    bindSub();
   }
 
   handleResize() {

@@ -120,4 +120,3 @@ body.touch-mode .mobile-controls.enabled { display: block; }
 body.touch-mode .hud-bl { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 128px); }
 body.touch-mode .hud-bc { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 4px); width: min(280px, 34%); }
 body.touch-mode .hud-br { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 118px); }
-body.touch-mode .subtitle-bar { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 172px); }

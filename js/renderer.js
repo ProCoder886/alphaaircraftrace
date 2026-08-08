@@ -971,6 +971,8 @@ const CompositeShader = {
     uTime: { value: 0 },
     uBlur: { value: 0 },
     uBlurCenter: { value: new THREE.Vector2(0.5, 0.5) },
+    uCamVel: { value: new THREE.Vector2(0, 0) },
+    uBoost: { value: 0 },
     uChroma: { value: 0.0 },
     uVignette: { value: 0.5 },
     uGrain: { value: 0.04 },
@@ -991,11 +993,15 @@ const CompositeShader = {
     void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
   fragmentShader: /* glsl */`
     uniform sampler2D tDiffuse;
-    uniform vec2 uResolution, uBlurCenter;
-    uniform float uTime, uBlur, uChroma, uVignette, uGrain, uSat, uContrast;
+    uniform vec2 uResolution, uBlurCenter, uCamVel;
+    uniform float uTime, uBlur, uBoost, uChroma, uVignette, uGrain, uSat, uContrast;
     uniform float uDamage, uFlash, uSpeedLines, uScan, uPhase;
     uniform vec3 uLift, uGain, uFlashColor, uScanColor;
     varying vec2 vUv;
+
+    #ifndef TAPS
+      #define TAPS 10
+    #endif
 
     float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx)*0.1031); p3 += dot(p3,p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }
 
@@ -1003,17 +1009,39 @@ const CompositeShader = {
       vec2 uv = vUv;
       vec2 dir = uv - uBlurCenter;
       float dist = length(dir);
-      // Radial motion blur — the frame edges smear, the focal area stays sharp.
-      float mask = smoothstep(0.055, 0.62, dist);
-      float amt = uBlur * mask;
+
+      /* --- motion blur -------------------------------------------------
+       * Two components, summed per tap:
+       *   radial — the world rushing past the focal point, which is what
+       *            forward motion actually looks like;
+       *   linear — how far a distant point slid across the screen since the
+       *            last frame, so banking and pulling smear sideways too.
+       * Reheat adds a third: a much longer radial stretch plus an outward
+       * lens warp, so lighting the burner reads as a physical shove.
+       * ---------------------------------------------------------------- */
+      float mask = smoothstep(0.045, 0.60, dist);
+      float boostRadial = uBoost * uBoost * 0.19;
+      float amt = (uBlur + boostRadial) * mask;
+      // Under reheat the frame stretches outward from the focus as well as
+      // smearing — the barrel term is small but it is what sells the punch.
+      vec2 warp = dir * dist * uBoost * 0.085;
+      vec2 radialVec = -dir * amt - warp;
+      // The player's own aircraft is rigidly attached to the camera, so it does
+      // not slide when the camera swings — and it sits right at the focal
+      // point. Fading the linear term to almost nothing there keeps the
+      // airframe crisp while the sky around it still smears.
+      vec2 linearVec = -uCamVel * (0.08 + 0.92 * mask);
+
       vec3 col = vec3(0.0);
       float wsum = 0.0;
-      const int TAPS = 8;
       for (int i = 0; i < TAPS; i++){
         float t = float(i) / float(TAPS - 1);
         float w = 1.0 - t * 0.55;
-        vec2 off = -dir * amt * t;
-        float ca = uChroma * (0.5 + dist) * (0.35 + t);
+        vec2 off = (radialVec + linearVec) * t;
+        // Chroma is a lens artifact: it belongs at the edges. Keeping it near
+        // zero at the focal point stops the player's own aircraft — which sits
+        // right there — from picking up rainbow fringes under reheat.
+        float ca = uChroma * (0.12 + dist * 1.55) * (0.35 + t) * (1.0 + uBoost * 1.5);
         vec2 cdir = normalize(dir + 1e-6) * ca;
         vec3 s;
         s.r = texture2D(tDiffuse, uv + off + cdir).r;
@@ -1029,6 +1057,17 @@ const CompositeShader = {
         float lines = hash12(vec2(floor(ang * 58.0), floor(uTime * 26.0)));
         float streak = smoothstep(0.94, 1.0, lines) * smoothstep(0.30, 0.86, dist);
         col += vec3(0.65, 0.82, 1.0) * streak * uSpeedLines * 0.26;
+      }
+
+      // Reheat: a second, much finer streak layer plus a warm rim, both only
+      // out at the edges so the route ahead stays readable.
+      if (uBoost > 0.002) {
+        float ang = atan(dir.y, dir.x);
+        float fine = hash12(vec2(floor(ang * 190.0), floor(uTime * 62.0)));
+        float streak = smoothstep(0.90, 1.0, fine) * smoothstep(0.16, 0.80, dist);
+        col += vec3(1.0, 0.86, 0.66) * streak * uBoost * 0.40;
+        col *= 1.0 - smoothstep(0.34, 0.95, dist) * uBoost * 0.22;
+        col += vec3(0.30, 0.14, 0.05) * smoothstep(0.45, 1.0, dist) * uBoost * 0.30;
       }
 
       // Phase Shift — chromatic ghosting while the airframe is desynced.
@@ -1105,9 +1144,15 @@ export class PostFX {
 
     this.composite = new ShaderPass(CompositeShader);
     this.composite.renderToScreen = true;
+    this.composite.material.defines = { ...(this.composite.material.defines || {}), TAPS: 10 };
     this.composer.addPass(this.composite);
 
     this.u = this.composite.uniforms;
+    // Screen-space camera motion, measured between frames.
+    this._prevCamQuat = new THREE.Quaternion();
+    this._camVel = new THREE.Vector2();
+    this._velQ = new THREE.Quaternion();
+    this._velV = new THREE.Vector3();
     this.applyPreset(preset);
   }
 
@@ -1118,12 +1163,30 @@ export class PostFX {
     this.u.uChroma.value = preset.chromatic ? 0.0016 : 0;
     this.u.uGrain.value = preset.grain ? 0.035 : 0;
     this.motionBlurEnabled = !!preset.motionBlur;
+    // Tap count is the one part of the blur worth spending quality budget on:
+    // too few and a long reheat smear bands into visible ghosts.
+    const taps = !preset.motionBlur ? 6 : (preset.blurTaps || 10);
+    if (this.composite.material.defines.TAPS !== taps) {
+      this.composite.material.defines.TAPS = taps;
+      this.composite.material.needsUpdate = true;
+    }
   }
 
   setSize(w, h) {
     this.composer.setSize(w, h);
     this.bloom.setSize(w, h);
     this.u.uResolution.value.set(w, h);
+  }
+
+  /**
+   * Forget the previous frame's camera orientation. Without this a camera cut
+   * — a respawn, a mode change, a new run — looks to the blur like an enormous
+   * one-frame slew and whips the whole frame sideways.
+   */
+  resetMotion() {
+    this._prevCamQuat.copy(this.camera.quaternion);
+    this._camVel.set(0, 0);
+    this.u.uCamVel.value.set(0, 0);
   }
 
   /** Per-frame grade + effect drive. */
@@ -1134,10 +1197,38 @@ export class PostFX {
 
     const speed01 = clamp01(state.speed01 ?? 0);
     const boost = clamp01(state.boost ?? 0);
+    const motion = state.reducedMotion ? 0.35 : 1;
     const target = this.motionBlurEnabled
-      ? (Math.pow(speed01, 2.1) * 0.055 + boost * 0.055) * intensity * (state.reducedMotion ? 0.35 : 1)
+      ? (Math.pow(speed01, 1.9) * 0.070 + boost * 0.030) * intensity * motion
       : 0;
     u.uBlur.value = damp(u.uBlur.value, target, 8, dt);
+    // The nitrous blur is deliberately its own channel rather than more of the
+    // cruise blur: it ramps sharply, holds, and drops away fast.
+    u.uBoost.value = damp(u.uBoost.value,
+      this.motionBlurEnabled ? Math.pow(boost, 0.75) * intensity * motion : 0,
+      boost > u.uBoost.value ? 5.5 : 3.2, dt);
+
+    /* --- how far the world slid across the screen since the last frame ----
+     * Take the previous frame's forward axis into the current camera's space
+     * and project it: that is exactly where a distant static point used to be,
+     * so the difference is the screen-space smear direction for this frame. */
+    const cam = this.camera;
+    const pv = this._velV, pq = this._velQ;
+    pq.copy(cam.quaternion).invert();
+    pv.set(0, 0, -1).applyQuaternion(this._prevCamQuat).applyQuaternion(pq);
+    const iz = 1 / Math.max(0.25, -pv.z);
+    const tanHalf = Math.tan((cam.fov || 60) * 0.5 * Math.PI / 180);
+    const vx = (pv.x * iz) / (tanHalf * (cam.aspect || 1.777)) * 0.5;
+    const vy = (pv.y * iz) / tanHalf * 0.5;
+    // Normalise to a 60 Hz exposure. Physically the smear should grow as the
+    // frame time does, but a machine dropping to 20 fps would then bury the
+    // route in mud exactly when the player most needs to see it.
+    const shutter = Math.min(1, (1 / 60) / Math.max(1e-4, dt));
+    const scale = this.motionBlurEnabled ? intensity * motion * shutter * (0.9 + boost * 1.0) : 0;
+    // Clamp: a camera cut or a respawn would otherwise smear the whole frame.
+    this._camVel.set(clamp(vx * scale, -0.055, 0.055), clamp(vy * scale, -0.055, 0.055));
+    u.uCamVel.value.lerp(this._camVel, clamp01(dt * 26));
+    this._prevCamQuat.copy(cam.quaternion);
 
     const sl = this.motionBlurEnabled
       ? clamp01((speed01 - 0.55) / 0.45) * (0.5 + boost * 0.7) * intensity * (state.reducedMotion ? 0.3 : 1)
@@ -1240,7 +1331,7 @@ export class CameraRig {
   }
 
   /** Snap instantly — used on race start / respawn so there is no fly-in. */
-  reset() { this.initialised = false; }
+  reset() { this.initialised = false; this.onReset?.(); }
 
   update(dt, target, params = {}) {
     const m = this.mode;
@@ -1543,10 +1634,11 @@ export class AircraftFactory {
   /**
    * Register a loaded GLB for an airframe. The model replaces the procedural
    * hull; nozzles, afterburners, trails and control surfaces are still derived
-   * so the aircraft keeps every gameplay-visible behaviour. Called by game.js
-   * only when /Assets/3d/manifest.json actually lists a ready asset.
+   * so the aircraft keeps every gameplay-visible behaviour.
+   *
+   * @param level 0 = hero mesh, 1 = reduced mesh used for mid/far detail.
    */
-  registerExternal(id, object3D) {
+  registerExternal(id, object3D, level = 0) {
     if (!object3D) return false;
     const box = new THREE.Box3().setFromObject(object3D);
     const size = box.getSize(new THREE.Vector3());
@@ -1554,45 +1646,109 @@ export class AircraftFactory {
       console.warn(`[Aircraft] external model "${id}" has no usable geometry — keeping procedural airframe`);
       return false;
     }
-    this.external.set(id, { object: object3D, box, size });
+    const entry = this.external.get(id) || { levels: [] };
+    entry.levels[level] = object3D;
+    this.external.set(id, entry);
     this.cache.delete(`${id}_0`);
     this.cache.delete(`${id}_1`);
     this.cache.delete(`${id}_2`);
     return true;
   }
 
-  /** Fit an external model into the airframe's canonical frame (nose = -Z). */
-  _buildExternal(spec, entry) {
+  /**
+   * Find the wingtips on the fitted mesh. Exactly half the span, wherever the
+   * model actually puts it — so tip vapour trails from the real tip rather than
+   * from a number borrowed off the procedural airframe.
+   */
+  _measureWingTips(root, spec, L) {
+    root.updateMatrixWorld(true);
+    const tip = { x: 0, y: 0, z: 0 };
+    const v = new THREE.Vector3();
+    root.traverse((n) => {
+      if (!n.isMesh || !n.geometry?.attributes?.position) return;
+      const pos = n.geometry.attributes.position;
+      const m = n.matrixWorld;
+      // A sample is plenty: the widest vertex is on a long span of wing, not a
+      // lone spike, and this keeps the pass well inside one frame.
+      const step = pos.count > 40000 ? 3 : 1;
+      for (let i = 0; i < pos.count; i += step) {
+        v.fromBufferAttribute(pos, i).applyMatrix4(m);
+        if (v.x > tip.x) { tip.x = v.x; tip.y = v.y; tip.z = v.z; }
+      }
+    });
+    if (tip.x < 1e-3) {
+      const r = new THREE.Vector3(spec.shape.wingSpan * 0.48, 0, L * 0.1);
+      return { span: spec.shape.wingSpan, wingTips: [r, r.clone().setX(-r.x)] };
+    }
+    const r = new THREE.Vector3(tip.x * 0.985, tip.y, tip.z);
+    return { span: tip.x * 2, wingTips: [r, r.clone().setX(-r.x)] };
+  }
+
+  /**
+   * Fit an external model into the airframe's canonical frame (nose = -Z, up =
+   * +Y, right wing = +X) using the solved transform on `spec.model`. Note the
+   * `true` on setFromObject: the cheap form expands by each mesh's *unrotated*
+   * bounding-box corners, which for a rotated airframe over-reports the height
+   * by 2-3x and would scale every model wrong.
+   */
+  _buildExternal(spec, entry, detail = 2) {
+    // Prefer the hero mesh up close and the reduced one further out, but take
+    // whichever actually loaded — either can be missing on its own.
+    const src = (detail >= 2 ? entry.levels[0] : entry.levels[1])
+      || entry.levels[0] || entry.levels[1];
+    const cfg = spec.model || {};
     const group = new THREE.Group();
     group.name = `aircraft_${spec.id}_ext`;
-    const model = entry.object.clone(true);
-    const { size, box } = entry;
-    // Longest axis becomes the fuselage axis, scaled to the design length.
-    const longest = Math.max(size.x, size.y, size.z);
-    const scale = spec.shape.length / longest;
-    model.scale.setScalar(scale);
-    if (size.x === longest) model.rotation.y = Math.PI / 2;
-    else if (size.y === longest) model.rotation.x = -Math.PI / 2;
-    const centre = box.getCenter(new THREE.Vector3()).multiplyScalar(-scale);
-    model.position.copy(centre);
-    model.traverse((n) => { if (n.isMesh) { n.castShadow = true; n.receiveShadow = true; } });
-    group.add(model);
 
+    // pivot carries the authoring-frame correction; holder carries the fit.
+    const pivot = new THREE.Group();
+    pivot.add(src.clone(true));
+    if (Array.isArray(cfg.quat)) pivot.quaternion.fromArray(cfg.quat);
+    else if (Array.isArray(cfg.rotate)) pivot.rotation.set(cfg.rotate[0] || 0, cfg.rotate[1] || 0, cfg.rotate[2] || 0);
+    pivot.updateMatrixWorld(true);
+
+    const box = new THREE.Box3().setFromObject(pivot, true);
+    const size = box.getSize(new THREE.Vector3());
+    const L = cfg.length || spec.shape.length;
+    const scale = size.z > 1e-6 ? L / size.z : 1;
+    pivot.position.copy(box.getCenter(new THREE.Vector3())).multiplyScalar(-1);
+
+    const holder = new THREE.Group();
+    holder.scale.setScalar(scale);
+    holder.add(pivot);
+    group.add(holder);
+
+    group.traverse((n) => {
+      if (!n.isMesh) return;
+      n.castShadow = true;
+      n.receiveShadow = true;
+      n.frustumCulled = false; // the group is small and always near the camera
+      const mats = Array.isArray(n.material) ? n.material : [n.material];
+      for (const m of mats) {
+        if (!m) continue;
+        if (m.envMapIntensity !== undefined) m.envMapIntensity = 1.0;
+        m.side = THREE.FrontSide;
+      }
+    });
+
+    const { span, wingTips } = this._measureWingTips(group, spec, L);
     const s = spec.shape;
-    const nozzlePositions = [];
-    for (let e = 0; e < s.engines; e++) {
-      const side = s.engines === 1 ? 0 : (e === 0 ? 1 : -1);
-      nozzlePositions.push(new THREE.Vector3(side * s.engineSep * 0.5, -s.bodyH * 0.08, s.length * 0.5));
-    }
-    const wingTipR = new THREE.Vector3(s.wingSpan * 0.48, 0, s.length * 0.1);
+    const nozzlePositions = Array.isArray(cfg.nozzles) && cfg.nozzles.length
+      ? cfg.nozzles.map((n) => new THREE.Vector3(n[0], n[1], n[2]))
+      : Array.from({ length: Math.max(1, s.engines) }, (_, e) => {
+        const side = s.engines === 1 ? 0 : (e === 0 ? 1 : -1);
+        return new THREE.Vector3(side * s.engineSep * 0.5, -s.bodyH * 0.08, L * 0.5);
+      });
+
     return {
       group,
       surfaces: { ailerons: [], elevons: [], rudders: [] },
       nozzlePositions,
-      wingTips: [wingTipR, wingTipR.clone().setX(-wingTipR.x)],
-      length: s.length, span: s.wingSpan,
-      radius: Math.max(s.length, s.wingSpan) * 0.5,
-      engineRadius: s.engineR,
+      wingTips,
+      length: L,
+      span,
+      radius: Math.max(L, span) * 0.5,
+      engineRadius: cfg.engineRadius || s.engineR,
       external: true,
     };
   }
@@ -1600,7 +1756,7 @@ export class AircraftFactory {
   /** @param detail 2 = hero, 1 = mid, 0 = distant */
   build(spec, detail = 2) {
     const ext = this.external.get(spec.id);
-    if (ext) return this._buildExternal(spec, ext);
+    if (ext && ext.levels.some(Boolean)) return this._buildExternal(spec, ext, detail);
     const s = spec.shape;
     const L = s.length;
     const group = new THREE.Group();
@@ -1943,6 +2099,9 @@ export class AircraftFactory {
 
   dispose() {
     for (const t of this.cache.values()) {
+      // External templates share geometry with the loaded GLB — disposing here
+      // would blank every later build of the same airframe.
+      if (t.external) continue;
       t.group.traverse((n) => { if (n.geometry) n.geometry.dispose(); });
     }
     this.cache.clear();
@@ -2589,6 +2748,8 @@ export class RenderSystem {
     this.lighting = new LightingSystem(this.scene);
     this.postfx = new PostFX(this.renderer, this.scene, this.camera, quality.preset);
     this.rig = new CameraRig(this.camera);
+    // A camera cut is not motion — clear the blur's frame history with it.
+    this.rig.onReset = () => this.postfx.resetMotion();
     this.aircraftFactory = new AircraftFactory(this.materials, quality.preset);
     this.vfx = new VFX(this.scene, this.textures, this.materials, quality.preset);
 

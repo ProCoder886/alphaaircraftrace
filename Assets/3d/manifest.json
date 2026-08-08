@@ -3,6 +3,52 @@
   "generator": "tools/tripo/generate-assets.mjs",
   "modelVersion": "v3.1-20260211",
   "generatedAt": null,
-  "note": "Written by the Tripo3D pipeline. An empty `assets` array is the shipped default: the game builds every airframe and prop procedurally at runtime and only loads GLBs listed here with `status: \"ready\"`. Nothing in this file is required for the game to run — see tools/tripo/README.md.",
-  "assets": []
+  "note": "The three fighter jets below ship with the game and are loaded from the aircraft roster in js/config.js (`model.file` / `model.lod1`); they are listed here so the asset tooling can see them. Anything the Tripo3D pipeline generates is appended to this array with `status: \"ready\"`. Nothing in this file is required for the game to run \u2014 every airframe and prop has a procedural fallback. See tools/tripo/README.md.",
+  "assets": [
+    {
+      "id": "raptor",
+      "kind": "aircraft",
+      "source": "authored",
+      "status": "ready",
+      "priority": "critical",
+      "file": "Assets/3d/aircraft/raptor.glb",
+      "lod1": "Assets/3d/aircraft/raptor.lod1.glb",
+      "triangles": 115180,
+      "bytes": 1259188,
+      "compression": "draco",
+      "note": "FR-22 RAPTOR. Authored nose +Y / dorsal +Z; the correcting rotation lives on the aircraft spec.",
+      "lod1Triangles": 28795,
+      "lod1Bytes": 445728
+    },
+    {
+      "id": "falcon",
+      "kind": "aircraft",
+      "source": "authored",
+      "status": "ready",
+      "priority": "critical",
+      "file": "Assets/3d/aircraft/falcon.glb",
+      "lod1": "Assets/3d/aircraft/falcon.lod1.glb",
+      "triangles": 118953,
+      "bytes": 1373248,
+      "compression": "draco",
+      "note": "FA-19 FALCON. Authored nose +Z / dorsal +Y.",
+      "lod1Triangles": 29738,
+      "lod1Bytes": 486340
+    },
+    {
+      "id": "warhawk",
+      "kind": "aircraft",
+      "source": "authored",
+      "status": "ready",
+      "priority": "critical",
+      "file": "Assets/3d/aircraft/warhawk.glb",
+      "lod1": "Assets/3d/aircraft/warhawk.lod1.glb",
+      "triangles": 115253,
+      "bytes": 1164628,
+      "compression": "draco",
+      "note": "MK-29 WARHAWK. Authored nose +Y / dorsal +Z.",
+      "lod1Triangles": 28813,
+      "lod1Bytes": 398348
+    }
+  ]
 }

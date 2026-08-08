@@ -2,7 +2,10 @@
  * ALPHA AIRCRAFT RACE 3D — service worker
  * ---------------------------------------------------------------------------
  * Caches the app shell and the vendored engine so repeat launches start almost
- * instantly and the game keeps working offline.
+ * instantly and the game keeps working offline. The aircraft .glb files and the
+ * Draco decoder are not pre-cached — they are several megabytes and would make
+ * the install slow — but the cache-first rule below keeps them after the first
+ * launch, so the second launch is offline-capable including the modelled jets.
  *
  * Strategy:
  *   • vendor/ and Assets/ — cache-first (immutable, large, version-pinned)
@@ -11,7 +14,7 @@
  * Bump CACHE_VERSION whenever the shipped files change.
  */
 
-const CACHE_VERSION = 'alpha-aircraft-race-3d-v1';
+const CACHE_VERSION = 'alpha-aircraft-race-3d-v2';
 const SHELL = [
   './',
   './index.html',

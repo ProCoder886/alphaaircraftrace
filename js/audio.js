@@ -10,13 +10,12 @@
  *   AmbienceSynth— wind, rain, snow hiss, cavern tone
  *   SFXKit       — one-shot UI and gameplay sounds
  *   MusicEngine  — generative adaptive score
- *   Commentary   — race commentary with subtitles and per-channel cooldowns
  *
  * Everything is defensive: if the AudioContext is unavailable or blocked the
  * game carries on silently rather than throwing.
  */
 
-import { COMMENTARY, COMMENTARY_COOLDOWN, clamp, clamp01, lerp } from './config.js';
+import { clamp, clamp01, lerp } from './config.js';
 
 const NOTE = (semitonesFromA4) => 440 * Math.pow(2, semitonesFromA4 / 12);
 
@@ -403,9 +402,6 @@ class SFXKit {
       case 'unlock':
         [0, 7, 12, 16, 19].forEach((s, i) => this._tone({ freq: NOTE(s), type: 'triangle', dur: 0.55, gain: 0.09 * v, delay: i * 0.09 }));
         break;
-      case 'radio':
-        this._noise({ dur: 0.07, gain: 0.035 * v, type: 'bandpass', freq: 1800, sweep: 400, q: 3 });
-        break;
       case 'nearMiss':
         if (!this._guard('nearMiss', 220)) return;
         this._noise({ dur: 0.22, gain: 0.12 * v * (0.4 + (opts.closeness || 0)), type: 'bandpass', freq: 900, sweep: 2600, q: 1.6 });
@@ -608,71 +604,6 @@ class MusicEngine {
 }
 
 /* ===========================================================================
- * COMMENTARY
- * ======================================================================== */
-
-class Commentary {
-  constructor(sfx) {
-    this.sfx = sfx;
-    this.cooldowns = new Map();
-    this.enabled = true;
-    this.speech = typeof window !== 'undefined' && 'speechSynthesis' in window;
-    this.voice = null;
-    this.volume = 0.85;
-    this.onSubtitle = null;
-    this.lastLine = '';
-    this.recent = [];
-    if (this.speech) {
-      const pick = () => {
-        try {
-          const voices = window.speechSynthesis.getVoices();
-          this.voice = voices.find((v) => /en[-_](GB|US|AU)/i.test(v.lang) && !/google/i.test(v.name))
-            || voices.find((v) => /^en/i.test(v.lang)) || voices[0] || null;
-        } catch (e) { this.voice = null; }
-      };
-      pick();
-      try { window.speechSynthesis.onvoiceschanged = pick; } catch (e) { /* noop */ }
-    }
-  }
-
-  /** @param channel key into COMMENTARY  @param force skip the cooldown */
-  say(channel, force = false, overrideText = null) {
-    if (!this.enabled) return null;
-    const now = performance.now() / 1000;
-    const cd = COMMENTARY_COOLDOWN[channel] ?? COMMENTARY_COOLDOWN.default;
-    if (!force && (this.cooldowns.get(channel) || 0) > now) return null;
-    this.cooldowns.set(channel, now + cd);
-
-    let text = overrideText;
-    if (!text) {
-      const pool = COMMENTARY[channel];
-      if (!pool || !pool.length) return null;
-      // Avoid repeating anything said in the last few lines.
-      const fresh = pool.filter((l) => !this.recent.includes(l));
-      text = (fresh.length ? fresh : pool)[Math.floor(Math.random() * (fresh.length || pool.length))];
-    }
-    this.recent.push(text);
-    if (this.recent.length > 6) this.recent.shift();
-    this.lastLine = text;
-
-    this.sfx.play('radio', { volume: 0.8 });
-    if (this.speech && this.volume > 0.02) {
-      try {
-        const u = new SpeechSynthesisUtterance(text);
-        if (this.voice) u.voice = this.voice;
-        u.rate = 1.18; u.pitch = 0.96; u.volume = clamp01(this.volume);
-        window.speechSynthesis.cancel();
-        window.speechSynthesis.speak(u);
-      } catch (e) { /* speech unavailable — subtitles still fire */ }
-    }
-    this.onSubtitle?.(text);
-    return text;
-  }
-
-  silence() { try { window.speechSynthesis?.cancel(); } catch (e) { /* noop */ } }
-}
-
-/* ===========================================================================
  * AUDIO SYSTEM
  * ======================================================================== */
 
@@ -682,8 +613,7 @@ export class AudioSystem {
     this.failed = false;
     this.ctx = null;
     this.settings = {
-      masterVolume: 0.85, musicVolume: 0.55, sfxVolume: 0.9,
-      commentaryVolume: 0.85, environmentVolume: 0.8, subtitles: true,
+      masterVolume: 0.85, musicVolume: 0.55, sfxVolume: 0.9, environmentVolume: 0.8,
     };
     this.muted = false;
   }
@@ -711,7 +641,6 @@ export class AudioSystem {
       this.musicBus = bus(this.settings.musicVolume);
       this.sfxBus = bus(this.settings.sfxVolume);
       this.envBus = bus(this.settings.environmentVolume);
-      this.voiceBus = bus(this.settings.commentaryVolume);
 
       this.noiseBuffer = this._makeNoise(2.5);
       this.engine = new EngineSynth(this.ctx, this.envBus, this.noiseBuffer);
@@ -719,7 +648,6 @@ export class AudioSystem {
       this.sfx = new SFXKit(this.ctx, this.sfxBus, this.noiseBuffer);
       this.uiSfx = new SFXKit(this.ctx, this.sfxBus, this.noiseBuffer);
       this.music = new MusicEngine(this.ctx, this.musicBus, this.noiseBuffer);
-      this.commentary = new Commentary(new SFXKit(this.ctx, this.voiceBus, this.noiseBuffer));
 
       this.ready = true;
       return true;
@@ -766,9 +694,6 @@ export class AudioSystem {
     this.musicBus.gain.setTargetAtTime(this.settings.musicVolume, t, 0.05);
     this.sfxBus.gain.setTargetAtTime(this.settings.sfxVolume, t, 0.05);
     this.envBus.gain.setTargetAtTime(this.settings.environmentVolume, t, 0.05);
-    this.voiceBus.gain.setTargetAtTime(this.settings.commentaryVolume, t, 0.05);
-    this.commentary.volume = this.settings.commentaryVolume;
-    this.commentary.enabled = this.settings.commentaryVolume > 0.02;
   }
 
   setMuted(v) { this.muted = v; this.applySettings(); }
@@ -776,7 +701,6 @@ export class AudioSystem {
   /* ---- façade ---------------------------------------------------------- */
   play(name, opts) { if (this.ready && !this.muted) try { this.sfx.play(name, opts); } catch (e) { /* noop */ } }
   ui(name, opts) { if (this.ready && !this.muted) try { this.uiSfx.play(name, opts); } catch (e) { /* noop */ } }
-  say(channel, force, text) { return this.ready ? this.commentary.say(channel, force, text) : null; }
 
   startEngine() { if (this.ready) this.engine.start(); }
   stopEngine() { if (this.ready) this.engine.stop(); }
@@ -798,7 +722,6 @@ export class AudioSystem {
     if (!this.ready) return;
     this.music.stop();
     this.engine.stop();
-    this.commentary.silence();
     try { this.ctx.suspend(); } catch (e) { /* noop */ }
   }
   async resume() {
@@ -811,7 +734,6 @@ export class AudioSystem {
     this.music.dispose();
     this.engine.dispose();
     this.ambience.dispose();
-    this.commentary.silence();
     try { this.ctx.close(); } catch (e) { /* noop */ }
     this.ready = false;
   }

@@ -443,11 +443,14 @@ export class Player {
     this.boosting = false;
     this.boostBlend = 0;
     this.boostCooldown = 0;
+    this.burner = 0;             // reheat spool state, 0..1
     this.health = this.maxHealth;
     this.alive = true;
     this.sink = 0;
     this.gLoad = 1;
-    this.aoa = 0;
+    this.loadFactor = 1;         // n — what the wing is actually pulling
+    this.rollRateActual = 0;     // rad/s, lagged behind the aileron command
+    this.aoa01 = 0;              // how close the wing is to its lift limit
     this.stunned = 0;
     this.invulnerable = 1.5;
 
@@ -485,6 +488,9 @@ export class Player {
     this.boostPower = lerp(0.78, 1.24, st.boost);
     this.maxHealth = PHYSICS.maxHealth * lerp(0.72, 1.40, st.durability);
     this.mass = lerp(0.8, 1.35, st.durability);
+    // A stronger airframe carries a higher structural G limit; a nimble one
+    // reaches it sooner. Both feed the same turn equation.
+    this.gStrength = lerp(0.86, 1.16, st.durability * 0.45 + st.handling * 0.55);
 
     // Airframe abilities.
     const ab = spec.abilityKey;
@@ -529,6 +535,9 @@ export class Player {
     // Match the rival grid's launch speed so the start is fair.
     this.speed = PHYSICS.cruiseSpeed * 0.85;
     this.throttle = this.throttleTarget = 0.85;
+    this.burner = 0;
+    this.loadFactor = 1;
+    this.rollRateActual = 0;
     this.boostMeter = this.boostCapacity;
     this.health = this.maxHealth;
     this.alive = true;
@@ -568,7 +577,11 @@ export class Player {
     const phase = this.powers.isActive('phase');
     const scan = this.powers.isActive('scan');
 
-    /* --- orientation -------------------------------------------------- */
+    /* --- orientation ---------------------------------------------------
+     * A fighter is a G-command machine in pitch and a rate-command machine in
+     * roll, and both are limited by how fast it is going. That is the whole
+     * model: everything below is those two facts plus the drag they cost.
+     * ------------------------------------------------------------------ */
     const stunScale = this.stunned > 0 ? 0.25 : 1;
     const sc = this.smoothControls;
     const responsiveness = 14 * stunScale;
@@ -576,22 +589,44 @@ export class Player {
     sc.roll = damp(sc.roll, c.roll, responsiveness * 1.15, dt);
     sc.yaw = damp(sc.yaw, c.yaw, responsiveness * 0.8, dt);
 
-    const speed01 = clamp01((this.speed - PHYSICS.minSpeed) / (PHYSICS.boostSpeed - PHYSICS.minSpeed));
-    // Control authority falls off at extreme speed — the classic racer feel.
-    let authority = this.agility * lerp(1.0, PHYSICS.speedTurnFalloff, Math.pow(speed01, 1.35)) * stunScale;
-    if (turbo) authority *= 0.78 * this.vectorTurn;
-    if (this.boosting) authority *= this.vectorTurn;
-    // Thin air above the soft ceiling costs you control.
-    const thin = clamp01((this.position.y - WORLD.softCeiling) / 1600);
-    authority *= lerp(1, 0.55, thin);
-
-    const pitchRate = PHYSICS.pitchRate * authority * sc.pitch;
-    const rollRate = PHYSICS.rollRate * authority * sc.roll;
-    const yawRate = PHYSICS.yawRate * authority * sc.yaw;
-
     this.forward.set(0, 0, -1).applyQuaternion(this.quaternion);
     this.upVec.set(0, 1, 0).applyQuaternion(this.quaternion);
     this.rightVec.set(1, 0, 0).applyQuaternion(this.quaternion);
+
+    const V = Math.max(45, this.speed);
+    const q01 = clamp01(V / PHYSICS.maxSpeed);          // dynamic pressure, roughly
+    // Thin air above the soft ceiling costs you control.
+    const thin = clamp01((this.position.y - WORLD.softCeiling) / 1600);
+    let authority = this.agility * stunScale * lerp(1, 0.55, thin);
+    if (turbo) authority *= 0.86 * this.vectorTurn;
+    else if (this.boosting) authority *= this.vectorTurn;
+
+    // Pitch: the stick asks for a load factor. The wing can only deliver it if
+    // it is going fast enough — lift goes with V², so the same pull that snaps
+    // the nose round at 300 km/h barely bends it at 2000.
+    const gLimit = PHYSICS.gLimit * this.gStrength * (turbo ? 0.92 : 1);
+    const nAvailable = gLimit * clamp01((V / PHYSICS.cornerSpeed) ** 2);
+    const nCommand = sc.pitch >= 0
+      ? 1 + sc.pitch * (gLimit - 1)
+      : 1 + sc.pitch * (1 + PHYSICS.gLimitNeg);
+    this.loadFactor = damp(this.loadFactor,
+      clamp(nCommand, -PHYSICS.gLimitNeg, Math.min(gLimit, nAvailable)), 1 / PHYSICS.pitchTau, dt);
+    // q = G(n − upY)/V. With the stick centred in level flight n = 1 and
+    // upY = 1, so the nose holds; roll away from level and it starts to fall.
+    const pitchRate = PHYSICS.flightG * (this.loadFactor - this.upVec.y) / V * authority;
+
+    // Roll: ailerons bite hardest in the middle of the band — mushy when slow,
+    // stiff against the airflow when very fast — and a loaded wing rolls slower.
+    const rollAuth = authority * lerp(0.5, 1, clamp01(V / 175)) * lerp(1, 0.66, q01 ** 1.6)
+      * lerp(1, 0.72, clamp01(Math.abs(this.loadFactor) / gLimit));
+    this.rollRateActual = damp(this.rollRateActual, PHYSICS.rollRate * rollAuth * sc.roll,
+      1 / PHYSICS.rollTau, dt);
+    const rollRate = this.rollRateActual;
+
+    // Yaw: the rudder is a low-speed control, and rolling drags the nose the
+    // wrong way until you catch it.
+    const yawRate = PHYSICS.yawRate * authority * lerp(1, 0.34, q01 ** 1.3) * sc.yaw
+      + rollRate * PHYSICS.adverseYaw * (1 - clamp01(Math.abs(sc.yaw)));
 
     _q.setFromAxisAngle(this.rightVec, pitchRate * dt);
     this.quaternion.premultiply(_q);
@@ -629,12 +664,15 @@ export class Player {
     this.upVec.set(0, 1, 0).applyQuaternion(this.quaternion);
     this.rightVec.set(1, 0, 0).applyQuaternion(this.quaternion);
 
-    /* --- speed --------------------------------------------------------- */
-    // W/S nudge the throttle as well as the nose, which is what the control
-    // brief asks for: pitch up = accelerate, pitch down = brake.
-    this.throttleTarget = clamp01(0.82 + c.throttle * 0.18 + Math.max(0, c.pitch) * 0.16
-      - Math.max(0, -c.pitch) * 0.34 - c.brake * 0.75);
-    this.throttle = damp(this.throttle, this.throttleTarget, 3.2, dt);
+    /* --- engine and energy ----------------------------------------------
+     * Thrust does not appear the instant you ask for it: the core spools, and
+     * reheat lights a beat later. That lag is most of why a real jet feels
+     * heavy, and it is what makes the boost button worth timing.
+     * ------------------------------------------------------------------ */
+    this.throttleTarget = clamp01(0.82 + c.throttle * 0.18 + Math.max(0, c.pitch) * 0.10
+      - Math.max(0, -c.pitch) * 0.22 - c.brake * 0.75);
+    this.throttle = damp(this.throttle, this.throttleTarget,
+      1 / (this.throttleTarget > this.throttle ? PHYSICS.spoolUp : PHYSICS.spoolDown), dt);
 
     this.boostCooldown = Math.max(0, this.boostCooldown - dt);
     const wantBoost = c.boost && this.boostMeter > 1 && !this.stunned;
@@ -646,7 +684,9 @@ export class Player {
       const regenBonus = (this.ramAir && this.speed > PHYSICS.maxSpeed * 0.78) ? 1.35 : 1;
       this.boostMeter = Math.min(this.boostCapacity, this.boostMeter + PHYSICS.boostRegen * regenBonus * dt);
     }
-    this.boostBlend = damp(this.boostBlend, (this.boosting ? 1 : 0) * 0.7 + (turbo ? 1 : 0) * 0.3, 5, dt);
+    // Reheat lights fast and dies fast, but never instantly.
+    this.burner = damp(this.burner, wantBoost ? 1 : 0, wantBoost ? 1 / PHYSICS.burnerLight : 4.5, dt);
+    this.boostBlend = damp(this.boostBlend, this.burner * 0.7 + (turbo ? 1 : 0) * 0.3, 5, dt);
 
     let cap = this.topSpeed;
     if (this.boosting) cap = PHYSICS.boostSpeed * (this.topSpeed / PHYSICS.maxSpeed) * 0.94;
@@ -654,19 +694,23 @@ export class Player {
     cap *= lerp(1, 0.88, thin);
 
     let thrust = this.accelPower * this.throttle;
-    if (this.boosting) thrust += PHYSICS.boostAccel * this.boostPower;
+    thrust += PHYSICS.boostAccel * this.boostPower * this.burner;
     if (turbo) thrust += PHYSICS.boostAccel * 1.35 * this.boostPower;
-    // Gravity helps in a dive and hurts in a climb.
-    thrust += -this.forward.y * PHYSICS.gravity * 9.5;
-    const aoaDrag = 1 + Math.abs(sc.pitch) * 0.55 + Math.abs(sc.roll) * 0.18 + c.brake * 3.2;
-    const drag = PHYSICS.dragCoefficient * this.speed * this.speed * aoaDrag;
-    this.speed += (thrust - drag) * dt;
+    // Gravity along the flight path: a dive is free speed, a climb costs it.
+    thrust += -this.forward.y * PHYSICS.flightG;
+    // Parasitic drag goes with V², induced drag with n²/V. Holding a hard turn
+    // therefore costs energy exactly where a real one does — and the harder you
+    // pull the more it costs, which is what makes the racing line matter.
+    const parasitic = PHYSICS.dragCoefficient * this.speed * this.speed
+      * (1 + c.brake * 3.2 + Math.abs(sc.roll) * 0.14);
+    const induced = PHYSICS.inducedDrag * this.loadFactor * this.loadFactor / V;
+    this.speed += (thrust - parasitic - induced) * dt;
     if (this.speed > cap) this.speed = damp(this.speed, cap, 2.4, dt);
     this.speed = clamp(this.speed, PHYSICS.minSpeed * 0.55, PHYSICS.boostSpeed * 1.1);
 
     /* --- integrate ------------------------------------------------------ */
-    const lift = clamp01(this.speed / PHYSICS.minSpeed);
-    this.sink = damp(this.sink, (1 - lift) * 70, 2.0, dt);
+    // Below the speed at which the wing can hold 1 g the airframe simply mushes.
+    this.sink = damp(this.sink, clamp01(1 - nAvailable) * PHYSICS.stallSink, 2.0, dt);
     this.velocity.copy(this.forward).multiplyScalar(this.speed);
     this.velocity.y -= this.sink;
 
@@ -713,8 +757,9 @@ export class Player {
     this.bankAngle = Math.atan2(this.rightVec.y, this.upVec.y);
     this.pitchAngle = Math.asin(clamp(this.forward.y, -1, 1));
     this.headingDeg = (Math.atan2(this.forward.x, this.forward.z) * 180 / Math.PI + 360) % 360;
-    const turnRate = Math.abs(pitchRate) + Math.abs(yawRate);
-    this.gLoad = 1 + turnRate * this.speed * 0.0055;
+    // The G-meter shows the real, unitless load factor the wing is pulling.
+    this.gLoad = this.loadFactor;
+    this.aoa01 = clamp01(Math.abs(this.loadFactor) / Math.max(1e-3, nAvailable));
 
     /* --- collisions, rings, checkpoints ----------------------------------- */
     this.collisionCooldown = Math.max(0, this.collisionCooldown - dt);
@@ -795,6 +840,8 @@ export class Player {
     this.prevPosition.copy(p);
     this.velocity.set(0, 0, -1).applyQuaternion(q).multiplyScalar(this.speed);
     this.sink = 0;
+    this.loadFactor = 1;
+    this.rollRateActual = 0;
     this.smoothControls.pitch = this.smoothControls.roll = this.smoothControls.yaw = 0;
     return true;
   }

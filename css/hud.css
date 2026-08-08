@@ -190,16 +190,6 @@
 .event-banner.show { animation: bannerIn 3.2s var(--ease) both; }
 .event-banner small { display: block; margin-top: 3px; font-size: 0.68em; letter-spacing: 0.16em; color: rgba(255, 224, 171, 0.65); text-align: center; }
 
-.subtitle-bar {
-  position: absolute; bottom: calc(max(14px, env(safe-area-inset-bottom)) + 118px); left: 50%; transform: translateX(-50%);
-  max-width: 66%; padding: 7px 18px; border-radius: 3px;
-  background: rgba(3, 7, 12, 0.76); border-left: 2px solid var(--accent);
-  font-size: 0.78em; color: #dff2ff; letter-spacing: 0.03em; text-align: center;
-  opacity: 0; transition: opacity 180ms linear;
-}
-.subtitle-bar.show { opacity: 1; }
-.subtitle-bar::before { content: "◉ "; color: var(--accent); }
-
 .countdown {
   position: absolute; left: 50%; top: 44%; transform: translate(-50%, -50%);
   font-size: 5.6em; font-weight: 200; letter-spacing: 0.14em; color: #fff;
@@ -241,5 +231,4 @@
   .power-cell { width: 44px; }
   .status-stack { min-width: 158px; }
   .hud-bc { width: min(300px, 46%); }
-  .subtitle-bar { bottom: calc(max(10px, env(safe-area-inset-bottom)) + 96px); max-width: 78%; }
 }

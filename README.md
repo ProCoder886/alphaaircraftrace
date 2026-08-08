@@ -1,12 +1,16 @@
 # ALPHA AIRCRAFT RACE 3D
 
 A high-speed aerial racing game that runs entirely in the browser. Every route,
-venue, airframe, cloud, texture, sound effect and piece of music is generated
-procedurally at runtime — there are no downloaded art or audio assets.
+venue, cloud, texture, sound effect and piece of music is generated
+procedurally at runtime. Three of the thirteen airframes are modelled fighter
+jets loaded from `Assets/3d/aircraft/`; the other ten are lofted at runtime
+from parametric shape data, and every modelled jet keeps that procedural hull
+as its fallback.
 
 ```
 Endless Flight · Elite · Random venue          ← the defaults
-6 game modes · 17 venues · 10 airframes · 5 powers · 8-aircraft grids
+6 game modes · 17 venues · 13 airframes · 5 powers · 8-aircraft grids
+Extreme graphics by default, with an adaptive ladder underneath
 ```
 
 ---
@@ -36,12 +40,12 @@ Mobile play is landscape-only; portrait shows a rotate prompt.
 
 | Key | Action |
 |---|---|
-| `W` / `↑` | Pitch up — also feeds the throttle |
-| `S` / `↓` | Pitch down — also bleeds the throttle |
+| `W` / `↑` | Pull — commands G, and feeds the throttle |
+| `S` / `↓` | Push — unloads the wing, and bleeds the throttle |
 | `A` / `D` | Roll left / right — **this is how you turn** |
 | `Q` / `E` | Yaw left / right |
 | `Shift` | Throttle up |
-| `C` | Air brake (tightens your turn radius) |
+| `C` | Air brake — slower means a harder turn, so this is a cornering tool |
 | `Space` | Boost |
 | `NUM 1–5` | Route Scan · Time Freeze · Phase Shift · Aerial Shield · Turbo Overdrive |
 | `Esc` | Pause |
@@ -51,7 +55,9 @@ Mobile play is landscape-only; portrait shows a rotate prompt.
 
 Gamepads and touch are supported. Everything is rebindable in Settings.
 
-Bank into the turn and pull — heading follows roll far faster than rudder alone.
+Bank into the turn and pull. The rudder alone will not get you round anything,
+and the harder you pull the more speed it costs — braking into a tight gate
+chain is genuinely faster than powering through it.
 
 ---
 
@@ -80,7 +86,8 @@ sw.js                      offline cache for the shell + engine
 css/                       main · menu · hud · mobile · animations
 js/                        exactly ten modules (see below)
 vendor/three/              three.js r180, vendored (MIT)
-Assets/3d/                 optional generated models + manifest.json
+Assets/3d/aircraft/        the three modelled fighter jets (.glb, LOD0 + LOD1)
+Assets/3d/manifest.json    asset index, also written by the Tripo3D pipeline
 tools/tripo/               Tripo3D asset generation pipeline
 ```
 
@@ -96,7 +103,7 @@ tools/tripo/               Tripo3D asset generation pipeline
 | `world.js` | Terrain field, route generation, chunk streaming, content, weather |
 | `ai.js` | Rival pilots, traffic, race director |
 | `ui.js` | Menus, HUD, radar, onboarding, settings, results, touch controls |
-| `audio.js` | Web Audio synthesis: engine, ambience, SFX, music, commentary |
+| `audio.js` | Web Audio synthesis: engine, ambience, SFX, adaptive music |
 | `performance.js` | Device profiling, frame timing, adaptive quality, pools, loader |
 
 ### Notable systems
@@ -129,6 +136,36 @@ draw calls each. Liveries, panel lines and roughness maps are painted to a
 canvas per airframe. Control surfaces are separate pivots that actuate with
 your input.
 
+Three more — FR-22 Raptor, FA-19 Falcon, MK-29 Warhawk — are modelled meshes,
+decimated to ~115k triangles with a ~29k LOD for rivals and Draco-compressed.
+None of the three arrived axis-aligned, so each carries a solved quaternion in
+`config.js`: the direction an aircraft is thinnest is its "up", the mirror
+plane gives the span axis, the blunter end is the tail, and the fins point up.
+Nozzle and wingtip anchors are in that corrected frame, so afterburners and tip
+vapour come off the real geometry.
+
+**Flight model.** The stick commands a load factor, not a turn rate, and the
+body pitch rate falls out of the standard turn equation `q = G·(n − upY)/V`.
+Everything that makes a jet feel like a jet follows from that single line: you
+turn far harder slow than fast, the nose falls when you stop pulling, banking
+curves the flight path with no special case, and holding G bleeds energy
+through an induced-drag term. Roll is rate-commanded and loses authority at
+both ends of the speed band; the rudder is a low-speed control; rolling drags
+the nose the wrong way until you catch it. The engine spools and reheat lights
+a beat late, so the boost button is worth timing. Gravity is scaled — real g
+gives about 14°/s at racing speed, which is unflyable in a corridor — but every
+relationship above it is the real one, and the G-meter reads the true load
+factor.
+
+**Motion blur.** Two components per tap: a radial smear from the focal point
+for forward motion, and a linear smear along however far a distant point slid
+across the screen since the last frame, so banking and pulling smear sideways
+too. The linear term is normalised to a 60 Hz exposure — physically the smear
+should grow with frame time, but a machine dropping frames would then bury the
+route exactly when the player needs to see it. Reheat drives a separate channel
+with a much longer radial stretch, an outward lens warp, fine streaks and a
+warm rim, all masked away from the centre of the frame.
+
 **Audio.** Everything is synthesised. The engine is a stack of detuned
 oscillators plus band-passed noise driven continuously by speed, throttle,
 boost and hull damage — no sample crossfades. The score is a generative
@@ -142,12 +179,18 @@ touched.
 
 ---
 
-## Generated 3D assets (optional)
+## 3D assets
 
-`tools/tripo/` contains a pipeline that generates models with the Tripo3D API,
-validates and optimises them, builds LODs and writes `Assets/3d/manifest.json`.
-The game loads any asset the manifest marks `ready` and falls back to its
-procedural airframes otherwise, so the build is always playable.
+The three modelled jets live in `Assets/3d/aircraft/` and are listed both on
+their aircraft entries in `config.js` and in `Assets/3d/manifest.json`. They are
+optional in the strict sense: if a `.glb` fails to load, that airframe falls
+back to its procedural hull and the game boots normally.
+
+`tools/tripo/` contains a pipeline that generates further models with the
+Tripo3D API, validates and optimises them, builds LODs and appends them to
+`Assets/3d/manifest.json`. The game loads any asset the manifest marks `ready`
+and falls back to its procedural airframes otherwise, so the build is always
+playable.
 
 The API key is read from `TRIPO_API_KEY` at generation time. It is never stored
 in this repository and never reaches the browser. See
