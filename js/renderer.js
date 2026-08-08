@@ -1238,7 +1238,7 @@ export class PostFX {
     if (state.blurCenter) u.uBlurCenter.value.lerp(state.blurCenter, clamp01(dt * 6));
 
     u.uChroma.value = damp(u.uChroma.value,
-      (this.preset.chromatic ? 0.0004 + speed01 * 0.0008 + boost * 0.0011 : 0) * intensity, 6, dt);
+      (this.preset.chromatic ? 0.00030 + speed01 * 0.00042 + boost * 0.00055 : 0) * intensity, 6, dt);
 
     u.uVignette.value = damp(u.uVignette.value, 0.42 + speed01 * 0.16 + (state.vignetteBoost || 0), 5, dt);
     u.uDamage.value = damp(u.uDamage.value, clamp01(state.damage ?? 0), 5, dt);
@@ -1279,11 +1279,17 @@ export class PostFX {
 
 // Distances are tuned so the airframe stays a large, readable subject rather
 // than a speck — the aircraft is the thing you are reading to fly.
+/**
+ * Chase distances sit 25% closer than the original framing so the airframe
+ * fills more of the screen and the modelled jets are actually readable.
+ * `rigid` modes are bolted to the aircraft; `hideSelf` hides the airframe
+ * entirely, which is what makes the first-person view first-person.
+ */
 const CAM_MODES = [
-  { id: 'chase', name: 'Chase', dist: 17, height: 4.4, look: 46, fov: 66 },
-  { id: 'far', name: 'Wide Chase', dist: 29, height: 7.4, look: 62, fov: 70 },
-  { id: 'close', name: 'Close', dist: 11.5, height: 2.8, look: 32, fov: 62 },
-  { id: 'cockpit', name: 'Cockpit', dist: -1.4, height: 1.35, look: 200, fov: 78, cockpit: true },
+  { id: 'chase', name: 'Chase', dist: 12.8, height: 3.3, look: 35, fov: 64 },
+  { id: 'close', name: 'Close', dist: 8.6, height: 2.1, look: 24, fov: 61 },
+  { id: 'far', name: 'Wide Chase', dist: 21.8, height: 5.6, look: 47, fov: 69 },
+  { id: 'fpv', name: 'First Person', dist: -3.6, height: 1.15, look: 240, fov: 82, rigid: true, hideSelf: true },
 ];
 
 export class CameraRig {
@@ -1323,7 +1329,9 @@ export class CameraRig {
     const i = CAM_MODES.findIndex((m) => m.id === id);
     if (i >= 0) { this.modeIndex = i; this.mode = CAM_MODES[i]; this.initialised = false; }
   }
-  get isCockpit() { return !!this.mode.cockpit; }
+  get isCockpit() { return !!this.mode.rigid; }
+  /** True while the view is from inside the aircraft, which must not be drawn. */
+  get hidesAircraft() { return !!this.mode.hideSelf; }
 
   addShake(amount, freq = 26) {
     this.shake = Math.min(1.6, this.shake + amount * (this.reducedMotion ? 0.35 : 1));
@@ -1340,18 +1348,21 @@ export class CameraRig {
     const q = target.quaternion;
 
     // --- desired camera position in aircraft space ------------------------
-    const distance = m.dist * (1 + speed01 * 0.20 + boost * 0.10) * (params.distanceScale ?? 1);
-    const height = m.height * (1 + speed01 * 0.10);
+    // A rigid (first-person) eye point must not drift forward with speed —
+    // it is a fixed seat in the airframe, not a chase distance.
+    const distance = m.rigid ? m.dist
+      : m.dist * (1 + speed01 * 0.20 + boost * 0.10) * (params.distanceScale ?? 1);
+    const height = m.rigid ? m.height : m.height * (1 + speed01 * 0.10);
     this._offset.set(0, height, distance);
     // Trail slightly outside the turn so the airframe reads against the sky.
-    this._offset.x += (params.lateral ?? 0) * -3.2;
+    if (!m.rigid) this._offset.x += (params.lateral ?? 0) * -3.2;
     this._offset.applyQuaternion(q);
 
     const desired = this._tmpA.copy(target.position).add(this._offset);
     // Pull the camera up when diving so terrain never clips the near plane.
-    if (!m.cockpit) desired.y += clamp(-(params.pitchRate ?? 0) * 8, -6, 10);
+    if (!m.rigid) desired.y += clamp(-(params.pitchRate ?? 0) * 8, -6, 10);
 
-    const lag = m.cockpit ? 40 : lerp(5.5, 11.0, speed01) * (params.lagScale ?? 1);
+    const lag = m.rigid ? 40 : lerp(5.5, 11.0, speed01) * (params.lagScale ?? 1);
     if (!this.initialised) { this.position.copy(desired); this.initialised = true; }
     else {
       this.position.x = damp(this.position.x, desired.x, lag, dt);
@@ -1363,14 +1374,14 @@ export class CameraRig {
     const fwd = this._tmpB.set(0, 0, -1).applyQuaternion(q);
     const lookDist = m.look * (1 + speed01 * 0.5);
     const desiredLook = this._tmpA.copy(target.position).addScaledVector(fwd, lookDist);
-    desiredLook.y += m.cockpit ? 0 : 2.5;
+    desiredLook.y += m.rigid ? 0 : 2.2;
     this.lookAt.x = damp(this.lookAt.x, desiredLook.x, lag * 1.4, dt);
     this.lookAt.y = damp(this.lookAt.y, desiredLook.y, lag * 1.4, dt);
     this.lookAt.z = damp(this.lookAt.z, desiredLook.z, lag * 1.4, dt);
 
     // --- camera banking follows the airframe roll -------------------------
     const upTarget = this._tmpB.set(0, 1, 0).applyQuaternion(q);
-    const blend = m.cockpit ? 1.0 : (this.reducedMotion ? 0.35 : 0.72);
+    const blend = m.rigid ? 1.0 : (this.reducedMotion ? 0.35 : 0.72);
     this.up.lerpVectors(this._worldUp, upTarget, blend).normalize();
 
     this.camera.position.copy(this.position);
@@ -2584,6 +2595,145 @@ class Explosion {
   dispose() { this.group.traverse((n) => { n.geometry?.dispose(); n.material?.dispose(); }); }
 }
 
+/* ===========================================================================
+ * ROUTE GUIDANCE — translucent chevrons that show the line
+ * ------------------------------------------------------------------------
+ * A ladder of coloured arrows laid down the middle of the corridor ahead of
+ * the player. They read at a glance where a minimap does not: the colour says
+ * whether you are on the line, and the chevrons themselves say which way the
+ * route bends next. One InstancedMesh, so the whole ladder is a single draw
+ * call, and additive blending keeps them out of the way of the world behind.
+ * ======================================================================== */
+
+const GUIDE_COUNT = 18;
+const GUIDE_SPACING = 170;      // metres between chevrons
+
+function chevronGeometry() {
+  // A V band pointing along -Z. Built flat in the corridor plane and then
+  // tilted back towards the camera: laid perfectly flat it is edge-on to a
+  // chase camera sitting only a few metres above the centreline, which is
+  // exactly as visible as a sheet of paper viewed from its edge.
+  const w = 44, d = 54, t = 15;
+  const v = new Float32Array([
+    -w, 0, 0, 0, 0, -d, -w + t, 0, -t * 0.35,
+    0, 0, -d, 0, 0, -d + t * 1.15, -w + t, 0, -t * 0.35,
+    w, 0, 0, w - t, 0, -t * 0.35, 0, 0, -d,
+    0, 0, -d, w - t, 0, -t * 0.35, 0, 0, -d + t * 1.15,
+  ]);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(v, 3));
+  // Tilt the face back towards the chase camera (normal +Y swings towards +Z,
+  // which is aft), then re-centre so the anchor sits in the middle of the
+  // chevron rather than at its trailing edge.
+  const tilt = 0.52;
+  g.rotateX(tilt);
+  g.translate(0, -Math.sin(tilt) * d * 0.5, Math.cos(tilt) * d * 0.5);
+  g.computeVertexNormals();
+  return g;
+}
+
+export class RouteGuide {
+  constructor(scene) {
+    this.geometry = chevronGeometry();
+    // Normal blending, not additive: additive chevrons vanish against a bright
+    // sky, which is most of the game. Transparent colour reads on any
+    // background, and the brightest pulse still crosses the bloom threshold.
+    this.material = new THREE.MeshBasicMaterial({
+      transparent: true, opacity: 0.80, blending: THREE.NormalBlending,
+      depthWrite: false, side: THREE.DoubleSide, toneMapped: false,
+    });
+    this.mesh = new THREE.InstancedMesh(this.geometry, this.material, GUIDE_COUNT);
+    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = 4;
+    this.mesh.visible = false;
+    this.mesh.count = 0;
+    scene.add(this.mesh);
+
+    this.time = 0;
+    this.enabled = true;
+    this._m = new THREE.Matrix4();
+    this._basis = new THREE.Matrix4();
+    this._pos = new THREE.Vector3();
+    this._scale = new THREE.Vector3();
+    this._q = new THREE.Quaternion();
+    this._c = new THREE.Color();
+    this._sample = {};
+    // Prime the instance colour attribute now: it does not exist until the
+    // first setColorAt, and creating it mid-race forces a shader recompile on
+    // exactly the frame the player is starting to move.
+    const c0 = new THREE.Color(0x35f2c8);
+    for (let i = 0; i < GUIDE_COUNT; i++) this.mesh.setColorAt(i, c0);
+    this.mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+
+    this._onColour = new THREE.Color(0x35f2c8);
+    this._driftColour = new THREE.Color(0xffc23d);
+    this._offColour = new THREE.Color(0xff4d5e);
+  }
+
+  setEnabled(v) {
+    this.enabled = v;
+    if (!v) { this.mesh.visible = false; this.mesh.count = 0; }
+  }
+
+  /**
+   * @param path        the route
+   * @param distance    how far along the player is
+   * @param corridorOut 0 on the line, 1 at the corridor wall, >1 outside it
+   */
+  update(dt, path, distance, corridorOut = 0) {
+    if (!this.enabled || !path) { this.mesh.visible = false; return; }
+    this.time += dt;
+    this.mesh.visible = true;
+    this.mesh.count = GUIDE_COUNT;
+
+    const off = clamp01(corridorOut);
+    // Green on the line, amber drifting, red outside the corridor.
+    this._c.copy(off < 0.55 ? this._onColour : this._driftColour);
+    if (off > 0.85) this._c.copy(this._offColour);
+
+    for (let i = 0; i < GUIDE_COUNT; i++) {
+      const d = distance + 95 + i * GUIDE_SPACING;
+      const s = path.sample(d, this._sample);
+      this._pos.copy(s.pos);
+      // A fixed drop, not a fraction of the corridor radius — the corridor is
+      // 150-620 m across, so a percentage puts the whole ladder far below the
+      // flight path where nobody will ever see it.
+      this._pos.addScaledVector(s.up, -11);
+      this._basis.makeBasis(s.right, s.up, _guideFwd.copy(s.tangent).negate());
+      this._q.setFromRotationMatrix(this._basis);
+      // Bigger further out so they hold a roughly constant angular size,
+      // with a gentle nod to how wide the corridor is here.
+      const k = 1 + i * 0.19;
+      this._scale.setScalar(k * clamp(s.radius / 420, 0.85, 1.5));
+      this._m.compose(this._pos, this._q, this._scale);
+      this.mesh.setMatrixAt(i, this._m);
+
+      // A pulse of brightness travelling away from the player.
+      const phase = (this.time * 0.9 - i * 0.22) % 1;
+      const pulse = 0.42 + 0.58 * Math.pow(Math.max(0, 1 - Math.abs(phase - 0.35) * 3.4), 2);
+      const fade = 1 - i / (GUIDE_COUNT + 3);
+      // Peaks sit just over the bloom threshold, so the pulse travelling down
+      // the corridor picks up a soft halo — the glow along the path.
+      // Never fully dim: a guidance cue that fades to nothing between pulses
+      // is worse than no cue at all.
+      const a = 0.5 + 0.7 * pulse * fade + off * 0.25;
+      this.mesh.setColorAt(i, _guideCol.copy(this._c).multiplyScalar(a));
+    }
+    this.mesh.instanceMatrix.needsUpdate = true;
+    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+  }
+
+  dispose() {
+    this.geometry.dispose();
+    this.material.dispose();
+    this.mesh.parent?.remove(this.mesh);
+  }
+}
+
+const _guideFwd = new THREE.Vector3();
+const _guideCol = new THREE.Color();
+
 export class VFX {
   constructor(scene, textures, materials, quality) {
     this.scene = scene;
@@ -2680,7 +2830,7 @@ export class VFX {
 
   setSpeedStreaks(intensity, velocity) {
     const u = this.speedField.uniforms;
-    u.uOpacity.value = damp(u.uOpacity.value, clamp01(intensity) * 0.20, 6, 0.016);
+    u.uOpacity.value = damp(u.uOpacity.value, clamp01(intensity) * 0.11, 6, 0.016);
     const n = Math.floor(this.speedField.count * clamp01(intensity));
     this.speedField.setCount(intensity > 0.02 ? n : 0);
     if (velocity && velocity.lengthSq() > 1) {
@@ -2721,22 +2871,43 @@ export class RenderSystem {
     this.quality = quality;
     this.device = device;
 
-    this.renderer = new THREE.WebGLRenderer({
-      canvas,
-      antialias: !device.isMobile && quality.preset.pixelRatio >= 1,
-      powerPreference: 'high-performance',
-      stencil: false,
+    /* ---- context ---------------------------------------------------------
+     * WebGL 2 is requested explicitly and the GPU is asked for by name. Both
+     * matter: WebGL 2 gives us multisampled render targets, integer texture
+     * formats and instancing without an extension dance, and the
+     * high-performance hint is what moves the context onto the discrete GPU on
+     * a laptop rather than leaving it on the integrated one.
+     * ------------------------------------------------------------------- */
+    const glAttribs = {
       alpha: false,
       depth: true,
+      stencil: false,
+      antialias: !device.isMobile && quality.preset.pixelRatio >= 1,
+      powerPreference: 'high-performance',
+      desynchronized: true,          // let the compositor run ahead of us
+      preserveDrawingBuffer: false,
       failIfMajorPerformanceCaveat: false,
-    });
+    };
+    let context = null;
+    try {
+      context = canvas.getContext('webgl2', glAttribs);
+    } catch (e) { context = null; }
+    this.renderer = new THREE.WebGLRenderer({ canvas, context: context || undefined, ...glAttribs });
+    this.webgl2 = !!(context || this.renderer.capabilities?.isWebGL2);
     this.renderer.setClearColor(0x0a0e14, 1);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.0;
+    // AgX holds saturated highlights — reheat plumes, gate energy, sun discs —
+    // without the desaturated grey ACES pushes them to. Fall back if the
+    // vendored three predates it.
+    this.renderer.toneMapping = THREE.AgXToneMapping ?? THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.06;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.autoUpdate = true;
     this.renderer.info.autoReset = true;
+    // Precision matters most on the terrain, which is one huge continuous
+    // surface; z-fighting there is the first artefact anyone notices.
+    this.renderer.sortObjects = true;
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(66, 16 / 9, 1.6, 42000);
@@ -2752,6 +2923,7 @@ export class RenderSystem {
     this.rig.onReset = () => this.postfx.resetMotion();
     this.aircraftFactory = new AircraftFactory(this.materials, quality.preset);
     this.vfx = new VFX(this.scene, this.textures, this.materials, quality.preset);
+    this.guide = new RouteGuide(this.scene);
 
     this.pmrem = new THREE.PMREMGenerator(this.renderer);
     this.pmrem.compileEquirectangularShader();
@@ -2879,6 +3051,7 @@ export class RenderSystem {
 
   dispose() {
     this.vfx.dispose();
+    this.guide.dispose();
     this.aircraftFactory.dispose();
     this.postfx.dispose();
     this.sky.dispose();

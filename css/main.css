@@ -53,6 +53,18 @@
 
 /* ---- reset ------------------------------------------------------------- */
 *, *::before, *::after { box-sizing: border-box; }
+/* Everything downstream is sized in rem, so one root font-size controls the
+   whole interface. A phone in landscape has a third of a desktop's height but
+   has to show the same layout, so the root scales with viewport height rather
+   than the layout being rebuilt for small screens. */
+html { font-size: 16px; }
+@media (max-height: 620px) {
+  html { font-size: clamp(9.5px, 2.72vh, 16px); }
+}
+@media (max-height: 620px) and (min-width: 1100px) {
+  html { font-size: clamp(11px, 3.1vh, 16px); }
+}
+
 html, body {
   margin: 0; padding: 0; height: 100%; width: 100%;
   overflow: hidden;

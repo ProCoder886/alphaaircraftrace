@@ -10,7 +10,8 @@ as its fallback.
 ```
 Endless Flight · Elite · Random venue          ← the defaults
 6 game modes · 17 venues · 13 airframes · 5 powers · 8-aircraft grids
-Extreme graphics by default, with an adaptive ladder underneath
+Four cameras including a true first-person view · route guidance chevrons
+Medium graphics by default, with an adaptive detail ladder underneath
 ```
 
 ---
@@ -42,15 +43,15 @@ Mobile play is landscape-only; portrait shows a rotate prompt.
 |---|---|
 | `W` / `↑` | Pull — commands G, and feeds the throttle |
 | `S` / `↓` | Push — unloads the wing, and bleeds the throttle |
-| `A` / `D` | Roll left / right — **this is how you turn** |
-| `Q` / `E` | Yaw left / right |
+| `A` / `D` | Bank left / right — **this is how you turn** |
+| `Q` / `E` | Lean left / right — slide sideways without changing heading |
 | `Shift` | Throttle up |
-| `C` | Air brake — slower means a harder turn, so this is a cornering tool |
+| `X` | Air brake — slower means a harder turn, so this is a cornering tool |
 | `Space` | Boost |
-| `NUM 1–5` | Route Scan · Time Freeze · Phase Shift · Aerial Shield · Turbo Overdrive |
+| `NUM 1–5` | Power Flight · Turbo Speed · Combat Maneuvers · Aerial Shield · Phase Shift |
 | `Esc` | Pause |
 | `F` | Fullscreen |
-| `V` | Cycle camera (chase / wide / close / cockpit) |
+| `C` / `V` | Cycle camera (chase / close / wide / first person) |
 | `F8` | Debug overlay (FPS, seed, draw calls, world stats) |
 
 Gamepads and touch are supported. Everything is rebindable in Settings.
@@ -146,6 +147,9 @@ vapour come off the real geometry.
 
 **Flight model.** The stick commands a load factor, not a turn rate, and the
 body pitch rate falls out of the standard turn equation `q = G·(n − upY)/V`.
+The visual airframe carries an angle of attack on top of that — the nose rides
+above the flight path, more so slow and under G — because a model that flies
+exactly along its own nose looks like it is being carried rather than flying.
 Everything that makes a jet feel like a jet follows from that single line: you
 turn far harder slow than fast, the nose falls when you stop pulling, banking
 curves the flight path with no special case, and holding G bleeds energy
@@ -156,6 +160,25 @@ a beat late, so the boost button is worth timing. Gravity is scaled — real g
 gives about 14°/s at racing speed, which is unflyable in a corridor — but every
 relationship above it is the real one, and the G-meter reads the true load
 factor.
+
+**Route guidance.** A ladder of translucent chevrons laid down the middle of
+the corridor ahead, in a single instanced draw call. Green while you are on the
+line, amber as you drift, red once you are outside the corridor, with a pulse
+of brightness travelling away from you that crosses the bloom threshold — so
+the route glows rather than just being drawn.
+
+**Cameras.** Chase, close and wide are all chase rigs with speed-scaled
+distance and lag; first person is a rigid eye point in the airframe with the
+aircraft itself not drawn, which is the only way a first-person view works when
+the airframe is a single merged mesh. `C` cycles them and the live camera is
+named bottom-right.
+
+**Engine audio.** A turbofan, not an engine block: inharmonic blade-passing
+partials from the fan and compressor through a resonant bandpass, a broadband
+core roar carrying most of the level, exhaust hiss, airframe noise scaled with
+V², and a reheat layer whose amplitude is deliberately unstable. N1 lags the
+throttle by seconds, and the run opens with a cold start — starter, light-off,
+settle. A sawtooth stack is what a piston engine sounds like; this is not one.
 
 **Motion blur.** Two components per tap: a radial smear from the focal point
 for forward motion, and a linear smear along however far a distant point slid
@@ -176,6 +199,20 @@ particles, then shadow cadence, then reflection cadence, then far prop density,
 then cloud detail, then post intensity — in that order, easing between steps.
 Player aircraft fidelity, core lighting, HUD and input responsiveness are never
 touched.
+
+Frame pacing matters as much as frame rate. `requestAnimationFrame` deltas
+jitter either side of the true refresh interval even on a machine comfortably
+hitting its target, and feeding that jitter into the simulation makes a smooth
+60 fps *look* like it is stuttering. Deltas within 0.9 ms of a common refresh
+interval are snapped onto it and the remainder carried forward, so no time is
+invented or lost. World streaming then gets whatever is left of the frame after
+rendering rather than a fixed slice — a fixed budget is what turns a tight
+frame into a dropped one.
+
+The context is requested as WebGL 2 with a high-performance GPU hint and a
+desynchronized swap chain, and tone mapping is AgX, which holds saturated
+highlights — reheat plumes, gate energy, sun discs — where ACES desaturates
+them towards grey.
 
 ---
 

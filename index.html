@@ -195,6 +195,9 @@
 
   <!-- bottom right: powers + damage -->
   <div class="hud-br">
+    <div class="cam-chip" id="cam-chip" title="Press C to change camera">
+      <span class="cam-key">C</span><span class="cam-name" id="cam-name">Chase</span>
+    </div>
     <div class="power-rack" id="power-rack"></div>
     <div class="status-stack">
       <div class="status-row">
@@ -233,12 +236,19 @@
   </div>
   <div class="touch-right">
     <div class="touch-powers" id="touch-powers"></div>
+    <div class="touch-lean">
+      <button class="tbtn tbtn-lean" data-touch="leanLeft" type="button" aria-label="Lean left">◄</button>
+      <button class="tbtn tbtn-lean" data-touch="leanRight" type="button" aria-label="Lean right">►</button>
+    </div>
     <div class="touch-primary">
       <button class="tbtn tbtn-brake" data-touch="brake" type="button">BRK</button>
       <button class="tbtn tbtn-boost" data-touch="boost" type="button">BOOST</button>
     </div>
   </div>
-  <button class="tbtn tbtn-pause" data-touch="pause" id="touch-pause" type="button" aria-label="Pause">❚❚</button>
+  <div class="touch-topright">
+    <button class="tbtn tbtn-small" data-touch="camera" id="touch-camera" type="button" aria-label="Change camera">CAM</button>
+    <button class="tbtn tbtn-small" data-touch="pause" id="touch-pause" type="button" aria-label="Pause">❚❚</button>
+  </div>
 </div>
 
 <!-- ═══════════════════════════════ PAUSE ════════════════════════════════ -->
@@ -295,7 +305,8 @@
   <div class="orient-inner">
     <div class="orient-icon" aria-hidden="true">▭</div>
     <h3>ROTATE YOUR DEVICE</h3>
-    <p>Alpha Aircraft Race 3D is played in landscape.</p>
+    <p>Alpha Aircraft Race 3D is played in landscape. Turn your device sideways to continue.</p>
+    <button class="btn btn-primary" id="orient-fullscreen" type="button">Enter fullscreen</button>
   </div>
 </div>
 

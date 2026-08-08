@@ -207,8 +207,11 @@ export const PHYSICS = {
   pitchTau: 0.20,              // s — how quickly the airframe reaches its G
   rollTau: 0.11,               // s — roll acceleration
   yawRate: 0.52,               // rad/s of rudder authority at low speed
+  leanSpeed: 170,              // m/s of sideways slip on a full lean
+  leanYaw: 0.30,               // rad/s the nose swings into the slip
+  leanBank: 0.34,              // rad the airframe visually leans with it
   rollRate: 3.35,              // rad/s — ~190°/s, a real fighter roll rate
-  adverseYaw: 0.085,           // yaw induced by rolling
+  adverseYaw: 0.020,           // yaw induced by rolling — a cue, not a turn
   inducedDrag: 260,            // energy bled by pulling G
   spoolUp: 1.30,               // s — dry thrust lag
   spoolDown: 0.85,
@@ -227,32 +230,33 @@ export const PHYSICS = {
 /* ===========================================================================
  * GRAPHICS QUALITY PRESETS
  * ------------------------------------------------------------------------
- * EXTREME is the shipping default. MEDIUM is what the adaptive ladder falls
- * back to on weaker hardware and must still look premium: it keeps bloom,
- * motion blur, reflections and volumetric-style clouds — it trades draw
- * distance, shadow resolution and particle counts instead.
+ * MEDIUM is the shipping default and must still look premium: it keeps bloom,
+ * motion blur, reflections and volumetric-style clouds at full strength — it
+ * trades draw distance, shadow resolution and particle counts instead. The
+ * adaptive ladder moves between presets on its own once it has measured the
+ * machine, so a fast GPU climbs above Medium without the player touching it.
  * ======================================================================== */
 
 export const QUALITY_PRESETS = {
   low: {
     label: 'LOW', pixelRatio: 0.72, shadows: false, shadowMapSize: 1024, shadowDistance: 900,
-    bloom: true, bloomStrength: 0.5, motionBlur: false, chromatic: false, grain: false, blurTaps: 6,
+    bloom: true, bloomStrength: 0.5, motionBlur: false, chromatic: false, grain: false, blurTaps: 8,
     reflections: false, envMapSize: 64, envUpdateInterval: 999,
     cloudQuality: 0.35, cloudLayers: 2, weatherParticles: 500, particleBudget: 400,
     viewDistance: 0.55, terrainLOD: 2, propDensity: 0.35, trafficDensity: 0.4,
     trailSegments: 22, anisotropy: 2, aircraftDetail: 0, ssaa: 1, glassTransmission: false,
   },
   medium: {
-    label: 'MEDIUM', pixelRatio: 0.92, shadows: true, shadowMapSize: 1536, shadowDistance: 1500,
-    bloom: true, bloomStrength: 0.68, motionBlur: true, chromatic: true, grain: true, blurTaps: 10,
-    reflections: true, envMapSize: 128, envUpdateInterval: 6,
-    cloudQuality: 0.7, cloudLayers: 3, weatherParticles: 1400, particleBudget: 1200,
-    viewDistance: 0.78, terrainLOD: 3, propDensity: 0.7, trafficDensity: 0.75,
-    trailSegments: 40, anisotropy: 4, aircraftDetail: 1, ssaa: 1, glassTransmission: false,
+    label: 'MEDIUM', pixelRatio: 1.0, shadows: true, shadowMapSize: 2048, shadowDistance: 1800,
+    bloom: true, bloomStrength: 0.72, motionBlur: true, chromatic: true, grain: true, blurTaps: 16,
+    reflections: true, envMapSize: 192, envUpdateInterval: 5,
+    cloudQuality: 0.85, cloudLayers: 4, weatherParticles: 1900, particleBudget: 1700,
+    viewDistance: 0.88, terrainLOD: 3, propDensity: 0.85, trafficDensity: 0.85,
+    trailSegments: 40, anisotropy: 8, aircraftDetail: 2, ssaa: 1, glassTransmission: true,
   },
   high: {
     label: 'HIGH', pixelRatio: 1.0, shadows: true, shadowMapSize: 2048, shadowDistance: 2200,
-    bloom: true, bloomStrength: 0.74, motionBlur: true, chromatic: true, grain: true, blurTaps: 12,
+    bloom: true, bloomStrength: 0.74, motionBlur: true, chromatic: true, grain: true, blurTaps: 20,
     reflections: true, envMapSize: 256, envUpdateInterval: 4,
     cloudQuality: 1.0, cloudLayers: 4, weatherParticles: 2600, particleBudget: 2200,
     viewDistance: 1.0, terrainLOD: 3, propDensity: 1.0, trafficDensity: 1.0,
@@ -260,7 +264,7 @@ export const QUALITY_PRESETS = {
   },
   ultra: {
     label: 'ULTRA', pixelRatio: 1.25, shadows: true, shadowMapSize: 3072, shadowDistance: 3200,
-    bloom: true, bloomStrength: 0.8, motionBlur: true, chromatic: true, grain: true, blurTaps: 16,
+    bloom: true, bloomStrength: 0.8, motionBlur: true, chromatic: true, grain: true, blurTaps: 26,
     reflections: true, envMapSize: 384, envUpdateInterval: 3,
     cloudQuality: 1.35, cloudLayers: 5, weatherParticles: 4200, particleBudget: 3600,
     viewDistance: 1.25, terrainLOD: 4, propDensity: 1.35, trafficDensity: 1.2,
@@ -268,7 +272,7 @@ export const QUALITY_PRESETS = {
   },
   extreme: {
     label: 'EXTREME', pixelRatio: 1.6, shadows: true, shadowMapSize: 4096, shadowDistance: 4200,
-    bloom: true, bloomStrength: 0.86, motionBlur: true, chromatic: true, grain: true, blurTaps: 20,
+    bloom: true, bloomStrength: 0.86, motionBlur: true, chromatic: true, grain: true, blurTaps: 32,
     reflections: true, envMapSize: 512, envUpdateInterval: 2,
     cloudQuality: 1.7, cloudLayers: 6, weatherParticles: 6000, particleBudget: 5200,
     viewDistance: 1.5, terrainLOD: 4, propDensity: 1.7, trafficDensity: 1.4,
@@ -819,29 +823,29 @@ export const SEGMENTS_BY_ID = Object.fromEntries(SEGMENTS.map((s) => [s.id, s]))
 
 export const POWERS = [
   {
-    id: 'scan', slot: 1, name: 'ROUTE SCAN', short: 'SCAN', icon: 'scan',
-    desc: 'Reveals the safest line, the next two checkpoints, the recommended altitude band and any shortcut openings.',
+    id: 'powerflight', slot: 1, name: 'POWER FLIGHT', short: 'PWR', icon: 'lift',
+    desc: 'Floods the airframe with lift. Gravity stops pulling, hard turns stop costing energy and the route ahead lights up. The recovery button when a line has gone wrong.',
     cooldown: 20, duration: 7.0, color: 0x39f5ff,
   },
   {
-    id: 'freeze', slot: 2, name: 'TIME FREEZE', short: 'FRZ', icon: 'freeze',
-    desc: 'Collapses the local timeframe. Nearby obstacles, traffic and rival aircraft slow to a third of their speed. You do not.',
-    cooldown: 40, duration: 4.5, color: 0x8fd6ff,
+    id: 'turbo', slot: 2, name: 'TURBO SPEED', short: 'TRB', icon: 'turbo',
+    desc: 'Dumps the reserve into the reheat stage. Extreme acceleration and a raised speed ceiling, at the cost of turn authority.',
+    cooldown: 25, duration: 6.0, color: 0xff8a3a,
   },
   {
-    id: 'phase', slot: 3, name: 'PHASE SHIFT', short: 'PHS', icon: 'phase',
-    desc: 'Desynchronises the airframe so it passes cleanly through soft obstacles, debris and energy barriers.',
-    cooldown: 30, duration: 5.0, color: 0xb478ff,
+    id: 'maneuver', slot: 3, name: 'COMBAT MANEUVERS', short: 'MNV', icon: 'maneuver',
+    desc: 'Combat trim: near-instant control response, far higher roll and G limits, and the airspace around you seems to slow while you thread it.',
+    cooldown: 30, duration: 5.0, color: 0x8fd6ff,
   },
   {
     id: 'shield', slot: 4, name: 'AERIAL SHIELD', short: 'SHD', icon: 'shield',
     desc: 'Projects a hardened collision envelope. Impacts are absorbed instead of damaging the hull.',
-    cooldown: 45, duration: 8.0, color: 0x5fe4ff,
+    cooldown: 40, duration: 8.0, color: 0x5fe4ff,
   },
   {
-    id: 'turbo', slot: 5, name: 'TURBO OVERDRIVE', short: 'TRB', icon: 'turbo',
-    desc: 'Dumps the reserve into the reheat stage. Extreme acceleration and a raised speed ceiling, at the cost of turn authority.',
-    cooldown: 25, duration: 6.0, color: 0xff8a3a,
+    id: 'phase', slot: 5, name: 'PHASE SHIFT', short: 'PHS', icon: 'phase',
+    desc: 'Desynchronises the airframe so it passes cleanly through soft obstacles, debris and energy barriers.',
+    cooldown: 45, duration: 5.0, color: 0xb478ff,
   },
 ];
 export const POWERS_BY_ID = Object.fromEntries(POWERS.map((p) => [p.id, p]));
@@ -993,10 +997,10 @@ export const DEFAULT_BINDINGS = {
   pitchDown:  ['KeyS', 'ArrowDown'],
   rollLeft:   ['KeyA', 'ArrowLeft'],
   rollRight:  ['KeyD', 'ArrowRight'],
-  yawLeft:    ['KeyQ'],
-  yawRight:   ['KeyE'],
+  leanLeft:   ['KeyQ'],
+  leanRight:  ['KeyE'],
   throttleUp: ['ShiftLeft', 'ShiftRight'],
-  brake:      ['KeyC', 'ControlLeft'],
+  brake:      ['KeyX', 'ControlLeft'],
   boost:      ['Space'],
   power1:     ['Numpad1', 'Digit1'],
   power2:     ['Numpad2', 'Digit2'],
@@ -1005,18 +1009,18 @@ export const DEFAULT_BINDINGS = {
   power5:     ['Numpad5', 'Digit5'],
   pause:      ['Escape'],
   fullscreen: ['KeyF'],
-  camera:     ['KeyV'],
+  camera:     ['KeyC', 'KeyV'],
   debug:      ['F8'],
 };
 
 export const BINDING_LABELS = {
   pitchUp: 'Pitch Up / Climb', pitchDown: 'Pitch Down / Dive',
-  rollLeft: 'Roll Left', rollRight: 'Roll Right',
-  yawLeft: 'Yaw Left', yawRight: 'Yaw Right',
+  rollLeft: 'Bank Left', rollRight: 'Bank Right',
+  leanLeft: 'Lean Left', leanRight: 'Lean Right',
   throttleUp: 'Throttle Up', brake: 'Air Brake', boost: 'Boost',
-  power1: 'Power 1 — Route Scan', power2: 'Power 2 — Time Freeze',
-  power3: 'Power 3 — Phase Shift', power4: 'Power 4 — Aerial Shield',
-  power5: 'Power 5 — Turbo Overdrive',
+  power1: 'Power 1 — Power Flight', power2: 'Power 2 — Turbo Speed',
+  power3: 'Power 3 — Combat Maneuvers', power4: 'Power 4 — Aerial Shield',
+  power5: 'Power 5 — Phase Shift',
   pause: 'Pause', fullscreen: 'Fullscreen', camera: 'Cycle Camera', debug: 'Debug Overlay',
 };
 
@@ -1056,7 +1060,7 @@ export const DEFAULT_SAVE = {
   onboarded: false,
   credits: 0,
   unlocked: ['vector'],
-  selectedAircraft: 'vector',
+  selectedAircraft: 'raptor',
   selectedMode: 'endless',
   selectedDifficulty: 'elite',
   selectedLocation: 'random',
@@ -1064,7 +1068,7 @@ export const DEFAULT_SAVE = {
   achievements: [],
   dailyState: { date: null, completed: false, best: 0 },
   settings: {
-    graphics: 'extreme',
+    graphics: 'medium',
     resolutionScale: 1.0,
     shadows: true,
     reflections: true,
@@ -1082,6 +1086,7 @@ export const DEFAULT_SAVE = {
     cameraSensitivity: 1.0,
     flightSensitivity: 1.0,
     vibration: true,
+    guidance: true,
     reducedMotion: false,
     invertPitch: false,
     showDebug: false,
@@ -1102,8 +1107,8 @@ export const DEFAULTS = {
   mode: 'endless',
   difficulty: 'elite',
   location: 'random',
-  graphics: 'extreme',
-  aircraft: 'vector',
+  graphics: 'medium',
+  aircraft: 'raptor',
 };
 
 /* ===========================================================================
@@ -1126,14 +1131,16 @@ export const LOADING_STAGES = [
 ];
 
 export const TIPS = [
-  'Bank into the turn — heading follows roll far faster than rudder alone.',
+  'A and D bank the aircraft — that is how you turn. Q and E lean it sideways without changing heading.',
+  'The chevrons ahead are the line. Green means you are on it; red means you are outside the corridor.',
+  'You turn harder slow than fast. Braking into a tight gate chain is genuinely quicker than powering through.',
+  'Power Flight (NUM 1) cancels gravity and the energy cost of turning. Use it to save a line, not to go faster.',
+  'Combat Maneuvers (NUM 3) doubles your control authority for five seconds. Worth saving for a gate you cannot make.',
+  'Aerial Shield (NUM 4) before a debris field is worth more than boosting through it.',
   'Boost rings top the meter back up. Chain them through the long sweepers.',
   'Near misses feed the combo multiplier. Risk pays, right up until it does not.',
-  'Route Scan (NUM 1) shows the recommended altitude band as well as the line.',
-  'Aerial Shield (NUM 4) before a debris field is worth more than boosting through it.',
   'Cutting a checkpoint dead-centre awards a precision bonus.',
-  'Air brake tightens your turn radius — the fastest line is not always full throttle.',
-  'Time Freeze (NUM 2) works on rival aircraft as well as obstacles.',
+  'C cycles the camera. First person is the fastest view once you trust the chevrons.',
   'High-risk shortcuts are always narrower than they look. Commit early or not at all.',
   'Damage does not regenerate mid-run. Trade paint sparingly.',
 ];

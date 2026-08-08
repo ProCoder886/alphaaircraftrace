@@ -45,6 +45,8 @@ const nf = (n) => Math.round(n).toLocaleString('en-US');
 const ICONS = {
   scan: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="8"/><path d="M12 4v3M12 17v3M4 12h3M17 12h3"/><circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/></svg>',
   freeze: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3.4 2"/></svg>',
+  lift: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 20V5"/><path d="M6.5 10.5L12 4.6l5.5 5.9"/><path d="M5 20h14" opacity="0.55"/></svg>',
+  maneuver: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 18c5-1 7-4 7-7 0-2.2-1.4-3.6-3-3.6-1.5 0-2.7 1.1-2.7 2.7"/><path d="M11 11c1.4 3.6 4 6 9 7"/><path d="M16.4 15.2L20 18l-3.6 2.8" fill="none"/></svg>',
   phase: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12c0-4 3-7 7-7s7 3 7 7-3 7-7 7"/><path d="M9 5.5C6 7 4.5 9.3 4.5 12S6 17 9 18.5" stroke-dasharray="2.4 2.4"/></svg>',
   shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l7 3v6c0 4.2-2.9 7.6-7 9-4.1-1.4-7-4.8-7-9V6z"/></svg>',
   turbo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13 3L5 13h5l-1 8 8-10h-5z" fill="currentColor" stroke="none"/></svg>',
@@ -206,6 +208,8 @@ export class UI {
       toast: $('#toast-host'),
       notif: $('#notif-stack'),
       banner: $('#event-banner'),
+      camChip: $('#cam-chip'),
+      camName: $('#cam-name'),
       countdown: $('#countdown'),
       warn: $('#warn-strip'),
       damageVig: $('#damage-vignette'),
@@ -282,16 +286,17 @@ export class UI {
       },
       {
         step: 'STEP 2 OF 4', title: 'FLY & SURVIVE',
-        body: 'Bank into the turn and pull — heading follows roll far faster than rudder alone. Clear every checkpoint gate, thread the ring chains, and keep the hull intact. Contact costs speed and structure.',
+        body: 'Bank into the turn and pull — that is how a jet changes direction. Lean sideways to slide across a gate you are already lined up on. Follow the chevrons, clear every checkpoint, and keep the hull intact: contact costs speed and structure.',
         keys: [
-          ['W / ↑', 'Pitch up · accelerate'], ['S / ↓', 'Pitch down · brake'],
-          ['A / D', 'Roll left / right'], ['Q / E', 'Yaw'], ['SPACE', 'Boost'],
+          ['W / ↑', 'Pull · climb'], ['S / ↓', 'Push · dive'],
+          ['A / D', 'Bank left / right'], ['Q / E', 'Lean left / right'],
+          ['SPACE', 'Boost'], ['C', 'Change camera'],
         ],
         art: 'fly',
       },
       {
         step: 'STEP 3 OF 4', title: 'USE SPECIAL POWERS',
-        body: 'Five powers, five cooldowns. Scan reads the route ahead, Freeze slows the airspace, Phase lets you through soft obstacles, Shield absorbs an impact and Overdrive rewrites your top speed.',
+        body: 'Five powers, five cooldowns. Power Flight cancels gravity and the cost of turning, Turbo Speed rewrites your ceiling, Combat Maneuvers doubles your control authority, Shield absorbs an impact and Phase Shift lets you through soft obstacles.',
         keys: POWERS.map((p) => [`NUM ${p.slot}`, `${p.name} · ${p.cooldown}s`]),
         art: 'powers',
       },
@@ -905,7 +910,7 @@ export class UI {
 
     /* -- graphics -- */
     const gg = group('Graphics');
-    field(gg, 'Quality Preset', 'Extreme is the default; the adaptive ladder eases down on its own if frames get tight.',
+    field(gg, 'Quality Preset', 'Medium is the default and runs the full effect stack. The adaptive ladder eases detail down on its own if frames get tight.',
       seg('graphics', QUALITY_ORDER.map((q) => [q, QUALITY_PRESETS[q].label])));
     field(gg, 'Resolution Scale', 'Renders below native resolution to buy frame time.',
       slider('resolutionScale', 0.5, 1.5, 0.05, (v) => `${Math.round(v * 100)}%`));
@@ -933,6 +938,7 @@ export class UI {
     field(pg, 'HUD Scale', 'Size of every HUD element.', slider('hudScale', 0.75, 1.4, 0.05, (v) => `${Math.round(v * 100)}%`));
     field(pg, 'Invert Pitch', 'Flip the pitch axis.', toggle('invertPitch'));
     field(pg, 'Vibration', 'Haptic feedback on impacts (supported devices).', toggle('vibration'));
+    field(pg, 'Route Guidance', 'Floating chevrons showing the line ahead.', toggle('guidance'));
     field(pg, 'Reduced Motion', 'Damps camera shake, blur and UI animation.', toggle('reducedMotion'));
     field(pg, 'Debug Overlay', 'Show FPS, seed, draw calls and world stats.', toggle('showDebug'));
 
@@ -1350,6 +1356,16 @@ export class UI {
     b.classList.add('show');
   }
 
+  /** Shows which camera is live, bottom-right, and pulses when it changes. */
+  setCamera(name) {
+    const c = this.dom.camChip, n = this.dom.camName;
+    if (!c || !n || n.textContent === name) return;
+    n.textContent = name;
+    c.classList.remove('flash');
+    void c.offsetWidth;
+    c.classList.add('flash');
+  }
+
   countdown(text, isGo = false) {
     const c = this.dom.countdown;
     c.textContent = text;
@@ -1417,6 +1433,7 @@ export class UI {
     click('#ob-skip', () => { this.audio.ui('back'); this.callbacks.onOnboardingDone?.(); });
     click('#btn-launch', () => { this.audio.ui('confirm'); this.callbacks.onLaunch?.(); });
     click('#btn-fullscreen', () => this.toggleFullscreen());
+    click('#orient-fullscreen', () => this.toggleFullscreen());
     click('#btn-mute', (e) => {
       const on = !this.audio.muted;
       this.audio.setMuted(on);
@@ -1440,6 +1457,11 @@ export class UI {
       b.addEventListener('click', () => { this.audio.ui('click'); this.callbacks.onResultAction?.(b.dataset.result); });
     });
     $$('.icon-btn, .btn').forEach((b) => b.addEventListener('pointerenter', () => this.audio.ui('hover')));
+    // Cards and rows are built and rebuilt constantly, so hover is delegated.
+    document.addEventListener('pointerover', (e) => {
+      const t = e.target.closest?.('.card, .seg button, .switch, .power-cell');
+      if (t && t !== this._lastHover) { this._lastHover = t; this.audio.ui('hover', { volume: 0.6 }); }
+    });
 
     window.addEventListener('resize', () => this._applyBodyFlags());
     window.addEventListener('orientationchange', () => setTimeout(() => this._applyBodyFlags(), 120));
@@ -1510,6 +1532,7 @@ export class UI {
       const name = btn.dataset.touch;
       btn.classList.toggle('held', down);
       if (name === 'pause') { if (down) this.callbacks.onPauseAction?.('toggle'); return; }
+      if (name === 'camera') { if (down) { this.callbacks.onCamera?.(); this.audio.ui('click'); } return; }
       this.input.setTouchButton(name, down);
       if (down) { this.audio.ui('click', { volume: 0.5 }); this.vibrate(12); }
     };
@@ -1526,7 +1549,8 @@ export class UI {
     b.classList.toggle('reduced-motion', !!this.save.data.settings.reducedMotion);
     document.documentElement.style.setProperty('--hud-scale', String(this.save.data.settings.hudScale || 1));
     const portrait = window.innerHeight > window.innerWidth;
-    this.dom.orientation.classList.toggle('show', this.device.isTouch && portrait && window.innerWidth < 900);
+    // Portrait on a touch device is never playable, whatever the width.
+    this.dom.orientation.classList.toggle('show', this.device.isTouch && portrait);
   }
 
   toggleFullscreen() {
@@ -1537,6 +1561,7 @@ export class UI {
           || document.documentElement.webkitRequestFullscreen
           || (() => {})).call(document.documentElement).catch?.(() => {});
         if (screen.orientation?.lock) screen.orientation.lock('landscape').catch(() => {});
+        this._lockRequested = true;
       } else {
         (document.exitFullscreen || document.webkitExitFullscreen || (() => {})).call(document);
       }

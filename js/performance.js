@@ -13,6 +13,10 @@
 
 import { QUALITY_PRESETS, QUALITY_ORDER, clamp, clamp01, lerp, damp } from './config.js';
 
+/** Common display refresh intervals, snapped to when the delta lands near one. */
+const SNAP_STEPS = [1 / 144, 1 / 120, 1 / 90, 1 / 75, 1 / 60, 1 / 50, 1 / 30];
+const SNAP_TOLERANCE = 0.0009;   // 0.9 ms — jitter, not a real frame-rate change
+
 /* ===========================================================================
  * DEVICE PROFILE
  * ======================================================================== */
@@ -115,14 +119,32 @@ export class PerfMonitor {
     if (dt > 0.25) dt = 0.25;
     if (dt <= 0) dt = 1 / 240;
 
-    const ms = dt * 1000;
+    /* ---- delta snapping ---------------------------------------------------
+     * rAF deltas jitter by a millisecond either side of the true refresh
+     * interval even when the machine is comfortably keeping up. Feeding that
+     * jitter straight into the simulation makes a perfectly smooth 60 fps look
+     * like it is stuttering, because the world moves a slightly different
+     * distance every frame. Snapping a near-miss delta onto the exact refresh
+     * interval — and carrying the remainder forward so no time is invented or
+     * lost — removes the judder without touching the measured frame time.
+     * -------------------------------------------------------------------- */
+    this.rawDt = dt;
+    dt += this.dtResidual || 0;
+    for (const step of SNAP_STEPS) {
+      if (Math.abs(dt - step) < SNAP_TOLERANCE) { dt = step; break; }
+    }
+    this.dtResidual = clamp((this.rawDt + (this.dtResidual || 0)) - dt, -0.008, 0.008);
+    dt = clamp(dt, 1 / 480, 0.25);
+
+    const ms = this.rawDt * 1000;
     this.frameTime = ms;
     this.samples[this.index] = ms;
     this.index = (this.index + 1) % this.sampleSize;
     this.filled = Math.min(this.filled + 1, this.sampleSize);
-    this.fps = 1 / dt;
+    this.fps = 1 / this.rawDt;
     this.smoothFps = lerp(this.smoothFps, this.fps, 0.06);
     this.elapsed += dt;
+    this.dt = dt;
     this.frames++;
     if (ms > 42) { this.stutters++; this.hitchWindow = 1.2; }
     else this.hitchWindow = Math.max(0, this.hitchWindow - dt);

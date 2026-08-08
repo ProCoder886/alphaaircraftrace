@@ -107,7 +107,7 @@ function objectiveProgress(obj, metrics) {
 
 const DAILY_MODIFIERS = [
   { id: 'noshield', name: 'NO SHIELD', apply: (g) => { g.blockedPowers.add('shield'); } },
-  { id: 'nofreeze', name: 'NO TIME FREEZE', apply: (g) => { g.blockedPowers.add('freeze'); } },
+  { id: 'nomaneuver', name: 'NO COMBAT TRIM', apply: (g) => { g.blockedPowers.add('maneuver'); } },
   { id: 'halfboost', name: 'HALF BOOST', apply: (g) => { g.player.boostCapacity *= 0.5; g.player.boostMeter *= 0.5; } },
   { id: 'traffic', name: 'HEAVY TRAFFIC', apply: (g) => { g.director?.traffic.setDensity(2.2); } },
   { id: 'glass', name: 'GLASS HULL', apply: (g) => { g.player.maxHealth *= 0.5; g.player.health = g.player.maxHealth; } },
@@ -412,10 +412,11 @@ export class Game {
     this.state = 'menu';
     this.finished = false;
     this.ui.setHudVisible(false);
+    this.render.guide.setEnabled(false);
     this.ui.showScreen('menu');
     this.ui.refreshLoadout();
     this.render.rig.setMode('far');
-    this.audio.setMusic('menu');
+    this.audio.setMenuMusic();
     this.audio.stopEngine();
     if (this.director) { this.director.dispose(); this.director = null; }
   }
@@ -585,6 +586,8 @@ export class Game {
     if (superseded()) return;
     this.ui.showScreen('none');
     this.ui.setHudVisible(true);
+    this.render.guide.setEnabled(this.save.data.settings.guidance !== false);
+    this.ui.setCamera(this.render.rig.mode.name);
     this._startCountdown();
   }
 
@@ -623,7 +626,7 @@ export class Game {
     this.render.rig.reducedMotion = !!this.save.data.settings.reducedMotion;
     this.render.rig.reset();
 
-    this.audio.startEngine();
+    this.audio.igniteEngine();
     this.audio.setMusic(
       cfg.campaign?.boss ? 'boss' : (m.id === 'survival' ? 'survival' : m.id === 'timeattack' ? 'timeattack' : m.id === 'free' ? 'free' : 'race'),
       0.4,
@@ -707,7 +710,8 @@ export class Game {
 
     /* --- simulation ---------------------------------------------------- */
     player.update(dt, raw, world, cfg.difficulty);
-    const timeScale = player.freezeActive ? 0.34 : 1;
+    // Combat Maneuvers reads as the world slowing down around you.
+    const timeScale = player.maneuverActive ? 0.42 : 1;
     if (this.director) this.director.update(dt, player, timeScale);
     world.update(dt * timeScale, player.position, this.elapsed);
     world.stream(this.scheduler, player.distanceAlong);
@@ -755,16 +759,21 @@ export class Game {
     }
 
     /* --- failure conditions ---------------------------------------------- */
-    if (!player.alive && player.impacted) {
+    if (!player.alive) {
       if (cfg.mode.failOnDamage === false) {
         // Free Flight has no failure state — put the aircraft back in the air.
         this._respawnTimer = (this._respawnTimer || 0) + dt;
-        if (this._respawnTimer > 2.2) {
+        if (this._respawnTimer > 1.1) {
           this._respawnTimer = 0;
           player.reset(null, Math.max(0, player.distanceAlong - 400));
+          player.visual.setVisible(true);
           this.ui.notify('AIRFRAME RESTORED', 'good');
         }
-      } else { this.endRun('AIRCRAFT DESTROYED', false); return; }
+      } else {
+        // Straight to the results screen — the crash has already played.
+        this.endRun('AIRCRAFT DESTROYED', false);
+        return;
+      }
     }
     if (cfg.mode.hasLaps && this.metrics.checkpoints >= this.targetCheckpoints && !this.finished) {
       this.finished = true;
@@ -773,7 +782,14 @@ export class Game {
     }
 
     /* --- camera + audio --------------------------------------------------- */
+    // Guidance chevrons down the corridor ahead.
+    this.render.guide.update(dt, world.path, player.distanceAlong, player.corridorOut);
     this.render.rig.sensitivity = this.save.data.settings.cameraSensitivity ?? 1;
+    // First person means exactly that: the airframe is not drawn.
+    player.visual.setAirframeVisible(!this.render.rig.hidesAircraft);
+    // Pushed every frame rather than only on the key, so the chip is right
+    // however the camera changed — key, touch button or code.
+    this.ui.setCamera(this.render.rig.mode.name);
     this.render.rig.update(dt, player, {
       speed01: player.speed01,
       boost: player.boostBlend,
@@ -782,6 +798,15 @@ export class Game {
       pitchRate: player.smoothControls.pitch,
       lagScale: 1 / clamp(this.save.data.settings.cameraSensitivity ?? 1, 0.5, 1.8),
     });
+
+    // Reheat has an audible light and an audible cut.
+    const burnerOn = player.boosting || player.turboActive;
+    if (burnerOn !== this._burnerWas) {
+      this.audio.play(burnerOn ? 'boost' : 'boostOut', { volume: 0.9 });
+      this._burnerWas = burnerOn;
+    }
+    if (player.speedKmh > 2050) this.audio.play('sonicBoom', { volume: 0.7 });
+    if (player.aoa01 > 0.97 && player.speedKmh < 500) this.audio.play('stallWarn', { volume: 0.8 });
 
     this.audio.updateEngine({
       speed01: player.speed01,
@@ -1127,7 +1152,7 @@ export class Game {
     }
     if (this.input.justPressed('fullscreen')) this.ui.toggleFullscreen();
     if (this.input.justPressed('camera') && this.state === 'racing') {
-      this.ui.toast(`CAMERA · ${this.render.rig.cycle()}`);
+      this.render.rig.cycle();
       this.audio.ui('click');
     }
     if (this.input.justPressed('debug')) {
@@ -1138,7 +1163,12 @@ export class Game {
 
     if (this.state !== 'paused') {
       this.render.update(dt, this._renderState());
-      this.scheduler.run(this.state === 'racing' ? 4.5 : 8);
+      // Chunk building gets whatever is left of the frame after rendering,
+      // never a fixed slice: on a machine that is already missing its target
+      // a fixed 4.5 ms budget is what turns a tight frame into a dropped one.
+      const target = this.state === 'racing' ? 4.5 : 8;
+      const headroom = 16.7 - this.perf.avgMs;
+      this.scheduler.run(clamp(Math.min(target, headroom * 0.55), 0.8, target));
     }
     this.render.render(dt);
     this.perf.readRenderer(this.render.renderer);
@@ -1163,10 +1193,10 @@ export class Game {
       boost: p.boostBlend || 0,
       damage: this.state === 'racing' ? clamp01((p.damage01 - 0.55) / 0.45) : 0,
       phase: p.phaseActive ? 1 : 0,
-      scan: p.scanActive ? 1 : 0,
+      scan: p.powerFlightActive ? 1 : 0,
       wind: this.world?.windVec,
       reducedMotion: !!this.save.data.settings.reducedMotion,
-      vignetteBoost: p.freezeActive ? 0.18 : 0,
+      vignetteBoost: p.maneuverActive ? 0.18 : 0,
     };
   }
 
@@ -1362,6 +1392,7 @@ export class Game {
         return true;
       },
       onAircraftChange: () => { this.ui.refreshLoadout(); },
+      onCamera: () => { if (this.state === 'racing') this.ui.setCamera(this.render.rig.cycle()); },
       onHangarMode: (active) => this.setHangarMode(active),
       onHangarPreview: (id) => this.setShowcaseAircraft(id),
       onHangarSpin: (delta) => this.spinHangar(delta),
@@ -1424,6 +1455,9 @@ export class Game {
       case 'reducedMotion':
         this.render.rig.reducedMotion = !!value;
         this.ui.applySettings();
+        break;
+      case 'guidance':
+        this.render.guide.setEnabled(!!value && this.state === 'racing');
         break;
       case 'hudScale': case 'vibration':
         this.ui.applySettings();

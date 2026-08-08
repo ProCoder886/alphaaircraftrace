@@ -14,7 +14,7 @@
  * Bump CACHE_VERSION whenever the shipped files change.
  */
 
-const CACHE_VERSION = 'alpha-aircraft-race-3d-v2';
+const CACHE_VERSION = 'alpha-aircraft-race-3d-v3';
 const SHELL = [
   './',
   './index.html',

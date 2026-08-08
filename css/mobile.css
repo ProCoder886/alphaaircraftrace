@@ -71,7 +71,14 @@ body.touch-mode .mobile-controls.enabled { display: block; }
 
 .tbtn-boost { width: 96px; height: 96px; font-size: 0.72rem; letter-spacing: 0.16em; border-color: rgba(57, 245, 255, 0.5); background: radial-gradient(circle at 40% 34%, rgba(57, 245, 255, 0.22), rgba(8, 26, 34, 0.6)); }
 .tbtn-brake { width: 62px; height: 62px; border-color: rgba(255, 182, 72, 0.42); }
-.tbtn-pause { position: absolute; top: max(10px, env(safe-area-inset-top)); right: max(14px, env(safe-area-inset-right)); width: 44px; height: 44px; font-size: 0.7rem; pointer-events: auto; }
+.tbtn-small { width: 44px; height: 44px; font-size: 0.56rem; letter-spacing: 0.06em; }
+.touch-topright {
+  position: absolute; top: max(10px, env(safe-area-inset-top)); right: max(14px, env(safe-area-inset-right));
+  display: flex; gap: 8px; pointer-events: auto;
+}
+/* Lean is a distinct control from bank, so it gets its own pair of keys. */
+.touch-lean { display: flex; gap: 8px; pointer-events: auto; }
+.tbtn-lean { width: 50px; height: 50px; font-size: 0.82rem; border-color: rgba(200, 235, 255, 0.34); }
 
 .touch-power {
   position: relative; width: 52px; height: 52px; overflow: hidden;
@@ -84,22 +91,41 @@ body.touch-mode .mobile-controls.enabled { display: block; }
 .touch-power.ready { border-color: rgba(57, 245, 255, 0.6); }
 .touch-power.active { border-color: var(--lime); background: rgba(30, 62, 24, 0.6); }
 
-/* ---- portrait gate ------------------------------------------------------- */
+/* ---- portrait gate -------------------------------------------------------
+   Gameplay is landscape only. On a touch device in portrait the overlay is
+   the whole screen: there is no half-usable portrait layout to fall back to,
+   and pretending otherwise just produces a broken one.
+   ------------------------------------------------------------------------ */
 @media (orientation: portrait) {
   body.touch-mode .orientation-overlay { display: flex; }
+  body.touch-mode #game-canvas { filter: blur(6px) saturate(0.5); }
 }
-@media (orientation: portrait) and (min-width: 900px) {
-  body.touch-mode .orientation-overlay { display: none; }
-}
+.orientation-overlay .btn { margin-top: 18px; }
 
-/* ---- small landscape phones --------------------------------------------- */
-@media (max-height: 430px) {
-  .stick-base { width: 104px; height: 104px; }
-  .stick-knob { width: 44px; height: 44px; margin: -22px 0 0 -22px; }
-  .tbtn-boost { width: 78px; height: 78px; }
-  .tbtn-brake { width: 52px; height: 52px; }
-  .touch-power { width: 44px; height: 44px; }
+/* ---- small landscape phones ---------------------------------------------
+   A 390px-tall viewport has to carry the same layout as a desktop, so every
+   fixed size shrinks together and the menu switches to a compact two-column
+   frame rather than reflowing into something unrecognisable.
+   ------------------------------------------------------------------------ */
+@media (max-height: 460px) {
+  .stick-base { width: 96px; height: 96px; }
+  .stick-knob { width: 40px; height: 40px; margin: -20px 0 0 -20px; }
+  .tbtn-boost { width: 70px; height: 70px; font-size: 0.6rem; }
+  .tbtn-brake { width: 46px; height: 46px; }
+  .tbtn-lean { width: 42px; height: 42px; font-size: 0.7rem; }
+  .tbtn-small { width: 38px; height: 38px; }
+  .touch-power { width: 40px; height: 40px; }
+  .touch-power .tp-name { font-size: 0.42rem; }
   .stick-hint { display: none; }
+  .touch-lean { margin-bottom: 2px; }
+
+  /* The root font-size already scaled the layout; these are the few places
+     that use fixed pixels or that still crowd at phone width. */
+  .menu-body { grid-template-columns: minmax(112px, 20vw) minmax(0, 1fr); }
+  .nav-item .nav-ico { display: none; }
+  .hangar { grid-template-columns: minmax(150px, 34%) minmax(0, 1fr); }
+  .launch-btn small { display: none; }
+  .stat-grid, .ach-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 }
 
 /* ---- ultrawide ----------------------------------------------------------- */

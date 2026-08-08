@@ -23,6 +23,27 @@ const NOTE = (semitonesFromA4) => 440 * Math.pow(2, semitonesFromA4 / 12);
  * ENGINE
  * ======================================================================== */
 
+/**
+ * A military turbofan, not an engine block.
+ *
+ * The distinguishing sound of a fighter is a stack of *inharmonic* blade-
+ * passing tones from the fan and compressor sitting on top of an enormous
+ * broadband core roar — not the buzzy sawtooth of a piston engine, which is
+ * what this used to be and why it read as a car. Five layers:
+ *
+ *   fan      — blade-passing partials at non-integer multiples of N1, swept
+ *              through a resonant bandpass. This is the "whine".
+ *   buzzsaw  — a detuned pair that beats against the fan once N1 is high,
+ *              giving the shimmering edge a real intake has at speed.
+ *   core     — band-passed noise: combustion and the exhaust column, the body
+ *              of the sound and most of its level.
+ *   hiss     — high-passed noise, the tearing edge of the exhaust plume.
+ *   reheat   — sub-bass rumble with an unstable amplitude, plus a mid-band
+ *              roar. Afterburners are not smooth, and the wobble is the tell.
+ *
+ * Airframe noise (the air itself) rides on top, scaled with V², so speed is
+ * audible even at idle thrust.
+ */
 class EngineSynth {
   constructor(ctx, dest, noiseBuffer) {
     this.ctx = ctx;
@@ -30,74 +51,85 @@ class EngineSynth {
     this.out.gain.value = 0;
     this.out.connect(dest);
     this.running = false;
+    this.n1 = 0;              // spool state, 0..1 — lags the throttle
+    this.ignitionUntil = 0;
 
-    // --- turbine core: three detuned saws through a resonant lowpass -----
-    this.filter = ctx.createBiquadFilter();
-    this.filter.type = 'lowpass';
-    this.filter.frequency.value = 700;
-    this.filter.Q.value = 3.2;
-    this.filter.connect(this.out);
+    const noiseSource = (filterType, freq, q) => {
+      const src = ctx.createBufferSource();
+      src.buffer = noiseBuffer;
+      src.loop = true;
+      const f = ctx.createBiquadFilter();
+      f.type = filterType; f.frequency.value = freq; f.Q.value = q;
+      const g = ctx.createGain();
+      g.gain.value = 0;
+      src.connect(f); f.connect(g); g.connect(this.out);
+      return { src, filter: f, gain: g };
+    };
 
-    this.oscs = [];
-    this.oscGains = [];
-    for (const [mult, detune, gain, type] of [
-      [1.0, 0, 0.34, 'sawtooth'], [1.5, 7, 0.20, 'sawtooth'],
-      [2.01, -9, 0.15, 'square'], [0.5, 3, 0.26, 'triangle'],
+    /* ---- fan and compressor: inharmonic blade-passing tones ------------- */
+    this.fanFilter = ctx.createBiquadFilter();
+    this.fanFilter.type = 'bandpass';
+    this.fanFilter.frequency.value = 900;
+    this.fanFilter.Q.value = 1.5;
+    this.fanFilter.connect(this.out);
+
+    // Deliberately non-integer: a turbofan's tones do not line up into a
+    // musical harmonic series, and integer multiples sound like an organ.
+    this.fan = [];
+    for (const [mult, gain, type, detune] of [
+      [1.00, 0.055, 'sine', 0],
+      [2.07, 0.042, 'sine', 6],
+      [3.19, 0.030, 'triangle', -8],
+      [4.41, 0.022, 'sine', 11],
+      [6.13, 0.014, 'sine', -14],
+      [8.90, 0.009, 'sine', 17],
     ]) {
       const o = ctx.createOscillator();
-      o.type = type;
-      o.frequency.value = 60 * mult;
-      o.detune.value = detune;
-      const g = ctx.createGain();
-      g.gain.value = gain;
-      o.connect(g); g.connect(this.filter);
-      this.oscs.push({ osc: o, mult });
-      this.oscGains.push(g);
+      o.type = type; o.detune.value = detune; o.frequency.value = 120 * mult;
+      const g = ctx.createGain(); g.gain.value = gain;
+      o.connect(g); g.connect(this.fanFilter);
+      this.fan.push({ osc: o, mult, base: gain, gain: g });
     }
 
-    // --- compressor blade whine ------------------------------------------
-    this.whine = ctx.createOscillator();
-    this.whine.type = 'sine';
-    this.whine.frequency.value = 900;
-    this.whineGain = ctx.createGain();
-    this.whineGain.gain.value = 0.02;
-    this.whine.connect(this.whineGain); this.whineGain.connect(this.out);
+    /* ---- buzzsaw: two close tones that beat as the fan spins up --------- */
+    this.buzz = [];
+    this.buzzGain = ctx.createGain();
+    this.buzzGain.gain.value = 0;
+    this.buzzGain.connect(this.fanFilter);
+    for (const detune of [-9, 11]) {
+      const o = ctx.createOscillator();
+      o.type = 'triangle'; o.detune.value = detune; o.frequency.value = 1400;
+      o.connect(this.buzzGain);
+      this.buzz.push(o);
+    }
 
-    // --- exhaust roar: band-passed noise ---------------------------------
-    this.noise = ctx.createBufferSource();
-    this.noise.buffer = noiseBuffer;
-    this.noise.loop = true;
-    this.noiseFilter = ctx.createBiquadFilter();
-    this.noiseFilter.type = 'bandpass';
-    this.noiseFilter.frequency.value = 420;
-    this.noiseFilter.Q.value = 0.7;
-    this.noiseGain = ctx.createGain();
-    this.noiseGain.gain.value = 0.0;
-    this.noise.connect(this.noiseFilter);
-    this.noiseFilter.connect(this.noiseGain);
-    this.noiseGain.connect(this.out);
+    /* ---- core roar, exhaust hiss, airframe ------------------------------ */
+    this.core = noiseSource('bandpass', 240, 0.55);
+    this.hiss = noiseSource('highpass', 2600, 0.7);
+    this.airframe = noiseSource('highpass', 900, 0.5);
 
-    // --- reheat rumble ----------------------------------------------------
-    this.rumble = ctx.createBufferSource();
-    this.rumble.buffer = noiseBuffer;
-    this.rumble.loop = true;
-    this.rumbleFilter = ctx.createBiquadFilter();
-    this.rumbleFilter.type = 'lowpass';
-    this.rumbleFilter.frequency.value = 160;
-    this.rumbleGain = ctx.createGain();
-    this.rumbleGain.gain.value = 0;
-    this.rumble.connect(this.rumbleFilter);
-    this.rumbleFilter.connect(this.rumbleGain);
-    this.rumbleGain.connect(this.out);
+    /* ---- reheat: sub rumble with an unstable amplitude ------------------- */
+    this.reheat = noiseSource('lowpass', 130, 1.1);
+    this.reheatMid = noiseSource('bandpass', 420, 0.8);
+    this.instability = ctx.createGain();
+    this.instability.gain.value = 1;
+    // Two incommensurate LFOs so the wobble never settles into a pattern.
+    this.lfoA = ctx.createOscillator(); this.lfoA.frequency.value = 7.3;
+    this.lfoB = ctx.createOscillator(); this.lfoB.frequency.value = 11.9;
+    this.lfoAG = ctx.createGain(); this.lfoAG.gain.value = 0;
+    this.lfoBG = ctx.createGain(); this.lfoBG.gain.value = 0;
+    this.lfoA.connect(this.lfoAG); this.lfoAG.connect(this.reheat.gain.gain);
+    this.lfoB.connect(this.lfoBG); this.lfoBG.connect(this.reheatMid.gain.gain);
 
-    // --- damage stutter ----------------------------------------------------
+    /* ---- damage: compressor stall stutter -------------------------------- */
     this.damageOsc = ctx.createOscillator();
-    this.damageOsc.type = 'square';
-    this.damageOsc.frequency.value = 34;
+    this.damageOsc.type = 'sawtooth';
+    this.damageOsc.frequency.value = 41;
     this.damageGain = ctx.createGain();
     this.damageGain.gain.value = 0;
-    this.damageOsc.connect(this.damageGain);
-    this.damageGain.connect(this.out);
+    const df = ctx.createBiquadFilter();
+    df.type = 'lowpass'; df.frequency.value = 260;
+    this.damageOsc.connect(this.damageGain); this.damageGain.connect(df); df.connect(this.out);
   }
 
   start() {
@@ -105,58 +137,113 @@ class EngineSynth {
     this.running = true;
     const t = this.ctx.currentTime;
     try {
-      for (const { osc } of this.oscs) osc.start(t);
-      this.whine.start(t);
-      this.noise.start(t);
-      this.rumble.start(t);
+      for (const f of this.fan) f.osc.start(t);
+      for (const b of this.buzz) b.start(t);
+      for (const n of [this.core, this.hiss, this.airframe, this.reheat, this.reheatMid]) n.src.start(t);
+      this.lfoA.start(t); this.lfoB.start(t);
       this.damageOsc.start(t);
     } catch (e) { /* already started */ }
     this.out.gain.cancelScheduledValues(t);
     this.out.gain.setValueAtTime(this.out.gain.value, t);
-    this.out.gain.linearRampToValueAtTime(1, t + 0.5);
+    this.out.gain.linearRampToValueAtTime(1, t + 0.45);
+  }
+
+  /**
+   * Cold start: the starter motor winds the fan up, the igniters light the
+   * can, and the core settles to idle. Called once when a run begins.
+   */
+  ignite() {
+    const t = this.ctx.currentTime;
+    this.n1 = 0;
+    this.ignitionUntil = t + 2.6;
+    // A short low thump as the fuel lights.
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t + 1.15);
+    g.gain.exponentialRampToValueAtTime(0.34, t + 1.22);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 2.0);
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.core.src.buffer;
+    src.loop = true;
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.setValueAtTime(90, t + 1.15);
+    f.frequency.exponentialRampToValueAtTime(700, t + 2.0);
+    src.connect(f); f.connect(g); g.connect(this.out);
+    src.start(t + 1.1); src.stop(t + 2.2);
   }
 
   stop() {
     const t = this.ctx.currentTime;
     this.out.gain.cancelScheduledValues(t);
     this.out.gain.setValueAtTime(this.out.gain.value, t);
-    this.out.gain.linearRampToValueAtTime(0, t + 0.35);
+    this.out.gain.linearRampToValueAtTime(0, t + 0.4);
   }
 
-  /** @param s {speed01, throttle, boost, damage01, altitude01, near} */
+  /** @param s {speed01, throttle, boost, damage01, altitude01} */
   update(s) {
     const ctx = this.ctx;
     const t = ctx.currentTime;
-    const k = 0.09;                                  // smoothing time constant
-    const set = (param, v) => param.setTargetAtTime(v, t, k);
+    const set = (param, v, k = 0.09) => param.setTargetAtTime(v, t, k);
 
     const spd = clamp01(s.speed01);
     const boost = clamp01(s.boost);
-    // Fundamental climbs about two octaves across the speed range.
-    const f0 = lerp(46, 138, Math.pow(spd, 0.85)) * lerp(1, 1.18, boost);
-    for (const { osc, mult } of this.oscs) set(osc.frequency, f0 * mult);
-    set(this.whine.frequency, f0 * 13.5 + boost * 340);
-    set(this.whineGain.gain, (0.012 + spd * 0.030) * lerp(0.5, 1.3, s.throttle));
+    const thr = clamp01(s.throttle ?? 1);
 
-    set(this.filter.frequency, lerp(430, 2600, Math.pow(spd, 0.7)) * lerp(0.85, 1.5, boost));
-    set(this.noiseFilter.frequency, lerp(300, 1500, spd));
-    set(this.noiseGain.gain, (0.05 + spd * 0.16 + boost * 0.16) * lerp(0.55, 1.15, s.throttle));
-    set(this.rumbleGain.gain, boost * 0.30 + spd * 0.05);
-    set(this.rumbleFilter.frequency, lerp(90, 230, boost));
+    // N1 lags: a big fan takes seconds to spool, and hearing that lag is most
+    // of what separates a jet from anything with pistons.
+    const spooling = t < this.ignitionUntil;
+    const n1Target = spooling ? 0.34 : clamp01(0.30 + thr * 0.42 + spd * 0.36 + boost * 0.22);
+    this.n1 += (n1Target - this.n1) * (spooling ? 0.010 : 0.030);
+    const n1 = this.n1;
 
-    // A damaged engine coughs.
-    const dmg = clamp01((s.damage01 - 0.5) / 0.5);
-    set(this.damageGain.gain, dmg * 0.05 * (0.5 + Math.random() * 0.5));
-    if (dmg > 0.02) this.damageOsc.frequency.setTargetAtTime(28 + Math.random() * 26, t, 0.05);
+    // Blade-passing fundamental: ~95 Hz at idle to ~430 Hz at full chat.
+    const f0 = lerp(95, 430, Math.pow(n1, 1.15));
+    for (const f of this.fan) {
+      set(f.osc.frequency, f0 * f.mult, 0.12);
+      // Higher partials only appear as the fan loads up.
+      set(f.gain.gain, f.base * lerp(0.35, 1.25, n1) * (f.mult > 4 ? n1 : 1));
+    }
+    set(this.fanFilter.frequency, lerp(600, 3600, Math.pow(n1, 0.8)), 0.12);
+    set(this.fanFilter.Q, lerp(1.1, 3.4, n1));
 
-    // Thin air at altitude takes the body out of the note.
-    set(this.out.gain, lerp(1, 0.72, clamp01(s.altitude01 || 0)));
+    // Buzzsaw only bites near military power.
+    const buzz = clamp01((n1 - 0.62) / 0.38);
+    for (const b of this.buzz) set(b.frequency, f0 * 5.4, 0.12);
+    set(this.buzzGain.gain, buzz * 0.030 * lerp(0.6, 1.0, thr));
+
+    // Core roar — the body of the sound.
+    set(this.core.filter.frequency, lerp(170, 780, n1), 0.12);
+    set(this.core.gain.gain, lerp(0.05, 0.30, n1) * lerp(0.75, 1.15, thr));
+    // Exhaust tearing.
+    set(this.hiss.filter.frequency, lerp(2200, 5200, spd));
+    set(this.hiss.gain.gain, lerp(0.012, 0.075, Math.pow(spd, 1.3)) + boost * 0.055);
+    // Airframe: the air itself, which is loud in a fast jet even at idle.
+    set(this.airframe.filter.frequency, lerp(700, 1800, spd));
+    set(this.airframe.gain.gain, Math.pow(spd, 1.9) * 0.085);
+
+    // Reheat: unstable by nature.
+    set(this.reheat.gain.gain, boost * 0.26 + Math.pow(n1, 3) * 0.03);
+    set(this.reheat.filter.frequency, lerp(95, 165, boost));
+    set(this.reheatMid.gain.gain, boost * 0.13);
+    set(this.reheatMid.filter.frequency, lerp(300, 620, boost));
+    set(this.lfoAG.gain, boost * 0.075);
+    set(this.lfoBG.gain, boost * 0.045);
+
+    // A damaged compressor stalls and surges.
+    const dmg = clamp01((s.damage01 - 0.45) / 0.55);
+    set(this.damageGain.gain, dmg * 0.055 * (0.4 + Math.random() * 0.6), 0.05);
+    if (dmg > 0.02) this.damageOsc.frequency.setTargetAtTime(31 + Math.random() * 34, t, 0.06);
+
+    // Thin air carries less of the note.
+    set(this.out.gain, lerp(1, 0.74, clamp01(s.altitude01 || 0)));
   }
 
   dispose() {
     try {
-      for (const { osc } of this.oscs) osc.stop();
-      this.whine.stop(); this.noise.stop(); this.rumble.stop(); this.damageOsc.stop();
+      for (const f of this.fan) f.osc.stop();
+      for (const b of this.buzz) b.stop();
+      for (const n of [this.core, this.hiss, this.airframe, this.reheat, this.reheatMid]) n.src.stop();
+      this.lfoA.stop(); this.lfoB.stop(); this.damageOsc.stop();
     } catch (e) { /* not started */ }
     this.out.disconnect();
   }
@@ -343,21 +430,55 @@ class SFXKit {
         this._tone({ freq: 420, type: 'sawtooth', dur: 0.28, gain: 0.11 * v, sweep: 900, filter: { type: 'lowpass', freq: 900, sweep: 3200, q: 4 } });
         break;
       case 'collision':
-        this._noise({ dur: 0.42, gain: 0.30 * v, type: 'lowpass', freq: 1600, sweep: -1450, q: 1.2 });
-        this._tone({ freq: 130, type: 'square', dur: 0.30, gain: 0.20 * v, sweep: -85, filter: { type: 'lowpass', freq: 700 } });
+        // Airframe strike: skin panel deforming, then the structure ringing.
+        this._noise({ dur: 0.09, gain: 0.34 * v, type: 'highpass', freq: 3400, sweep: -1800 });
+        this._noise({ dur: 0.40, gain: 0.26 * v, type: 'bandpass', freq: 1500, sweep: -1150, q: 1.6 });
+        this._tone({ freq: 148, type: 'triangle', dur: 0.34, gain: 0.18 * v, sweep: -96, filter: { type: 'lowpass', freq: 620 } });
         break;
       case 'explosion':
-        this._noise({ dur: 1.5, gain: 0.42 * v, type: 'lowpass', freq: 2200, sweep: -2100, q: 0.8 });
-        this._tone({ freq: 90, type: 'sine', dur: 1.1, gain: 0.34 * v, sweep: -62 });
-        this._noise({ dur: 0.10, gain: 0.30 * v, type: 'highpass', freq: 3000, sweep: 3000 });
+        // Fuel deflagration, then the airframe coming apart.
+        this._noise({ dur: 0.09, gain: 0.34 * v, type: 'highpass', freq: 4200, sweep: 2000 });
+        this._noise({ dur: 1.7, gain: 0.44 * v, type: 'lowpass', freq: 2400, sweep: -2280, q: 0.7 });
+        this._tone({ freq: 86, type: 'sine', dur: 1.25, gain: 0.34 * v, sweep: -58 });
+        this._noise({ dur: 0.85, gain: 0.16 * v, type: 'bandpass', freq: 2200, sweep: -1600, q: 0.9, delay: 0.18 });
         break;
       case 'shield':
         this._tone({ freq: 300, type: 'sine', dur: 0.55, gain: 0.13 * v, sweep: 500, filter: { type: 'bandpass', freq: 900, q: 6 } });
         break;
       case 'boost':
-        if (!this._guard('boost', 380)) return;
-        this._noise({ dur: 0.65, gain: 0.20 * v, type: 'bandpass', freq: 300, sweep: 2000, q: 1.4 });
-        this._tone({ freq: 110, type: 'sawtooth', dur: 0.55, gain: 0.12 * v, sweep: 260, filter: { type: 'lowpass', freq: 700, sweep: 2400 } });
+        // Reheat light-off: raw fuel hits the jet pipe and goes off with a
+        // thump, then the plume settles into a roar.
+        if (!this._guard('boost', 340)) return;
+        this._tone({ freq: 62, type: 'sine', dur: 0.42, gain: 0.26 * v, sweep: -18 });
+        this._noise({ dur: 0.14, gain: 0.24 * v, type: 'lowpass', freq: 420, sweep: 900, q: 1.2 });
+        this._noise({ dur: 0.75, gain: 0.19 * v, type: 'bandpass', freq: 260, sweep: 1500, q: 1.1, delay: 0.05 });
+        break;
+      case 'boostOut':
+        // Reheat cut — the plume collapses.
+        if (!this._guard('boostOut', 340)) return;
+        this._noise({ dur: 0.42, gain: 0.13 * v, type: 'bandpass', freq: 900, sweep: -700, q: 1.3 });
+        this._tone({ freq: 130, type: 'sine', dur: 0.28, gain: 0.08 * v, sweep: -70 });
+        break;
+      case 'sonicBoom':
+        if (!this._guard('sonicBoom', 5000)) return;
+        this._noise({ dur: 0.06, gain: 0.42 * v, type: 'highpass', freq: 1800, sweep: 2600 });
+        this._tone({ freq: 44, type: 'sine', dur: 1.0, gain: 0.30 * v, sweep: -18, delay: 0.02 });
+        this._noise({ dur: 0.9, gain: 0.20 * v, type: 'lowpass', freq: 1200, sweep: -1050, q: 0.7, delay: 0.03 });
+        break;
+      case 'flyby':
+        // A rival going past: the plume arrives after the airframe does.
+        if (!this._guard('flyby', 700)) return;
+        this._noise({ dur: 0.55, gain: 0.16 * v, type: 'bandpass', freq: 2400, sweep: -1900, q: 0.9 });
+        this._noise({ dur: 0.75, gain: 0.13 * v, type: 'lowpass', freq: 900, sweep: -620, q: 0.8, delay: 0.09 });
+        break;
+      case 'stallWarn':
+        // The aural warning every fast jet has: an insistent two-tone.
+        if (!this._guard('stallWarn', 900)) return;
+        this._tone({ freq: 740, type: 'square', dur: 0.11, gain: 0.06 * v, filter: { type: 'lowpass', freq: 2000 } });
+        this._tone({ freq: 560, type: 'square', dur: 0.11, gain: 0.06 * v, delay: 0.14, filter: { type: 'lowpass', freq: 2000 } });
+        break;
+      case 'gearLock':
+        this._noise({ dur: 0.16, gain: 0.10 * v, type: 'bandpass', freq: 1100, sweep: -600, q: 2.4 });
         break;
       case 'power':
         this._tone({ freq: 300, type: 'triangle', dur: 0.36, gain: 0.13 * v, sweep: 1300, filter: { type: 'bandpass', freq: 1100, q: 5 } });
@@ -380,7 +501,9 @@ class SFXKit {
         this._tone({ freq: 52, type: 'sine', dur: 1.9, gain: 0.22 * v, sweep: -20, delay: (opts.delay || 0) + 0.1 });
         break;
       case 'countdown':
-        this._tone({ freq: 660, type: 'square', dur: 0.16, gain: 0.13 * v, filter: { type: 'lowpass', freq: 2000 } });
+        // Range-clearance tone, not a musical beep.
+        this._tone({ freq: 620, type: 'square', dur: 0.14, gain: 0.12 * v, filter: { type: 'lowpass', freq: 1800 } });
+        this._noise({ dur: 0.05, gain: 0.035 * v, type: 'highpass', freq: 4000, sweep: 1200 });
         break;
       case 'go':
         this._tone({ freq: 990, type: 'square', dur: 0.42, gain: 0.17 * v, filter: { type: 'lowpass', freq: 3200 } });
@@ -431,7 +554,12 @@ const SCALES = {
 };
 
 const TRACKS = {
+  // Four menu beds. They rotate on every return to the menu so the hangar is
+  // not the same eight bars for the whole session.
   menu: { root: -9, scale: 'dorian', bpm: 92, prog: [0, 5, 3, 4], baseIntensity: 0.35, pad: 1.0, arp: 0.4, drums: 0.25 },
+  menu2: { root: -12, scale: 'lydian', bpm: 78, prog: [0, 4, 2, 6], baseIntensity: 0.30, pad: 1.3, arp: 0.3, drums: 0.12 },
+  menu3: { root: -7, scale: 'minor', bpm: 104, prog: [0, 3, 5, 4], baseIntensity: 0.42, pad: 0.85, arp: 0.65, drums: 0.45 },
+  menu4: { root: -14, scale: 'phrygian', bpm: 86, prog: [0, 1, 5, 3], baseIntensity: 0.38, pad: 1.1, arp: 0.5, drums: 0.30 },
   race: { root: -7, scale: 'minor', bpm: 138, prog: [0, 0, 5, 3], baseIntensity: 0.6, pad: 0.7, arp: 0.9, drums: 1.0 },
   survival: { root: -10, scale: 'phrygian', bpm: 146, prog: [0, 1, 0, 5], baseIntensity: 0.7, pad: 0.5, arp: 1.0, drums: 1.0 },
   timeattack: { root: -5, scale: 'dorian', bpm: 152, prog: [0, 4, 5, 3], baseIntensity: 0.65, pad: 0.6, arp: 1.0, drums: 1.0 },
@@ -703,11 +831,23 @@ export class AudioSystem {
   ui(name, opts) { if (this.ready && !this.muted) try { this.uiSfx.play(name, opts); } catch (e) { /* noop */ } }
 
   startEngine() { if (this.ready) this.engine.start(); }
+  igniteEngine() { if (this.ready) { this.engine.start(); this.engine.ignite(); } }
   stopEngine() { if (this.ready) this.engine.stop(); }
   updateEngine(state) { if (this.ready) try { this.engine.update(state); } catch (e) { /* noop */ } }
 
   setEnvironment(weather, speed01, cavern) {
     if (this.ready) try { this.ambience.set(weather, speed01, cavern); } catch (e) { /* noop */ }
+  }
+
+  /**
+   * Rotate through the four menu beds. Called instead of setMusic('menu') so
+   * every trip back to the hangar gets a different one.
+   */
+  setMenuMusic(intensity) {
+    const beds = ['menu', 'menu3', 'menu2', 'menu4'];
+    this._menuBed = ((this._menuBed ?? -1) + 1) % beds.length;
+    this.setMusic(beds[this._menuBed], intensity);
+    return beds[this._menuBed];
   }
 
   setMusic(track, intensity) {

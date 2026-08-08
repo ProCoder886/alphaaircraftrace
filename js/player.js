@@ -130,7 +130,7 @@ export class InputManager {
   /** Consolidated control state for this frame. */
   sample() {
     const s = {
-      pitch: 0, roll: 0, yaw: 0, throttle: 0, brake: 0, boost: false,
+      pitch: 0, roll: 0, lean: 0, throttle: 0, brake: 0, boost: false,
       powers: [false, false, false, false, false],
     };
     if (!this.enabled) return s;
@@ -140,8 +140,8 @@ export class InputManager {
     if (this.isDown('pitchDown')) s.pitch -= 1;
     if (this.isDown('rollRight')) s.roll += 1;
     if (this.isDown('rollLeft')) s.roll -= 1;
-    if (this.isDown('yawRight')) s.yaw -= 1;
-    if (this.isDown('yawLeft')) s.yaw += 1;
+    if (this.isDown('leanRight')) s.lean += 1;
+    if (this.isDown('leanLeft')) s.lean -= 1;
     if (this.isDown('throttleUp')) s.throttle += 1;
     if (this.isDown('brake')) s.brake += 1;
     if (this.isDown('boost')) s.boost = true;
@@ -156,8 +156,8 @@ export class InputManager {
     if (tb.has('boost')) s.boost = true;
     if (tb.has('brake')) s.brake += 1;
     if (tb.has('throttle')) s.throttle += 1;
-    if (tb.has('yawLeft')) s.yaw += 1;
-    if (tb.has('yawRight')) s.yaw -= 1;
+    if (tb.has('leanLeft')) s.lean -= 1;
+    if (tb.has('leanRight')) s.lean += 1;
     for (let i = 0; i < 5; i++) if (this.touch.pressedButtons.has(`power${i + 1}`)) s.powers[i] = true;
 
     // Gamepad
@@ -168,7 +168,7 @@ export class InputManager {
       if (lx || ly) this.lastSource = 'gamepad';
       s.roll += lx;
       s.pitch += -ly;
-      s.yaw += -rx * 0.7;
+      s.lean += rx * 0.85;
       const btn = (i) => gp.buttons[i]?.pressed;
       const val = (i) => gp.buttons[i]?.value || 0;
       if (btn(0)) s.boost = true;
@@ -182,7 +182,7 @@ export class InputManager {
     if (this.invertPitch) s.pitch = -s.pitch;
     s.pitch = clamp(s.pitch, -1, 1) * this.sensitivity;
     s.roll = clamp(s.roll, -1, 1) * this.sensitivity;
-    s.yaw = clamp(s.yaw, -1, 1) * this.sensitivity;
+    s.lean = clamp(s.lean, -1, 1) * this.sensitivity;
     s.throttle = clamp01(s.throttle);
     s.brake = clamp01(s.brake);
     return s;
@@ -239,12 +239,13 @@ export class AircraftVisual {
     // a sharp fresnel so it reads as a thin envelope around the airframe rather
     // than a solid ball obscuring the route.
     this._shellMats = {
-      shield: render.materials.energy(0x5fe4ff, { intensity: 0.34, hexScale: 2.6, fresnel: 4.5, side: THREE.BackSide, pulse: 0.6 }),
-      phase: render.materials.energy(0xb478ff, { intensity: 0.42, hexScale: 1.6, fresnel: 3.4, scroll: 2.6, side: THREE.BackSide }),
-      turbo: render.materials.energy(0xff8a3a, { intensity: 0.32, hexScale: 3.4, fresnel: 5.0, side: THREE.BackSide, pulse: 0.4 }),
+      shield: render.materials.energy(0x5fe4ff, { intensity: 0.22, hexScale: 2.6, fresnel: 5.5, side: THREE.BackSide, pulse: 0.6 }),
+      phase: render.materials.energy(0xb478ff, { intensity: 0.26, hexScale: 1.6, fresnel: 4.2, scroll: 2.6, side: THREE.BackSide }),
+      turbo: render.materials.energy(0xff8a3a, { intensity: 0.20, hexScale: 3.4, fresnel: 5.8, side: THREE.BackSide, pulse: 0.4 }),
+      lift: render.materials.energy(0x39f5ff, { intensity: 0.20, hexScale: 2.0, fresnel: 5.0, scroll: 1.8, side: THREE.BackSide, pulse: 0.8 }),
     };
     this.shell = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(Math.max(this.span, this.length) * 0.40, 2),
+      new THREE.IcosahedronGeometry(Math.max(this.span, this.length) * 0.30, 2),
       this._shellMats.shield,
     );
     this.shell.visible = false;
@@ -255,35 +256,51 @@ export class AircraftVisual {
     this.engineTrails = [];
     this.tipTrails = [];
     if (opts.trails !== false) {
-      const segs = Math.max(12, Math.round(render.quality.preset.trailSegments * (detail >= 2 ? 1 : 0.5)));
+      // Short and tight: an exhaust plume, not a ribbon streamer. The old
+      // lengths buried the airframe under two enormous stripes.
+      const segs = Math.max(8, Math.round(render.quality.preset.trailSegments * (detail >= 2 ? 0.5 : 0.28)));
       for (const n of this.nozzles) {
-        const t = render.vfx.createTrail(spec.colors.trail, this.engineRadius * 1.3, segs,
-          { minDist: 2.5, opacity: 0, taper: 1.5 });
+        const t = render.vfx.createTrail(spec.colors.trail, this.engineRadius * 0.95, segs,
+          { minDist: 2.2, opacity: 0, taper: 2.4 });
         t.anchor = n.clone();
         this.engineTrails.push(t);
       }
       if (detail >= 2) {
         for (const w of this.wingTips) {
-          const t = render.vfx.createTrail(0xffffff, 1.5, Math.round(segs * 0.8),
-            { minDist: 4, opacity: 0, taper: 2.2, blending: THREE.NormalBlending });
+          const t = render.vfx.createTrail(0xffffff, 1.0, Math.round(segs * 0.6),
+            { minDist: 5, opacity: 0, taper: 3.0, blending: THREE.NormalBlending });
           t.anchor = w.clone();
           this.tipTrails.push(t);
         }
       }
     }
 
-    this.controlBlend = { pitch: 0, roll: 0, yaw: 0 };
+    this.controlBlend = { pitch: 0, roll: 0, yaw: 0, lean: 0, aoa: 0 };
     this._wp = new THREE.Vector3();
     this.visible = true;
+    this.airframeVisible = true;
     this.damageSmokeTimer = 0;
   }
 
   setVisible(v) {
     this.visible = v;
-    this.root.visible = v;
+    this._applyVisibility();
     for (const t of this.engineTrails) t.mesh.visible = v;
     for (const t of this.tipTrails) t.mesh.visible = v;
   }
+
+  /**
+   * Hide the airframe without touching the trails — that is what makes the
+   * first-person camera first-person. Trails stream out behind the eye point
+   * so they stay correct and stay visible.
+   */
+  setAirframeVisible(v) {
+    if (this.airframeVisible === v) return;
+    this.airframeVisible = v;
+    this._applyVisibility();
+  }
+
+  _applyVisibility() { this.root.visible = this.visible && this.airframeVisible; }
 
   resetTrails() {
     for (const t of this.engineTrails) t.reset();
@@ -303,6 +320,28 @@ export class AircraftVisual {
     cb.pitch = damp(cb.pitch, state.pitch || 0, 11, dt);
     cb.roll = damp(cb.roll, state.roll || 0, 11, dt);
     cb.yaw = damp(cb.yaw, state.yaw || 0, 11, dt);
+    // Leaning is a slip, and a slipping airframe visibly drops the into-wind
+    // wing. Rotating about +Z lifts the right wing, so lean right is negative.
+    cb.lean = damp(cb.lean ?? 0, state.lean || 0, 9, dt);
+
+    /* --- attitude relative to the flight path --------------------------
+     * The physics flies the aircraft exactly along its nose, which is what
+     * makes a model look like it is being carried through the air rather
+     * than flying through it. A real wing needs an angle of attack to make
+     * lift, and needs more of it the slower it goes and the harder it pulls,
+     * so the nose rides above the flight path by a visible amount. Adding
+     * that angle back on the visual — plus the settle as the airframe takes
+     * up a G change — is the single strongest cue that it is flying.
+     * ------------------------------------------------------------------ */
+    const n = state.gLoad ?? 1;
+    const v01 = clamp01(state.speed01 ?? 0.5);
+    const aoa = clamp(n * lerp(0.075, 0.016, v01), -0.06, 0.19);
+    this._gLag = damp(this._gLag ?? 1, n, 3.2, dt);
+    const settle = clamp((n - this._gLag) * 0.016, -0.035, 0.035);
+    cb.aoa = damp(cb.aoa ?? 0, aoa + settle, 7, dt);
+
+    this.group.rotation.x = cb.aoa;
+    this.group.rotation.z = -PHYSICS.leanBank * cb.lean;
     const a = this.surfaces;
     if (a.ailerons.length === 2) {
       a.ailerons[0].rotation.x = (-cb.roll * 0.45) + cb.pitch * 0.12;
@@ -317,22 +356,23 @@ export class AircraftVisual {
 
     // Trails.
     const trailOpacity = state.alive
-      ? clamp01((state.speed01 - 0.12) * 1.6) * (0.18 + (state.boost || 0) * 0.34) : 0;
+      ? clamp01((state.speed01 - 0.22) * 1.5) * (0.075 + (state.boost || 0) * 0.24) : 0;
     for (const t of this.engineTrails) {
       this._wp.copy(t.anchor).applyQuaternion(state.quaternion).add(state.position);
       t.push(this._wp);
       t.setOpacity(damp(t.material.uniforms.uOpacity.value, trailOpacity, 6, dt));
-      t.setWidth(this.engineRadius * (0.34 + (state.boost || 0) * 0.40));
+      t.setWidth(this.engineRadius * (0.24 + (state.boost || 0) * 0.30));
     }
     // Wingtip vapour appears under load or at altitude — the physical cue that
     // the airframe is actually working.
-    const vapour = clamp01((Math.abs(state.gLoad || 0) - 1.6) * 0.5)
-      * clamp01((state.speed01 - 0.35) * 2)
-      + clamp01(((state.altitude || 0) - 3000) / 2500) * clamp01(state.speed01 * 1.4) * 0.6;
+    // Tip vapour is a high-G phenomenon, so it should be rare and brief —
+    // it was previously on almost permanently.
+    const vapour = clamp01((Math.abs(state.gLoad || 0) - 3.4) * 0.42)
+      * clamp01((state.speed01 - 0.40) * 2);
     for (const t of this.tipTrails) {
       this._wp.copy(t.anchor).applyQuaternion(state.quaternion).add(state.position);
       t.push(this._wp);
-      t.setOpacity(damp(t.material.uniforms.uOpacity.value, state.alive ? clamp01(vapour) * 0.7 : 0, 5, dt));
+      t.setOpacity(damp(t.material.uniforms.uOpacity.value, state.alive ? clamp01(vapour) * 0.34 : 0, 5, dt));
     }
 
     // Damage smoke.
@@ -347,7 +387,8 @@ export class AircraftVisual {
     }
 
     // Power shell: shield > phase > turbo, whichever is live.
-    const shellKind = state.shield ? 'shield' : state.phase ? 'phase' : state.turbo ? 'turbo' : null;
+    const shellKind = state.shield ? 'shield' : state.phase ? 'phase'
+      : state.turbo ? 'turbo' : state.powerFlight ? 'lift' : null;
     if (shellKind) {
       this.shell.visible = true;
       this.shell.material = this._shellMats[shellKind];
@@ -463,8 +504,9 @@ export class Player {
     this.lastCheckpointId = -1;
     this.nearMissCache = new Map();
     this.events = [];
-    this.controls = { pitch: 0, roll: 0, yaw: 0, throttle: 0, brake: 0, boost: false };
-    this.smoothControls = { pitch: 0, roll: 0, yaw: 0 };
+    this.controls = { pitch: 0, roll: 0, lean: 0, throttle: 0, brake: 0, boost: false };
+    this.smoothControls = { pitch: 0, roll: 0, lean: 0 };
+    this.slipVel = 0;            // m/s of sideways slip from the lean control
 
     this.bankAngle = 0;
     this.pitchAngle = 0;
@@ -538,6 +580,7 @@ export class Player {
     this.burner = 0;
     this.loadFactor = 1;
     this.rollRateActual = 0;
+    this.slipVel = 0;
     this.boostMeter = this.boostCapacity;
     this.health = this.maxHealth;
     this.alive = true;
@@ -558,7 +601,7 @@ export class Player {
    * ------------------------------------------------------------------ */
 
   update(dt, input, world, difficulty) {
-    if (!this.alive) { this._updateDead(dt); return; }
+    if (!this.alive) { this._updateDead(); return; }
     this.prevPosition.copy(this.position);
     const c = this.controls;
     Object.assign(c, input);
@@ -575,7 +618,8 @@ export class Player {
     const turbo = this.powers.isActive('turbo');
     const shield = this.powers.isActive('shield');
     const phase = this.powers.isActive('phase');
-    const scan = this.powers.isActive('scan');
+    const powerFlight = this.powers.isActive('powerflight');
+    const maneuver = this.powers.isActive('maneuver');
 
     /* --- orientation ---------------------------------------------------
      * A fighter is a G-command machine in pitch and a rate-command machine in
@@ -587,7 +631,7 @@ export class Player {
     const responsiveness = 14 * stunScale;
     sc.pitch = damp(sc.pitch, c.pitch, responsiveness, dt);
     sc.roll = damp(sc.roll, c.roll, responsiveness * 1.15, dt);
-    sc.yaw = damp(sc.yaw, c.yaw, responsiveness * 0.8, dt);
+    sc.lean = damp(sc.lean, c.lean, responsiveness * 0.9, dt);
 
     this.forward.set(0, 0, -1).applyQuaternion(this.quaternion);
     this.upVec.set(0, 1, 0).applyQuaternion(this.quaternion);
@@ -600,17 +644,32 @@ export class Player {
     let authority = this.agility * stunScale * lerp(1, 0.55, thin);
     if (turbo) authority *= 0.86 * this.vectorTurn;
     else if (this.boosting) authority *= this.vectorTurn;
+    // Combat Maneuvers is a straight authority multiplier — the airframe does
+    // what you ask almost before you finish asking.
+    if (maneuver) authority *= 1.85;
+    if (powerFlight) authority *= 1.25;
 
     // Pitch: the stick asks for a load factor. The wing can only deliver it if
     // it is going fast enough — lift goes with V², so the same pull that snaps
     // the nose round at 300 km/h barely bends it at 2000.
-    const gLimit = PHYSICS.gLimit * this.gStrength * (turbo ? 0.92 : 1);
+    const gLimit = PHYSICS.gLimit * this.gStrength * (turbo ? 0.92 : 1)
+      * (maneuver ? 1.7 : 1) * (powerFlight ? 1.4 : 1);
     const nAvailable = gLimit * clamp01((V / PHYSICS.cornerSpeed) ** 2);
+    // Bank alone barely turns a real aircraft — you have to pull, and a pilot
+    // holding a level turn pulls exactly n = 1/cos(bank). Trimming that in
+    // automatically is what makes banking read as "turn left/right" instead of
+    // "lean over and keep going straight", and it is the real relationship
+    // rather than a fudge.
+    // Bank angle only — not the aircraft's vertical up, which also drops in a
+    // dive and would auto-recover the nose out of one.
+    const cosBank = Math.cos(this.bankAngle || 0);
+    const levelTurnN = cosBank > 0.2 ? clamp(1 / cosBank, 1, gLimit * 0.8) : 1;
     const nCommand = sc.pitch >= 0
-      ? 1 + sc.pitch * (gLimit - 1)
+      ? Math.max(levelTurnN, 1 + sc.pitch * (gLimit - 1))
       : 1 + sc.pitch * (1 + PHYSICS.gLimitNeg);
     this.loadFactor = damp(this.loadFactor,
-      clamp(nCommand, -PHYSICS.gLimitNeg, Math.min(gLimit, nAvailable)), 1 / PHYSICS.pitchTau, dt);
+      clamp(nCommand, -PHYSICS.gLimitNeg, Math.min(gLimit, nAvailable)),
+      1 / (PHYSICS.pitchTau * (maneuver ? 0.42 : 1)), dt);
     // q = G(n − upY)/V. With the stick centred in level flight n = 1 and
     // upY = 1, so the nose holds; roll away from level and it starts to fall.
     const pitchRate = PHYSICS.flightG * (this.loadFactor - this.upVec.y) / V * authority;
@@ -620,17 +679,23 @@ export class Player {
     const rollAuth = authority * lerp(0.5, 1, clamp01(V / 175)) * lerp(1, 0.66, q01 ** 1.6)
       * lerp(1, 0.72, clamp01(Math.abs(this.loadFactor) / gLimit));
     this.rollRateActual = damp(this.rollRateActual, PHYSICS.rollRate * rollAuth * sc.roll,
-      1 / PHYSICS.rollTau, dt);
+      1 / (PHYSICS.rollTau * (maneuver ? 0.5 : 1)), dt);
     const rollRate = this.rollRateActual;
 
-    // Yaw: the rudder is a low-speed control, and rolling drags the nose the
-    // wrong way until you catch it.
-    const yawRate = PHYSICS.yawRate * authority * lerp(1, 0.34, q01 ** 1.3) * sc.yaw
-      + rollRate * PHYSICS.adverseYaw * (1 - clamp01(Math.abs(sc.yaw)));
+    // Lean (Q/E): a forward slip — rudder against opposite aileron. The
+    // airframe slides sideways across the corridor with the nose barely
+    // moving, which is how you thread a gate you are already lined up on.
+    // Rolling also drags the nose the wrong way until you catch it.
+    const leanAuth = authority * lerp(1, 0.42, q01 ** 1.2);
+    const yawRate = -PHYSICS.leanYaw * leanAuth * sc.lean
+      + rollRate * PHYSICS.adverseYaw * (1 - clamp01(Math.abs(sc.lean)));
+    this.slipVel = damp(this.slipVel, PHYSICS.leanSpeed * leanAuth * sc.lean, 3.4, dt);
 
+    // Positive rotation about the nose axis rolls the right wing down, so D
+    // (roll = +1) must apply a positive angle. This was negated.
     _q.setFromAxisAngle(this.rightVec, pitchRate * dt);
     this.quaternion.premultiply(_q);
-    _q.setFromAxisAngle(this.forward, -rollRate * dt);
+    _q.setFromAxisAngle(this.forward, rollRate * dt);
     this.quaternion.premultiply(_q);
     _q.setFromAxisAngle(this.upVec, yawRate * dt);
     this.quaternion.premultiply(_q);
@@ -697,21 +762,24 @@ export class Player {
     thrust += PHYSICS.boostAccel * this.boostPower * this.burner;
     if (turbo) thrust += PHYSICS.boostAccel * 1.35 * this.boostPower;
     // Gravity along the flight path: a dive is free speed, a climb costs it.
-    thrust += -this.forward.y * PHYSICS.flightG;
+    // Power Flight all but cancels it, which is what makes it a save button.
+    thrust += -this.forward.y * PHYSICS.flightG * (powerFlight ? 0.15 : 1);
     // Parasitic drag goes with V², induced drag with n²/V. Holding a hard turn
     // therefore costs energy exactly where a real one does — and the harder you
     // pull the more it costs, which is what makes the racing line matter.
     const parasitic = PHYSICS.dragCoefficient * this.speed * this.speed
       * (1 + c.brake * 3.2 + Math.abs(sc.roll) * 0.14);
-    const induced = PHYSICS.inducedDrag * this.loadFactor * this.loadFactor / V;
+    // Power Flight is exactly that: the wing stops charging you for lift.
+    const induced = powerFlight ? 0 : PHYSICS.inducedDrag * this.loadFactor * this.loadFactor / V;
     this.speed += (thrust - parasitic - induced) * dt;
     if (this.speed > cap) this.speed = damp(this.speed, cap, 2.4, dt);
     this.speed = clamp(this.speed, PHYSICS.minSpeed * 0.55, PHYSICS.boostSpeed * 1.1);
 
     /* --- integrate ------------------------------------------------------ */
     // Below the speed at which the wing can hold 1 g the airframe simply mushes.
-    this.sink = damp(this.sink, clamp01(1 - nAvailable) * PHYSICS.stallSink, 2.0, dt);
+    this.sink = damp(this.sink, powerFlight ? 0 : clamp01(1 - nAvailable) * PHYSICS.stallSink, 2.0, dt);
     this.velocity.copy(this.forward).multiplyScalar(this.speed);
+    this.velocity.addScaledVector(this.rightVec, this.slipVel);
     this.velocity.y -= this.sink;
 
     // Wind + turbulence (world.turbulence already folds in difficulty).
@@ -774,16 +842,16 @@ export class Player {
     this.visual.update(dt, {
       position: this.position, quaternion: this.quaternion,
       throttle: this.throttle, boost: this.boostBlend, speed01: this.speed01,
-      pitch: sc.pitch, roll: sc.roll, yaw: sc.yaw, alive: true,
+      pitch: sc.pitch, roll: sc.roll, yaw: sc.lean, lean: sc.lean, alive: true,
       gLoad: this.gLoad, altitude: this.altitude,
       damage01: 1 - this.health / this.maxHealth,
-      phase, shield, turbo,
+      phase, shield, turbo, powerFlight,
     });
 
-    this.scanActive = scan;
+    this.powerFlightActive = powerFlight;
     this.shieldActive = shield;
     this.phaseActive = phase;
-    this.freezeActive = this.powers.isActive('freeze');
+    this.maneuverActive = maneuver;
     this.turboActive = turbo;
 
     this._sanitise();
@@ -842,32 +910,15 @@ export class Player {
     this.sink = 0;
     this.loadFactor = 1;
     this.rollRateActual = 0;
-    this.smoothControls.pitch = this.smoothControls.roll = this.smoothControls.yaw = 0;
+    this.slipVel = 0;
+    this.smoothControls.pitch = this.smoothControls.roll = this.smoothControls.lean = 0;
     return true;
   }
 
-  _updateDead(dt) {
-    // Tumble to the ground so the crash reads as a real event.
-    this.velocity.y -= PHYSICS.gravity * 2.4 * dt;
-    this.velocity.multiplyScalar(1 - dt * 0.32);
-    this.position.addScaledVector(this.velocity, dt);
-    _q.setFromAxisAngle(this.deathSpinAxis || _up, (this.deathSpin || 2) * dt);
-    this.quaternion.premultiply(_q);
-    const ground = this.world.terrainHeight(this.position.x, this.position.z);
-    if (this.position.y <= ground + 4 && !this.impacted) {
-      this.impacted = true;
-      this.position.y = ground + 4;
-      this.render.vfx.explode(this.position, 26, 0xffa040);
-      this.render.postfx.flash(0.5, 0xffcc88);
-      this.render.rig.addShake(0.9, 20);
-      this.visual.setVisible(false);
-      this.events.push({ type: 'impact' });
-    }
-    this.visual.update(dt, {
-      position: this.position, quaternion: this.quaternion,
-      throttle: 0, boost: 0, speed01: 0, pitch: 0, roll: 0, yaw: 0, alive: false,
-      gLoad: 0, altitude: this.position.y, damage01: 1,
-    });
+  _updateDead() {
+    // Nothing to simulate — the aircraft is already gone and the results
+    // screen is up. The position is kept so the results camera has a subject.
+    this.speed = 0;
   }
 
   _groundStrike(ground) {
@@ -1034,16 +1085,22 @@ export class Player {
 
   heal(amount) { this.health = Math.min(this.maxHealth, this.health + amount); }
 
+  /**
+   * The run is over the instant the airframe is destroyed. There is no tumble
+   * to sit through: it used to spin all the way down to the terrain before the
+   * results screen appeared, which from cruise altitude is many seconds of
+   * watching a dead aircraft rotate.
+   */
   destroy(reason = 'collision') {
     if (!this.alive) return;
     this.alive = false;
-    this.impacted = false;
-    this.deathSpin = 3 + Math.random() * 3;
-    this.deathSpinAxis = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
-    this.velocity.multiplyScalar(0.6);
-    this.render.vfx.explode(this.position, 16, 0xffa040);
-    this.render.postfx.flash(0.55, 0xff9a4d);
-    this.render.rig.addShake(1.2, 18);
+    this.impacted = true;
+    this.velocity.set(0, 0, 0);
+    this.slipVel = 0;
+    this.render.vfx.explode(this.position, 30, 0xffa040);
+    this.render.postfx.flash(0.66, 0xffb063);
+    this.render.rig.addShake(1.35, 22);
+    this.visual.setVisible(false);
     this.events.push({ type: 'destroyed', reason });
   }
 
