@@ -80,6 +80,13 @@ body.touch-mode .mobile-controls.enabled { display: block; }
 .touch-lean { display: flex; gap: 8px; pointer-events: auto; }
 .tbtn-lean { width: 50px; height: 50px; font-size: 0.82rem; border-color: rgba(200, 235, 255, 0.34); }
 
+/* Weapons. Hidden unless the run is a combat mode, so racing keeps its
+   uncluttered thumb layout. */
+.touch-weapons { display: none; gap: 8px; pointer-events: auto; }
+body.combat-mode .touch-weapons { display: flex; }
+.tbtn-gun { width: 62px; height: 62px; border-color: rgba(255, 240, 168, 0.5); background: radial-gradient(circle at 40% 34%, rgba(255, 220, 120, 0.18), rgba(30, 24, 8, 0.6)); }
+.tbtn-wpn { width: 50px; height: 50px; font-size: 0.54rem; border-color: rgba(255, 154, 74, 0.45); }
+
 .touch-power {
   position: relative; width: 52px; height: 52px; overflow: hidden;
   border-radius: 10px;
@@ -113,6 +120,8 @@ body.touch-mode .mobile-controls.enabled { display: block; }
   .tbtn-boost { width: 70px; height: 70px; font-size: 0.6rem; }
   .tbtn-brake { width: 46px; height: 46px; }
   .tbtn-lean { width: 42px; height: 42px; font-size: 0.7rem; }
+  .tbtn-gun { width: 46px; height: 46px; font-size: 0.52rem; }
+  .tbtn-wpn { width: 38px; height: 38px; font-size: 0.44rem; }
   .tbtn-small { width: 38px; height: 38px; }
   .touch-power { width: 40px; height: 40px; }
   .touch-power .tp-name { font-size: 0.42rem; }

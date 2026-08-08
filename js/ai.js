@@ -700,7 +700,7 @@ export class RaceDirector {
       const arch = chosen[i];
       // Match airframe to personality so the grid reads correctly at a glance.
       const wanted = {
-        speed: 'talon', agile: 'kestrel', defensive: 'bastion', aggressive: 'vipera',
+        speed: 'talon', agile: 'falcon', defensive: 'bastion', aggressive: 'vipera',
         technical: 'phantom', elite: 'zephyr', legendary: 'omega', balanced: 'aurora',
       }[arch.id];
       const spec = AIRCRAFT_BY_ID[wanted] && wanted !== playerSpec.id

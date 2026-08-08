@@ -15,7 +15,7 @@
 import * as THREE from 'three';
 import { Afterburner } from './renderer.js';
 import {
-  PHYSICS, POWERS, WORLD, DEFAULT_BINDINGS, SCORE,
+  PHYSICS, POWERS, WORLD, DEFAULT_BINDINGS, SCORE, MACH,
   clamp, clamp01, lerp, damp, shapeAxis,
 } from './config.js';
 
@@ -25,6 +25,8 @@ const _v3 = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
 const _up = new THREE.Vector3(0, 1, 0);
+/** Nitrous burns green — the trail colour the reheat washes the exhaust to. */
+const NITROUS_GREEN = new THREE.Color(0x2bff86);
 
 /* ===========================================================================
  * INPUT
@@ -131,6 +133,7 @@ export class InputManager {
   sample() {
     const s = {
       pitch: 0, roll: 0, lean: 0, throttle: 0, brake: 0, boost: false,
+      gun: false, heavy: false, cycleWeapon: false, cycleTarget: false,
       powers: [false, false, false, false, false],
     };
     if (!this.enabled) return s;
@@ -145,6 +148,11 @@ export class InputManager {
     if (this.isDown('throttleUp')) s.throttle += 1;
     if (this.isDown('brake')) s.brake += 1;
     if (this.isDown('boost')) s.boost = true;
+    // Guns are held; everything else is a discrete press.
+    if (this.isDown('fireGun')) s.gun = true;
+    if (this.justPressed('fireWeapon')) s.heavy = true;
+    if (this.justPressed('cycleWeapon')) s.cycleWeapon = true;
+    if (this.justPressed('cycleTarget')) s.cycleTarget = true;
     for (let i = 0; i < 5; i++) if (this.justPressed(`power${i + 1}`)) s.powers[i] = true;
 
     // Touch
@@ -158,6 +166,9 @@ export class InputManager {
     if (tb.has('throttle')) s.throttle += 1;
     if (tb.has('leanLeft')) s.lean -= 1;
     if (tb.has('leanRight')) s.lean += 1;
+    if (tb.has('gun')) s.gun = true;
+    if (this.touch.pressedButtons.has('heavy')) s.heavy = true;
+    if (this.touch.pressedButtons.has('cycleWeapon')) s.cycleWeapon = true;
     for (let i = 0; i < 5; i++) if (this.touch.pressedButtons.has(`power${i + 1}`)) s.powers[i] = true;
 
     // Gamepad
@@ -263,6 +274,7 @@ export class AircraftVisual {
         const t = render.vfx.createTrail(spec.colors.trail, this.engineRadius * 0.95, segs,
           { minDist: 2.2, opacity: 0, taper: 2.4 });
         t.anchor = n.clone();
+        t.baseColor = new THREE.Color(spec.colors.trail);
         this.engineTrails.push(t);
       }
       if (detail >= 2) {
@@ -287,6 +299,38 @@ export class AircraftVisual {
     this._applyVisibility();
     for (const t of this.engineTrails) t.mesh.visible = v;
     for (const t of this.tipTrails) t.mesh.visible = v;
+  }
+
+  /**
+   * Issue this airframe in a different livery. Instances share their template's
+   * materials, so each one has to own a copy before it can be tinted — without
+   * the clone, recolouring one enemy would recolour every aircraft built from
+   * the same airframe, the player's included.
+   */
+  recolour(hex) {
+    const tint = new THREE.Color(hex);
+    const seen = new Map();
+    this.group.traverse((n) => {
+      if (!n.isMesh || !n.material) return;
+      const src = n.material;
+      const one = (mat) => {
+        let copy = seen.get(mat);
+        if (!copy) {
+          copy = mat.clone();
+          // Multiply rather than replace: the panel work, weathering and
+          // markings in the texture survive, only the hue changes.
+          if (copy.color) copy.color.copy(tint);
+          if (copy.emissive) copy.emissive.copy(tint).multiplyScalar(0.16);
+          seen.set(mat, copy);
+        }
+        return copy;
+      };
+      n.material = Array.isArray(src) ? src.map(one) : one(src);
+    });
+    this._ownMaterials = Array.from(seen.values());
+    // The plume and ribbon carry the livery too, so a wave reads as a wave.
+    for (const t of this.engineTrails) { t.baseColor = tint.clone(); t.material.uniforms.uColor.value.copy(tint); }
+    for (const b of this.burners) b.uniforms.uColor.value.copy(tint);
   }
 
   /**
@@ -354,14 +398,21 @@ export class AircraftVisual {
     const burn = state.alive ? clamp01(state.throttle * 0.75 + (state.boost || 0) * 0.6) : 0;
     for (const b of this.burners) b.update(dt, burn, state.boost || 0);
 
-    // Trails.
+    // Trails. Length and weight follow Mach, so the ribbons grow with real
+    // speed rather than sitting at one size the whole run — and they turn
+    // nitrous green the moment the burner lights.
+    const boost01 = clamp01(state.boost || 0);
+    const mach01 = clamp01(state.mach01 ?? state.speed01 ?? 0);
     const trailOpacity = state.alive
-      ? clamp01((state.speed01 - 0.22) * 1.5) * (0.075 + (state.boost || 0) * 0.24) : 0;
+      ? clamp01((state.speed01 - 0.22) * 1.5) * (0.055 + mach01 * 0.075 + boost01 * 0.26) : 0;
     for (const t of this.engineTrails) {
       this._wp.copy(t.anchor).applyQuaternion(state.quaternion).add(state.position);
       t.push(this._wp);
       t.setOpacity(damp(t.material.uniforms.uOpacity.value, trailOpacity, 6, dt));
-      t.setWidth(this.engineRadius * (0.24 + (state.boost || 0) * 0.30));
+      t.setWidth(this.engineRadius * (0.24 + mach01 * 0.16 + boost01 * 0.34));
+      // Nitrous burns green. The blend is smoothed by the burner spool, so the
+      // ribbon washes from exhaust colour to green as the reheat lights.
+      t.material.uniforms.uColor.value.lerpColors(t.baseColor, NITROUS_GREEN, boost01);
     }
     // Wingtip vapour appears under load or at altitude — the physical cue that
     // the airframe is actually working.
@@ -403,6 +454,9 @@ export class AircraftVisual {
     for (const b of this.burners) b.dispose();
     for (const t of this.engineTrails) this.render.vfx.removeTrail(t);
     for (const t of this.tipTrails) this.render.vfx.removeTrail(t);
+    // Only materials this instance cloned for its livery — the template's are
+    // shared and outlive it.
+    if (this._ownMaterials) for (const m of this._ownMaterials) m.dispose();
     this.shell.geometry.dispose();
     this.render.scene.remove(this.root);
     // Geometry/materials belong to the cached factory template — not ours to free.
@@ -476,6 +530,8 @@ export class Player {
     this.rightVec = new THREE.Vector3(1, 0, 0);
 
     this.applySpec(spec);
+    /** Marks rounds fired from this airframe as friendly to the combat system. */
+    this.isPlayerSide = true;
 
     this.speed = PHYSICS.cruiseSpeed * 0.75;
     this.throttle = 0.85;
@@ -673,21 +729,43 @@ export class Player {
     // q = G(n − upY)/V. With the stick centred in level flight n = 1 and
     // upY = 1, so the nose holds; roll away from level and it starts to fall.
     const pitchRate = PHYSICS.flightG * (this.loadFactor - this.upVec.y) / V * authority;
+    // Published so the manoeuvre tracker can integrate a loop from what the
+    // airframe actually did rather than from how long a key was held.
+    this.pitchRateActual = pitchRate;
 
     // Roll: ailerons bite hardest in the middle of the band — mushy when slow,
     // stiff against the airflow when very fast — and a loaded wing rolls slower.
     const rollAuth = authority * lerp(0.5, 1, clamp01(V / 175)) * lerp(1, 0.66, q01 ** 1.6)
       * lerp(1, 0.72, clamp01(Math.abs(this.loadFactor) / gLimit));
-    this.rollRateActual = damp(this.rollRateActual, PHYSICS.rollRate * rollAuth * sc.roll,
+
+    // The assist flies bank as a *target angle*, not a rate, so it settles
+    // where you asked instead of rolling forever, and unwinds to level on its
+    // own when you let go. Manual bank input overrides it entirely.
+    //
+    // Sign: bankAngle = atan2(right.y, up.y), so banked-right is NEGATIVE,
+    // while a positive roll rate rolls the right wing down and therefore
+    // *decreases* bankAngle. The error term is (current − target), not the
+    // other way round — inverted, the assist accelerates away from the angle
+    // it is meant to hold and ends up flying the aircraft onto its back.
+    const manual = clamp01(Math.abs(sc.roll) * 2.2);
+    const bankTarget = -PHYSICS.leanAssistBank * sc.lean;
+    const assistRoll = clamp(((this.bankAngle || 0) - bankTarget) * 2.6,
+      -PHYSICS.rollRate, PHYSICS.rollRate) * rollAuth * (1 - manual);
+
+    this.rollRateActual = damp(this.rollRateActual,
+      PHYSICS.rollRate * rollAuth * sc.roll + assistRoll,
       1 / (PHYSICS.rollTau * (maneuver ? 0.5 : 1)), dt);
     const rollRate = this.rollRateActual;
 
-    // Lean (Q/E): a forward slip — rudder against opposite aileron. The
-    // airframe slides sideways across the corridor with the nose barely
-    // moving, which is how you thread a gate you are already lined up on.
-    // Rolling also drags the nose the wrong way until you catch it.
+    // Lean (A/D) is the assisted turn. Holding it rolls the airframe into a
+    // bank for you, holds that bank, and lets the level-turn trim above do the
+    // pulling — so a clean turn is one key rather than bank-then-pull-then-
+    // catch-it. It also slips slightly, which is what lets you shift across a
+    // gate you are already lined up on. Q/E remain the raw bank axis for
+    // anyone who would rather fly it themselves; the assist steps aside the
+    // moment they are touched.
     const leanAuth = authority * lerp(1, 0.42, q01 ** 1.2);
-    const yawRate = -PHYSICS.leanYaw * leanAuth * sc.lean
+    const yawRate = -PHYSICS.leanYaw * leanAuth * sc.lean * (1 + PHYSICS.leanAssistTurn)
       + rollRate * PHYSICS.adverseYaw * (1 - clamp01(Math.abs(sc.lean)));
     this.slipVel = damp(this.slipVel, PHYSICS.leanSpeed * leanAuth * sc.lean, 3.4, dt);
 
@@ -701,8 +779,14 @@ export class Player {
     this.quaternion.premultiply(_q);
 
     // Auto-level assist: with the stick centred the airframe rolls upright.
+    // It has to stand down for LEAN as well as for bank — the lean assist is
+    // deliberately asking for a bank angle, and a leveller running at full
+    // strength against it cancels the two out exactly, which is why A/D used
+    // to turn the nose without ever visibly banking the airframe.
     const levelStrength = PHYSICS.autoLevel * this.autoLevelScale
-      * (1 - Math.min(1, Math.abs(c.roll) * 2.2)) * (1 - Math.min(1, Math.abs(c.pitch) * 1.1));
+      * (1 - Math.min(1, Math.abs(c.roll) * 2.2))
+      * (1 - Math.min(1, Math.abs(c.pitch) * 1.1))
+      * (1 - Math.min(1, Math.abs(c.lean) * 2.2));
     if (levelStrength > 0.01) {
       this.upVec.set(0, 1, 0).applyQuaternion(this.quaternion);
       this.forward.set(0, 0, -1).applyQuaternion(this.quaternion);
@@ -773,7 +857,8 @@ export class Player {
     const induced = powerFlight ? 0 : PHYSICS.inducedDrag * this.loadFactor * this.loadFactor / V;
     this.speed += (thrust - parasitic - induced) * dt;
     if (this.speed > cap) this.speed = damp(this.speed, cap, 2.4, dt);
-    this.speed = clamp(this.speed, PHYSICS.minSpeed * 0.55, PHYSICS.boostSpeed * 1.1);
+    // Mach 20 is the hard ceiling for every airframe in the game.
+    this.speed = clamp(this.speed, PHYSICS.minSpeed * 0.55, MACH.maxMs);
 
     /* --- integrate ------------------------------------------------------ */
     // Below the speed at which the wing can hold 1 g the airframe simply mushes.
@@ -842,6 +927,7 @@ export class Player {
     this.visual.update(dt, {
       position: this.position, quaternion: this.quaternion,
       throttle: this.throttle, boost: this.boostBlend, speed01: this.speed01,
+      mach01: this.mach01,
       pitch: sc.pitch, roll: sc.roll, yaw: sc.lean, lean: sc.lean, alive: true,
       gLoad: this.gLoad, altitude: this.altitude,
       damage01: 1 - this.health / this.maxHealth,
@@ -1086,6 +1172,26 @@ export class Player {
   heal(amount) { this.health = Math.min(this.maxHealth, this.health + amount); }
 
   /**
+   * Incoming fire. Separate from applyDamage so a hit reads differently from a
+   * collision: the shield eats it outright, and what gets through shakes the
+   * camera and flashes the frame from the direction it arrived.
+   */
+  applyCombatDamage(amount, from) {
+    if (!this.alive) return;
+    if (this.shieldActive) {
+      this.render.vfx.explode(from || this.position, 5, 0x5fe4ff);
+      this.render.postfx.flash(0.16, 0x5fe4ff);
+      this.events.push({ type: 'shielded', position: (from || this.position).clone() });
+      return;
+    }
+    this.applyDamage(amount, 'enemyFire');
+    this.render.vfx.sparkBurst(from || this.position, null, 14, 0xffcc66);
+    this.render.postfx.flash(clamp01(amount / 60) * 0.32, 0xff8a6a);
+    this.render.rig.addShake(clamp01(amount / 50) * 0.7, 28);
+    this.events.push({ type: 'tookFire', amount });
+  }
+
+  /**
    * The run is over the instant the airframe is destroyed. There is no tumble
    * to sit through: it used to spin all the way down to the terrain before the
    * results screen appeared, which from cruise altitude is many seconds of
@@ -1105,7 +1211,10 @@ export class Player {
   }
 
   get damage01() { return 1 - this.health / this.maxHealth; }
-  get speedKmh() { return this.speed * 3.6; }
+  get mach() { return MACH.of(this.speed); }
+  get speedKmh() { return MACH.kmhOf(this.speed); }
+  /** 0..1 across the blur ramp — Mach 1 is nothing, Mach 15 is saturated. */
+  get mach01() { return clamp01((this.mach - 1) / (MACH.blurMach - 1)); }
   get boost01() { return this.boostMeter / this.boostCapacity; }
 
   drainEvents() {

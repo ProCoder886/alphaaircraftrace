@@ -20,7 +20,7 @@
 .hud-label { font-size: 0.62em; letter-spacing: 0.26em; color: rgba(220, 240, 255, 0.62); text-transform: uppercase; }
 
 /* ══════════════════════ TOP LEFT — position & score ═══════════════════ */
-.hud-tl { position: absolute; top: max(14px, env(safe-area-inset-top)); left: max(18px, env(safe-area-inset-left)); }
+.hud-tl { position: absolute; top: max(14px, env(safe-area-inset-top)); left: max(18px, env(safe-area-inset-left)); z-index: 3; }
 .hud-position { border-bottom: 1px solid rgba(200, 230, 255, 0.24); padding-bottom: 5px; min-width: 132px; }
 .hud-position-value { display: flex; align-items: baseline; gap: 7px; margin-top: 2px; }
 .hud-position-value span { font-family: var(--font-num); font-size: 2.5em; line-height: 0.95; font-weight: 300; color: #fff; }
@@ -37,6 +37,42 @@
 .hud-run-stats i { font-style: normal; font-size: 0.54em; letter-spacing: 0.2em; color: rgba(200, 230, 255, 0.45); }
 .hud-run-stats b { font-family: var(--font-num); font-size: 0.80em; font-weight: 400; color: #cfeaff; }
 
+/* ---------------------------------------------------------------------------
+ * CONTROL LEGEND — every binding, on screen, all the time.
+ * One compact horizontal strip: icon over key cap, wrapping to a second row on
+ * narrow viewports rather than pushing the rest of the HUD around.
+ * ------------------------------------------------------------------------ */
+.hud-controls {
+  margin-top: 9px; display: flex; flex-wrap: wrap; align-items: stretch;
+  gap: 3px; max-width: 30rem; padding: 4px 5px;
+  border: 1px solid rgba(120, 230, 255, 0.20); border-radius: 5px;
+  background: linear-gradient(180deg, rgba(6, 16, 28, 0.66), rgba(4, 10, 20, 0.46));
+  backdrop-filter: blur(3px);
+}
+.ctl {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  min-width: 2.05rem; padding: 3px 3px 2px; border-radius: 3px;
+  background: rgba(140, 210, 255, 0.05);
+}
+.ctl svg { width: 0.86rem; height: 0.86rem; color: rgba(190, 232, 255, 0.82); flex: none; }
+.ctl-keys { display: flex; gap: 2px; }
+.ctl-key {
+  font-family: var(--font-num); font-size: 0.44rem; line-height: 1; letter-spacing: 0.02em;
+  padding: 2px 3px; border-radius: 2px; color: #dff2ff;
+  border: 1px solid rgba(160, 220, 255, 0.32); background: rgba(12, 30, 48, 0.85);
+  box-shadow: 0 1px 0 rgba(160, 220, 255, 0.18) inset;
+}
+.ctl-name {
+  font-size: 0.40rem; letter-spacing: 0.08em; text-transform: uppercase;
+  color: rgba(190, 226, 255, 0.55); white-space: nowrap;
+}
+.ctl-sep { width: 1px; margin: 3px 2px; background: rgba(120, 230, 255, 0.16); }
+/* The legend is reference, not instrumentation — it steps back while flying
+   and comes forward when the pointer is near it. */
+.hud-controls { opacity: 0.72; transition: opacity 160ms linear; }
+.hud-controls:hover { opacity: 1; }
+body.touch-mode .hud-controls { display: none; }
+
 /* ══════════════════════ TOP CENTRE — compass ═════════════════════════ */
 .hud-compass { position: absolute; top: max(14px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); width: min(46%, 460px); }
 .compass-strip { position: relative; height: 22px; overflow: hidden; mask-image: linear-gradient(90deg, transparent, #000 16%, #000 84%, transparent); -webkit-mask-image: linear-gradient(90deg, transparent, #000 16%, #000 84%, transparent); }
@@ -47,7 +83,7 @@
 .compass-heading { margin: 3px auto 0; width: 62px; padding: 2px 0; text-align: center; border: 1px solid rgba(210, 235, 255, 0.6); border-radius: 2px; background: rgba(4, 10, 16, 0.5); font-family: var(--font-num); font-size: 0.86em; color: #fff; }
 
 /* ══════════════════════ TOP RIGHT — timers ═══════════════════════════ */
-.hud-tr { position: absolute; top: max(14px, env(safe-area-inset-top)); right: max(18px, env(safe-area-inset-right)); text-align: right; }
+.hud-tr { position: absolute; top: max(14px, env(safe-area-inset-top)); right: max(18px, env(safe-area-inset-right)); text-align: right; z-index: 3; }
 .hud-laptime .hud-label { color: rgba(220, 240, 255, 0.55); }
 .hud-timer-value { font-family: var(--font-num); font-size: 1.85em; font-weight: 300; color: #fff; line-height: 1.05; margin-top: 2px; }
 .hud-timer-value.urgent { color: var(--red); animation: warnFlash 0.7s ease-in-out infinite; }
@@ -56,8 +92,37 @@
 .hud-panel-small .row:last-child { border-bottom: none; }
 .hud-panel-small b { font-family: var(--font-num); font-size: 1.12em; letter-spacing: 0.02em; }
 
+/* ---------------------------------------------------------------------------
+ * MODE BRIEFING — the objectives and the game-over conditions, on screen for
+ * the whole run so neither is something the player has to remember.
+ * ------------------------------------------------------------------------ */
+.hud-brief {
+  display: none; margin-top: 8px; min-width: 208px; max-width: 17rem;
+  text-align: left; padding: 5px 8px 6px; border-radius: 4px;
+  border: 1px solid rgba(120, 230, 255, 0.18);
+  background: linear-gradient(180deg, rgba(6, 16, 28, 0.62), rgba(4, 10, 20, 0.44));
+  opacity: 0.78; transition: opacity 160ms linear;
+}
+.hud-brief.active { display: block; }
+.hud-brief:hover { opacity: 1; }
+.hud-brief h5 {
+  margin: 0 0 2px; font-size: 0.5em; font-weight: 700; letter-spacing: 0.2em;
+}
+.hud-brief h5.good { color: var(--lime); }
+.hud-brief h5.bad { color: var(--red); margin-top: 6px; }
+.hud-brief ul { list-style: none; margin: 0; padding: 0; }
+.hud-brief li {
+  position: relative; padding-left: 8px; font-size: 0.5em; line-height: 1.42;
+  color: rgba(210, 234, 255, 0.72);
+}
+.hud-brief li::before { content: "›"; position: absolute; left: 0; opacity: 0.55; }
+body.touch-mode .hud-brief { display: none !important; }
+
 /* ══════════════════════ CENTRE — gauges, reticle, marker ═════════════ */
-.hud-centre { position: absolute; inset: 0; }
+/* Target brackets and gauges sit UNDER the corner panels: a hostile at the
+   edge of the frame projects into the corner, and without this its bracket
+   draws on top of the score, the legend and the briefing. */
+.hud-centre { position: absolute; inset: 0; z-index: 1; }
 
 .gauge { position: absolute; top: 50%; transform: translateY(-50%); width: 62px; height: 300px; overflow: visible; }
 .gauge-left { left: 21%; }
@@ -76,6 +141,28 @@
 .readout-left .readout-label { color: var(--lime); }
 .readout-right .readout-label { color: var(--lime); }
 .readout-value.danger { color: var(--red); }
+
+/* Mach — sits directly under the airspeed it is derived from.
+   1 Mach = 1234.8 km/h; the ceiling is Mach 20. */
+.mach-readout {
+  margin-top: 5px; display: inline-flex; align-items: baseline; gap: 6px;
+  padding: 2px 9px 3px; border-radius: 4px;
+  border: 1px solid rgba(120, 230, 255, 0.30);
+  background: linear-gradient(180deg, rgba(8, 20, 34, 0.72), rgba(6, 14, 26, 0.55));
+  box-shadow: 0 0 12px rgba(20, 120, 180, 0.18) inset;
+}
+.mach-label { font-size: 0.52em; letter-spacing: 0.26em; color: rgba(200, 235, 255, 0.62); }
+.mach-value {
+  font-family: var(--font-num); font-size: 1.05em; font-weight: 400; line-height: 1;
+  color: #d8f6ff; text-shadow: 0 0 8px rgba(120, 230, 255, 0.55);
+}
+/* Past Mach 15 the airframe is in the blur-saturated band; past 19 it is at
+   the ceiling. Colour says which without the player reading the number. */
+.mach-readout.hot { border-color: rgba(255, 176, 74, 0.55); }
+.mach-readout.hot .mach-value { color: #ffce8a; text-shadow: 0 0 10px rgba(255, 160, 60, 0.7); }
+.mach-readout.max { border-color: rgba(255, 96, 96, 0.68); animation: machMax 0.9s ease-in-out infinite; }
+.mach-readout.max .mach-value { color: #ff9d9d; text-shadow: 0 0 12px rgba(255, 80, 80, 0.8); }
+@keyframes machMax { 0%, 100% { box-shadow: 0 0 12px rgba(255, 70, 70, 0.20) inset; } 50% { box-shadow: 0 0 18px rgba(255, 70, 70, 0.45) inset; } }
 
 .reticle { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 74px; height: 22px; }
 .reticle-dot { position: absolute; left: 50%; top: 50%; width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px; border-radius: 50%; background: rgba(230, 252, 255, 0.85); box-shadow: 0 0 8px rgba(120, 230, 255, 0.9); }
@@ -183,7 +270,8 @@
 .objective-card.done .obj-bar-fill { background: linear-gradient(90deg, rgba(157, 255, 74, 0.7), var(--lime)); }
 
 /* ══════════════════════ FEEDS & OVERLAYS ════════════════════════════ */
-.notif-stack { position: absolute; top: 26%; right: max(18px, env(safe-area-inset-right)); display: flex; flex-direction: column; gap: 6px; align-items: flex-end; max-width: 42%; }
+/* Sits below the top-right stack (timers + mode briefing) rather than over it. */
+.notif-stack { position: absolute; top: 46%; right: max(18px, env(safe-area-inset-right)); display: flex; flex-direction: column; gap: 6px; align-items: flex-end; max-width: 42%; }
 .notif {
   padding: 6px 13px; border-radius: 2px;
   border-right: 2px solid var(--accent);
@@ -249,4 +337,93 @@
   .power-cell { width: 44px; }
   .status-stack { min-width: 158px; }
   .hud-bc { width: min(300px, 46%); }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * COMBAT  (Endless Battle · Endless Race)
+ * ════════════════════════════════════════════════════════════════════════ */
+
+.target-layer { position: absolute; inset: 0; pointer-events: none; }
+
+/* One hostile: corner brackets, a hull pip and its live speed in both units. */
+.tgt {
+  position: absolute; transform: translate(-50%, -50%);
+  width: 4.2rem; height: 4.2rem; margin: 0;
+}
+.tgt i {
+  position: absolute; width: 0.85rem; height: 0.85rem;
+  border: 1.5px solid currentColor; opacity: 0.85;
+}
+.tgt i:nth-child(1) { left: 0; top: 0; border-right: 0; border-bottom: 0; }
+.tgt i:nth-child(2) { right: 0; top: 0; border-left: 0; border-bottom: 0; }
+.tgt i:nth-child(3) { left: 0; bottom: 0; border-right: 0; border-top: 0; }
+.tgt i:nth-child(4) { right: 0; bottom: 0; border-left: 0; border-top: 0; }
+.tgt { color: rgba(255, 120, 120, 0.72); }
+.tgt.tracking { color: #ffc24a; }
+/* A solid lock is unmistakably green and unmistakably locked. */
+.tgt.locked { color: #2fff8a; animation: lockPulse 0.55s ease-in-out infinite; }
+.tgt.locked i { border-width: 2px; box-shadow: 0 0 8px currentColor; }
+@keyframes lockPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(0.90); } }
+
+.tgt-info {
+  position: absolute; left: 50%; top: calc(100% + 3px); transform: translateX(-50%);
+  text-align: center; white-space: nowrap; font-family: var(--font-num);
+  font-size: 0.44rem; line-height: 1.25; color: #e7f6ff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+.tgt-info .mach { color: #9fe8ff; }
+.tgt-info .kmh { opacity: 0.72; }
+.tgt-hull {
+  position: absolute; left: 50%; top: -8px; transform: translateX(-50%);
+  width: 3rem; height: 2.5px; border-radius: 2px; background: rgba(255, 255, 255, 0.16);
+  overflow: hidden;
+}
+.tgt-hull b { display: block; height: 100%; background: currentColor; }
+/* The lock legend rides with the locked box so "TARGET LOCKED" is where you
+   are already looking, not in a corner. */
+.tgt-lock-label {
+  position: absolute; left: 50%; bottom: calc(100% + 5px); transform: translateX(-50%);
+  font-size: 0.44rem; letter-spacing: 0.16em; font-weight: 700; color: #2fff8a;
+  text-shadow: 0 0 8px rgba(47, 255, 138, 0.8); white-space: nowrap;
+}
+
+/* --- weapon / lock status block ---------------------------------------- */
+.hud-combat {
+  display: none; gap: 8px; align-items: center; margin: 0 auto 6px;
+  width: max-content; padding: 5px 10px; border-radius: 6px;
+  border: 1px solid rgba(120, 230, 255, 0.22);
+  background: linear-gradient(180deg, rgba(6, 16, 28, 0.74), rgba(4, 10, 20, 0.55));
+  backdrop-filter: blur(4px);
+}
+.hud-combat.active { display: flex; }
+.lock-strip { display: flex; align-items: center; gap: 5px; min-width: 8.4rem; }
+.lock-icon {
+  width: 0.9rem; height: 0.9rem; border: 1.6px solid rgba(255, 120, 120, 0.6);
+  border-radius: 50%; position: relative; flex: none;
+}
+.lock-icon::after {
+  content: ""; position: absolute; inset: 3px; border-radius: 50%;
+  background: transparent;
+}
+.lock-strip.tracking .lock-icon { border-color: #ffc24a; }
+.lock-strip.locked .lock-icon { border-color: #2fff8a; box-shadow: 0 0 9px rgba(47, 255, 138, 0.75); }
+.lock-strip.locked .lock-icon::after { background: #2fff8a; }
+.lock-text { font-size: 0.5rem; letter-spacing: 0.16em; color: rgba(220, 240, 255, 0.7); }
+.lock-strip.locked .lock-text { color: #2fff8a; font-weight: 700; }
+.lock-strip.tracking .lock-text { color: #ffc24a; }
+
+.weapon-strip { display: flex; align-items: center; gap: 6px; padding-left: 8px; border-left: 1px solid rgba(120, 230, 255, 0.16); }
+.wpn-name { font-size: 0.5rem; letter-spacing: 0.14em; color: #dff2ff; }
+.wpn-ammo { font-family: var(--font-num); font-size: 0.7rem; color: var(--lime); }
+.wpn-reload { width: 3.2rem; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.14); overflow: hidden; }
+.wpn-reload i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, #4ad6ff, #9dff6a); }
+
+.combat-tally { display: flex; gap: 10px; padding-left: 8px; border-left: 1px solid rgba(120, 230, 255, 0.16); }
+.combat-tally span { display: flex; flex-direction: column; align-items: center; }
+.combat-tally i { font-style: normal; font-size: 0.4rem; letter-spacing: 0.16em; color: rgba(200, 230, 255, 0.45); }
+.combat-tally b { font-family: var(--font-num); font-size: 0.72rem; font-weight: 400; color: #cfeaff; }
+
+@media (max-height: 460px) {
+  .hud-combat { padding: 3px 7px; gap: 6px; }
+  .tgt { width: 3.2rem; height: 3.2rem; }
 }

@@ -124,6 +124,8 @@
       <span><i>DIST</i><b id="hud-distance">0.00 km</b></span>
       <span><i>CP</i><b id="hud-checkpoints">0</b></span>
     </div>
+    <!-- every control, always on screen -->
+    <div class="hud-controls" id="hud-controls" aria-hidden="true"></div>
   </div>
 
   <!-- top centre: compass -->
@@ -142,6 +144,8 @@
       <div class="row"><span>BEST LAP</span><b id="hud-best" class="good">--:--.---</b></div>
       <div class="row"><span>PENALTY</span><b id="hud-penalty" class="bad">00:00.000</b></div>
     </div>
+    <!-- what you are trying to do, and what ends the run -->
+    <div class="hud-brief" id="hud-brief" aria-hidden="true"></div>
   </div>
 
   <!-- centre: gauges + checkpoint marker -->
@@ -155,6 +159,10 @@
       <div class="readout-label">SPD</div>
       <div class="readout-value" id="hud-speed">0</div>
       <div class="readout-unit">km/h</div>
+      <div class="mach-readout" id="hud-mach-block">
+        <span class="mach-label">MACH</span>
+        <b class="mach-value" id="hud-mach">0.0</b>
+      </div>
     </div>
 
     <svg class="gauge gauge-right" viewBox="0 0 120 300" aria-hidden="true">
@@ -180,7 +188,10 @@
       <div class="cp-distance" id="cp-distance">0.0 KM</div>
     </div>
     <div class="cp-offscreen" id="cp-offscreen" aria-hidden="true"></div>
+    <!-- combat: target boxes, lock reticle and per-enemy speed labels -->
+    <div class="target-layer" id="target-layer" aria-hidden="true"></div>
   </div>
+
 
   <!-- bottom left: radar -->
   <div class="hud-bl">
@@ -212,8 +223,25 @@
     </div>
   </div>
 
-  <!-- bottom centre: objective + event feed -->
+  <!-- bottom centre: combat strip, objective + event feed -->
   <div class="hud-bc">
+    <!-- combat status: selected weapon, lock state, wave -->
+    <div class="hud-combat" id="hud-combat" aria-hidden="true">
+      <div class="lock-strip" id="lock-strip">
+        <span class="lock-icon" id="lock-icon"></span>
+        <span class="lock-text" id="lock-text">NO TARGET</span>
+      </div>
+      <div class="weapon-strip">
+        <span class="wpn-name" id="wpn-name">MISSILE</span>
+        <span class="wpn-ammo">∞</span>
+        <div class="wpn-reload"><i id="wpn-reload-fill"></i></div>
+      </div>
+      <div class="combat-tally">
+        <span><i>WAVE</i><b id="cbt-wave">1</b></span>
+        <span><i>KILLS</i><b id="cbt-kills">0</b></span>
+        <span><i>HOSTILES</i><b id="cbt-hostiles">0</b></span>
+      </div>
+    </div>
     <div class="objective-card" id="objective-card">
       <div class="obj-head"><span class="obj-tag" id="obj-tag">OBJECTIVE</span><span class="obj-mode" id="obj-mode"></span></div>
       <div class="obj-text" id="obj-text">—</div>
@@ -239,6 +267,12 @@
     <div class="touch-lean">
       <button class="tbtn tbtn-lean" data-touch="leanLeft" type="button" aria-label="Lean left">◄</button>
       <button class="tbtn tbtn-lean" data-touch="leanRight" type="button" aria-label="Lean right">►</button>
+    </div>
+    <!-- weapons, shown only in the combat modes -->
+    <div class="touch-weapons" id="touch-weapons">
+      <button class="tbtn tbtn-wpn" data-touch="cycleWeapon" type="button" aria-label="Select weapon">WPN</button>
+      <button class="tbtn tbtn-wpn" data-touch="heavy" type="button" aria-label="Launch weapon">LNCH</button>
+      <button class="tbtn tbtn-gun" data-touch="gun" type="button" aria-label="Fire guns">GUN</button>
     </div>
     <div class="touch-primary">
       <button class="tbtn tbtn-brake" data-touch="brake" type="button">BRK</button>

@@ -364,22 +364,100 @@ export class TextureFactory {
   }
 
   /* ---- terrain detail (breaks up flat vertex colour) ------------------- */
+  /**
+   * Seamless multi-octave ground height, used for both the terrain albedo and
+   * its normal map so the two agree. Wrap-aware value noise: sampling the
+   * lattice modulo the grid size makes every octave tile, which is what lets
+   * the result repeat 26× per tile without a visible seam.
+   */
+  _groundField(size, seed) {
+    const h = new Float32Array(size * size);
+    const rng = new RNG(seed);
+    const octave = (grid, amp) => {
+      const lat = new Float32Array(grid * grid);
+      for (let i = 0; i < lat.length; i++) lat[i] = rng.next();
+      const sm = (t) => t * t * (3 - 2 * t);
+      for (let y = 0; y < size; y++) {
+        const fy = y / size * grid, y0 = Math.floor(fy), ty = sm(fy - y0);
+        const ya = (y0 % grid) * grid, yb = ((y0 + 1) % grid) * grid;
+        for (let x = 0; x < size; x++) {
+          const fx = x / size * grid, x0 = Math.floor(fx), tx = sm(fx - x0);
+          const xa = x0 % grid, xb = (x0 + 1) % grid;
+          const v = (lat[ya + xa] * (1 - tx) + lat[ya + xb] * tx) * (1 - ty)
+                  + (lat[yb + xa] * (1 - tx) + lat[yb + xb] * tx) * ty;
+          h[y * size + x] += v * amp;
+        }
+      }
+    };
+    // Four octaves: broad mottling down to grain.
+    octave(4, 0.50); octave(9, 0.26); octave(23, 0.15); octave(61, 0.09);
+    return h;
+  }
+
   terrainDetail() {
     return this.cached('terrainDetail', () => {
       const size = 512;
+      const h = this._groundField(size, 99);
       const c = this._canvas(size, size);
       const ctx = c.getContext('2d');
-      const rng = new RNG(99);
-      ctx.fillStyle = '#8a8a8a'; ctx.fillRect(0, 0, size, size);
-      for (let i = 0; i < 5200; i++) {
-        const v = Math.floor(rng.float(96, 176));
-        ctx.fillStyle = `rgba(${v},${v},${v},${rng.float(0.04, 0.18)})`;
-        const s = rng.float(2, 22);
-        ctx.fillRect(rng.float(0, size), rng.float(0, size), s, s * rng.float(0.4, 1.6));
+      const img = ctx.createImageData(size, size);
+      const rng = new RNG(1301);
+      for (let i = 0; i < size * size; i++) {
+        // Centre on mid-grey: the material tints this, so the map must only
+        // carry variation, never the ground's actual colour.
+        const v = clamp01(0.5 + (h[i] - 0.5) * 0.95);
+        // Fine grain on top, so the surface still has texture at ground level
+        // where the octaves themselves are already stretched thin.
+        const grain = (rng.next() - 0.5) * 0.09;
+        const b = Math.round(clamp01(v + grain) * 255);
+        const o = i * 4;
+        // A faint warm/cool split across the range makes the ground read as
+        // soil and stone rather than as grey with the biome colour painted on.
+        img.data[o] = Math.min(255, b + 8);
+        img.data[o + 1] = b;
+        img.data[o + 2] = Math.max(0, b - 7);
+        img.data[o + 3] = 255;
       }
+      ctx.putImageData(img, 0, 0);
       // Tiled tightly across each terrain tile: at repeat 1 the pattern spans
       // kilometres and reads as dithering rather than ground detail.
-      return this._finish(c, { repeat: 26, aniso: 8 });
+      return this._finish(c, { repeat: 23, aniso: 8 });
+    });
+  }
+
+  /**
+   * Normal map for the ground, derived from the same field as the albedo, so
+   * the bumps you can see are the bumps that catch the light. This is the
+   * single biggest lift in how solid the terrain reads from low altitude.
+   */
+  terrainNormal() {
+    return this.cached('terrainNormal', () => {
+      const size = 512;
+      const h = this._groundField(size, 99);
+      const c = this._canvas(size, size);
+      const ctx = c.getContext('2d');
+      const img = ctx.createImageData(size, size);
+      const S = 2.6;                                  // slope strength
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          const l = h[y * size + ((x - 1 + size) % size)];
+          const r = h[y * size + ((x + 1) % size)];
+          const u = h[((y - 1 + size) % size) * size + x];
+          const d = h[((y + 1) % size) * size + x];
+          const nx = clamp01(0.5 + (l - r) * S);
+          const ny = clamp01(0.5 + (d - u) * S);
+          const o = (y * size + x) * 4;
+          img.data[o] = Math.round(nx * 255);
+          img.data[o + 1] = Math.round(ny * 255);
+          img.data[o + 2] = 255;
+          img.data[o + 3] = 255;
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+      // A DIFFERENT repeat from the albedo on purpose. Matching them makes the
+      // two patterns beat together into a visible corduroy across the ground;
+      // decorrelating the tiling breaks that up into surface noise.
+      return this._finish(c, { repeat: 17, aniso: 8, srgb: false });
     });
   }
 
@@ -585,8 +663,15 @@ export class MaterialLibrary {
 
   terrain() {
     return this.cached('terrain', () => this._track(new THREE.MeshStandardMaterial({
-      vertexColors: true, roughness: 0.92, metalness: 0.02,
+      vertexColors: true, roughness: 0.94, metalness: 0.02,
       map: this.tex.terrainDetail(), envMapIntensity: 0.95,
+      // Relief on the ground surface itself. The clipmap mesh is far too
+      // coarse to carry this geometrically at any sane vertex budget, so the
+      // normal map is what turns a shaded plane into terrain you can read.
+      normalMap: this.tex.terrainNormal(),
+      // Restrained: the ground is seen from hundreds of metres up at Mach 15,
+      // where a strong normal map turns into shimmer rather than detail.
+      normalScale: new THREE.Vector2(0.62, 0.62),
     })));
   }
 
@@ -1198,8 +1283,14 @@ export class PostFX {
     const speed01 = clamp01(state.speed01 ?? 0);
     const boost = clamp01(state.boost ?? 0);
     const motion = state.reducedMotion ? 0.35 : 1;
+    // Blur is driven by MACH rather than by throttle position: it keeps
+    // building through Mach 2, 3, 4 … and saturates at Mach 15, so speed still
+    // reads as speed long after the throttle is already firewalled. The
+    // shader's radial mask holds the middle of the frame crisp, so the smear
+    // can be this heavy at the edges without hiding anything you need to fly.
+    const mach01 = clamp01(state.mach01 ?? speed01);
     const target = this.motionBlurEnabled
-      ? (Math.pow(speed01, 1.9) * 0.070 + boost * 0.030) * intensity * motion
+      ? (Math.pow(mach01, 1.45) * 0.125 + boost * 0.032) * intensity * motion
       : 0;
     u.uBlur.value = damp(u.uBlur.value, target, 8, dt);
     // The nitrous blur is deliberately its own channel rather than more of the
@@ -1230,8 +1321,10 @@ export class PostFX {
     u.uCamVel.value.lerp(this._camVel, clamp01(dt * 26));
     this._prevCamQuat.copy(cam.quaternion);
 
+    // Speed lines follow Mach too — they start showing around Mach 6 and are
+    // fully drawn by the time the blur saturates.
     const sl = this.motionBlurEnabled
-      ? clamp01((speed01 - 0.55) / 0.45) * (0.5 + boost * 0.7) * intensity * (state.reducedMotion ? 0.3 : 1)
+      ? clamp01((mach01 - 0.35) / 0.55) * (0.5 + boost * 0.7) * intensity * (state.reducedMotion ? 0.3 : 1)
       : 0;
     u.uSpeedLines.value = damp(u.uSpeedLines.value, sl, 6, dt);
 
@@ -1285,10 +1378,10 @@ export class PostFX {
  * `rigid` modes are bolted to the aircraft; `hideSelf` hides the airframe
  * entirely, which is what makes the first-person view first-person.
  */
+// Two views only, so a single C press is a straight toggle between them
+// rather than a walk through a list.
 const CAM_MODES = [
   { id: 'chase', name: 'Chase', dist: 12.8, height: 3.3, look: 35, fov: 64 },
-  { id: 'close', name: 'Close', dist: 8.6, height: 2.1, look: 24, fov: 61 },
-  { id: 'far', name: 'Wide Chase', dist: 21.8, height: 5.6, look: 47, fov: 69 },
   { id: 'fpv', name: 'First Person', dist: -3.6, height: 1.15, look: 240, fov: 82, rigid: true, hideSelf: true },
 ];
 
@@ -1306,6 +1399,7 @@ export class CameraRig {
     this.rollBlend = 0;
     this.fov = 66;
     this.baseFov = 66;
+    this.zoom = 1;              // live dolly multiplier on the chase distance
     this.sensitivity = 1;
     this.reducedMotion = false;
     this.cinematic = null;
@@ -1347,12 +1441,22 @@ export class CameraRig {
     const boost = clamp01(params.boost ?? 0);
     const q = target.quaternion;
 
+    // --- live gameplay zoom ------------------------------------------------
+    // The chase camera dollies IN as the jet accelerates and harder still under
+    // reheat, so speed reads as the world tearing past the canopy instead of
+    // the airframe shrinking away from you. It rushes in fast on the burner
+    // and eases back out slowly, which is what gives the shove its punch.
+    const zoomTarget = 1 - speed01 * 0.17 - boost * 0.28 - clamp01(params.machZoom ?? 0) * 0.13;
+    this.zoom = this.initialised
+      ? damp(this.zoom, zoomTarget, zoomTarget < this.zoom ? 7.0 : 2.4, dt)
+      : zoomTarget;
+
     // --- desired camera position in aircraft space ------------------------
     // A rigid (first-person) eye point must not drift forward with speed —
     // it is a fixed seat in the airframe, not a chase distance.
     const distance = m.rigid ? m.dist
-      : m.dist * (1 + speed01 * 0.20 + boost * 0.10) * (params.distanceScale ?? 1);
-    const height = m.rigid ? m.height : m.height * (1 + speed01 * 0.10);
+      : m.dist * this.zoom * (params.distanceScale ?? 1);
+    const height = m.rigid ? m.height : m.height * (1 + speed01 * 0.10) * lerp(1, this.zoom, 0.7);
     this._offset.set(0, height, distance);
     // Trail slightly outside the turn so the airframe reads against the sky.
     if (!m.rigid) this._offset.x += (params.lateral ?? 0) * -3.2;
@@ -1405,7 +1509,8 @@ export class CameraRig {
     }
 
     // --- dynamic FOV ------------------------------------------------------
-    const fovTarget = m.fov + speed01 * 12 + boost * 13 + (params.fovBoost ?? 0);
+    const fovTarget = m.fov + speed01 * 12 + boost * 13
+      + clamp01(params.machZoom ?? 0) * 9 + (params.fovBoost ?? 0);
     this.fov = damp(this.fov, this.reducedMotion ? m.fov + speed01 * 4 : fovTarget, 4.5, dt);
     if (Math.abs(this.camera.fov - this.fov) > 0.01) {
       this.camera.fov = this.fov;
@@ -2303,6 +2408,66 @@ export class Afterburner {
     this.outer = mkCone(radius * 0.88, radius * 7.0);
     this.inner = mkCone(radius * 0.44, radius * 3.6);
     this.group.add(this.outer, this.inner);
+
+    /* --- nitrous fire ------------------------------------------------------
+     * Reheat is not just a brighter version of dry thrust — it is combustion
+     * happening behind the aircraft. This is a separate, much longer plume
+     * that only exists while the nitrous is lit: real fire colours running
+     * white-hot at the nozzle out through yellow, orange and red to soot, with
+     * layered turbulence so the flame boils rather than glows.
+     * -------------------------------------------------------------------- */
+    const fg = new THREE.ConeGeometry(radius * 1.24, radius * 15.0, 16, 8, true);
+    fg.rotateX(-Math.PI / 2);
+    fg.translate(0, 0, radius * 7.5);
+    this.flame = new THREE.Mesh(fg, new THREE.ShaderMaterial({
+      uniforms: this.uniforms,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      vertexShader: /* glsl */`
+        varying vec2 vUv; varying vec3 vN; varying vec3 vV;
+        uniform float uTime, uBoost;
+        void main(){
+          vUv = uv;
+          vec3 p = position;
+          // The plume only exists under reheat: it shoots out of the nozzle
+          // when lit and collapses back into it when cut.
+          p.z *= uBoost;
+          // Flapping: the flame whips as the combustion front moves down it.
+          float w = uv.y * uv.y;
+          p.x += sin(uTime * 21.0 + uv.y * 12.0) * w * 0.9;
+          p.y += cos(uTime * 17.3 + uv.y * 9.5) * w * 0.7;
+          p.xy *= 1.0 + w * 0.55;
+          vec4 wp = modelMatrix * vec4(p, 1.0);
+          vN = normalize(mat3(modelMatrix) * normal);
+          vV = normalize(cameraPosition - wp.xyz);
+          gl_Position = projectionMatrix * viewMatrix * wp;
+        }`,
+      fragmentShader: /* glsl */`
+        uniform float uTime, uBoost; varying vec2 vUv; varying vec3 vN; varying vec3 vV;
+        float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+        float noise(vec2 p){
+          vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+          return mix(mix(hash(i), hash(i+vec2(1,0)), f.x),
+                     mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y);
+        }
+        void main(){
+          float t = vUv.y;
+          // Turbulence scrolling backwards down the plume at two rates.
+          float n = noise(vec2(vUv.x * 8.0, t * 5.0 - uTime * 7.0)) * 0.6
+                  + noise(vec2(vUv.x * 19.0, t * 13.0 - uTime * 15.0)) * 0.4;
+          // Fire ramp: white core, then yellow, orange, red, soot.
+          vec3 col = mix(vec3(1.6, 1.45, 1.15), vec3(1.5, 0.86, 0.22), smoothstep(0.0, 0.22, t));
+          col = mix(col, vec3(1.25, 0.34, 0.05), smoothstep(0.18, 0.55, t));
+          col = mix(col, vec3(0.45, 0.06, 0.01), smoothstep(0.5, 0.95, t));
+          float edge = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 1.1);
+          // Burn the tail away with the noise so the flame ends ragged.
+          float a = (1.0 - smoothstep(0.0, 0.92, t)) * (0.22 + edge * 0.5);
+          a *= smoothstep(0.30, 0.85, n + (1.0 - t) * 0.55);
+          gl_FragColor = vec4(col, clamp(a * uBoost * 1.25, 0.0, 0.92));
+        }`,
+    }));
+    this.flame.visible = false;
+    this.group.add(this.flame);
     this.group.renderOrder = 6;
   }
   update(dt, intensity, boost) {
@@ -2310,6 +2475,7 @@ export class Afterburner {
     this.uniforms.uIntensity.value = damp(this.uniforms.uIntensity.value, intensity, 12, dt);
     this.uniforms.uBoost.value = damp(this.uniforms.uBoost.value, boost, 8, dt);
     this.group.visible = this.uniforms.uIntensity.value > 0.02;
+    this.flame.visible = this.uniforms.uBoost.value > 0.02;
   }
   dispose() {
     this.group.traverse((n) => { n.geometry?.dispose(); n.material?.dispose(); });

@@ -453,6 +453,39 @@ class SFXKit {
         this._noise({ dur: 0.14, gain: 0.24 * v, type: 'lowpass', freq: 420, sweep: 900, q: 1.2 });
         this._noise({ dur: 0.75, gain: 0.19 * v, type: 'bandpass', freq: 260, sweep: 1500, q: 1.1, delay: 0.05 });
         break;
+      case 'burnerLight': {
+        // The fire itself: raw fuel dumped into the jet pipe going off. A hard
+        // percussive crack, a low detonation body that drops an octave, then a
+        // long roaring wash of flame that decays as the plume stabilises. This
+        // is deliberately loud — it is the loudest single event in the game.
+        if (!this._guard('burnerLight', 300)) return;
+        this._noise({ dur: 0.055, gain: 0.52 * v, type: 'highpass', freq: 2600, sweep: 5200, attack: 0.001 });
+        this._tone({ freq: 132, type: 'sawtooth', dur: 0.30, gain: 0.40 * v, sweep: -96, attack: 0.002,
+          filter: { type: 'lowpass', freq: 900, sweep: -520, q: 2.2 } });
+        this._tone({ freq: 47, type: 'sine', dur: 0.90, gain: 0.46 * v, sweep: -17, attack: 0.004 });
+        // The flame front: broadband roar opening up and then burning down.
+        this._noise({ dur: 0.34, gain: 0.40 * v, type: 'lowpass', freq: 380, sweep: 3400, q: 0.9, attack: 0.003 });
+        this._noise({ dur: 1.30, gain: 0.30 * v, type: 'bandpass', freq: 520, sweep: -390, q: 0.55, delay: 0.06 });
+        this._noise({ dur: 0.95, gain: 0.15 * v, type: 'highpass', freq: 3200, sweep: -2100, delay: 0.03 });
+        break;
+      }
+      case 'gearShift': {
+        // Jet gear change: the accessory gearbox stepping up a ratio. Heavy
+        // mechanical engagement — a bass thump with a metallic dog-clutch bite
+        // over it, then the shaft settling at the new speed.
+        if (!this._guard('gearShift', 300)) return;
+        this._tone({ freq: 74, type: 'square', dur: 0.20, gain: 0.44 * v, sweep: -26, attack: 0.002,
+          filter: { type: 'lowpass', freq: 260, q: 3.0 } });
+        this._tone({ freq: 38, type: 'sine', dur: 0.55, gain: 0.44 * v, sweep: 22, attack: 0.006 });
+        // Clutch bite: short, hard, high — the metal-on-metal engagement.
+        this._noise({ dur: 0.045, gain: 0.26 * v, type: 'bandpass', freq: 3100, sweep: -1500, q: 5.0, attack: 0.001 });
+        this._tone({ freq: 196, type: 'sawtooth', dur: 0.10, gain: 0.17 * v, sweep: -78, delay: 0.012,
+          filter: { type: 'lowpass', freq: 1500, q: 4 } });
+        // Shaft spinning up into the new ratio behind it.
+        this._tone({ freq: 118, type: 'triangle', dur: 0.46, gain: 0.20 * v, sweep: 168, delay: 0.05,
+          filter: { type: 'lowpass', freq: 900, sweep: 700, q: 2.6 } });
+        break;
+      }
       case 'boostOut':
         // Reheat cut — the plume collapses.
         if (!this._guard('boostOut', 340)) return;
@@ -476,6 +509,49 @@ class SFXKit {
         if (!this._guard('stallWarn', 900)) return;
         this._tone({ freq: 740, type: 'square', dur: 0.11, gain: 0.06 * v, filter: { type: 'lowpass', freq: 2000 } });
         this._tone({ freq: 560, type: 'square', dur: 0.11, gain: 0.06 * v, delay: 0.14, filter: { type: 'lowpass', freq: 2000 } });
+        break;
+      /* ---- weapons ---- */
+      case 'gunFire':
+        // Rotary cannon: a hard mechanical crack per pair of rounds, with the
+        // muzzle blast under it. Guarded tightly so a held trigger stays a
+        // single continuous rip rather than a wall of overlapping copies.
+        if (!this._guard('gunFire', 55)) return;
+        this._noise({ dur: 0.045, gain: 0.20 * v, type: 'highpass', freq: 2400, sweep: -1200, attack: 0.001 });
+        this._tone({ freq: 168, type: 'square', dur: 0.055, gain: 0.15 * v, sweep: -74, attack: 0.001,
+          filter: { type: 'lowpass', freq: 1300, q: 2.4 } });
+        break;
+      case 'gunFireDistant':
+        // Somebody else's guns: no muzzle crack, just the report arriving.
+        if (!this._guard('gunFireDistant', 130)) return;
+        this._noise({ dur: 0.16, gain: 0.09 * v, type: 'bandpass', freq: 620, sweep: -320, q: 1.1 });
+        break;
+      case 'missileLaunch':
+        // Rail release, then the motor lighting and departing.
+        if (!this._guard('missileLaunch', 140)) return;
+        this._noise({ dur: 0.06, gain: 0.22 * v, type: 'highpass', freq: 3000, sweep: -1500, attack: 0.001 });
+        this._noise({ dur: 0.95, gain: 0.26 * v, type: 'bandpass', freq: 900, sweep: -720, q: 0.8, delay: 0.03 });
+        this._tone({ freq: 210, type: 'sawtooth', dur: 0.70, gain: 0.16 * v, sweep: -140, delay: 0.02,
+          filter: { type: 'lowpass', freq: 1600, sweep: -1100 } });
+        break;
+      case 'grenadeThrow':
+        if (!this._guard('grenadeThrow', 140)) return;
+        this._noise({ dur: 0.14, gain: 0.17 * v, type: 'bandpass', freq: 1400, sweep: -900, q: 1.6 });
+        this._tone({ freq: 320, type: 'triangle', dur: 0.20, gain: 0.10 * v, sweep: -180 });
+        break;
+      case 'lockTone':
+        // The seeker acquiring: the steady tone every pilot knows.
+        if (!this._guard('lockTone', 420)) return;
+        for (let i = 0; i < 3; i++) {
+          this._tone({ freq: 1320, type: 'square', dur: 0.055, gain: 0.055 * v, delay: i * 0.075,
+            filter: { type: 'lowpass', freq: 3200 } });
+        }
+        this._tone({ freq: 1980, type: 'sine', dur: 0.26, gain: 0.05 * v, delay: 0.23 });
+        break;
+      case 'lockWarn':
+        // Somebody has a lock on YOU.
+        if (!this._guard('lockWarn', 900)) return;
+        this._tone({ freq: 640, type: 'sawtooth', dur: 0.13, gain: 0.09 * v, filter: { type: 'lowpass', freq: 1800 } });
+        this._tone({ freq: 640, type: 'sawtooth', dur: 0.13, gain: 0.09 * v, delay: 0.19, filter: { type: 'lowpass', freq: 1800 } });
         break;
       case 'gearLock':
         this._noise({ dur: 0.16, gain: 0.10 * v, type: 'bandpass', freq: 1100, sweep: -600, q: 2.4 });

@@ -114,6 +114,20 @@
 .card-tag.lockTag { border-color: rgba(255, 255, 255, 0.2); color: var(--text-faint); }
 .card-desc { font-size: 0.74rem; color: var(--text-faint); line-height: 1.55; }
 .card-meta { margin-top: auto; display: flex; gap: 12px; font-family: var(--font-num); font-size: 0.66rem; color: var(--text-dim); letter-spacing: 0.06em; }
+
+/* Mode briefing: objectives beside the ways the run can end. */
+.mode-brief { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }
+.brief-col { min-width: 0; }
+.brief-head { display: block; font-style: normal; font-size: 0.56rem; letter-spacing: 0.2em; margin-bottom: 3px; }
+.brief-head.good { color: var(--lime); }
+.brief-head.bad { color: var(--red); }
+.mode-brief ul { list-style: none; margin: 0; padding: 0; }
+.mode-brief li {
+  position: relative; padding-left: 9px; font-size: 0.62rem; line-height: 1.45;
+  color: var(--text-faint);
+}
+.mode-brief li::before { content: "›"; position: absolute; left: 0; opacity: 0.6; }
+@media (max-width: 720px) { .mode-brief { grid-template-columns: 1fr; } }
 .card-swatch { position: absolute; right: 12px; top: 12px; width: 26px; height: 6px; border-radius: 3px; }
 
 /* ---- aircraft selector --------------------------------------------------- */

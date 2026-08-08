@@ -13,7 +13,7 @@ import {
   AIRCRAFT, AIRCRAFT_BY_ID, BIOMES, BIOMES_BY_ID, MODES, MODE_ORDER,
   DIFFICULTIES, DIFFICULTY_ORDER, POWERS, WEATHER, CAMPAIGN, ACHIEVEMENTS,
   QUALITY_ORDER, QUALITY_PRESETS, BINDING_LABELS, DEFAULT_BINDINGS, TIPS,
-  GAME_NAME, VERSION, clamp, clamp01, lerp, TAU,
+  CONTROL_LEGEND, MACH, WEAPONS, GAME_NAME, VERSION, clamp, clamp01, lerp, TAU,
 } from './config.js';
 
 /* ---- helpers ------------------------------------------------------------ */
@@ -50,6 +50,22 @@ const ICONS = {
   phase: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12c0-4 3-7 7-7s7 3 7 7-3 7-7 7"/><path d="M9 5.5C6 7 4.5 9.3 4.5 12S6 17 9 18.5" stroke-dasharray="2.4 2.4"/></svg>',
   shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l7 3v6c0 4.2-2.9 7.6-7 9-4.1-1.4-7-4.8-7-9V6z"/></svg>',
   turbo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13 3L5 13h5l-1 8 8-10h-5z" fill="currentColor" stroke="none"/></svg>',
+  /* ---- control legend ---- */
+  climb: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 19V6"/><path d="M6.6 11.4L12 5.6l5.4 5.8"/></svg>',
+  dive: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 5v13"/><path d="M6.6 12.6L12 18.4l5.4-5.8"/></svg>',
+  leanL: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M20 9L11 13.5 4 10.5l7-2z"/><path d="M11 13.5v4l3 2"/></svg>',
+  leanR: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 9l9 4.5 7-3-7-2z"/><path d="M13 13.5v4l-3 2"/></svg>',
+  rollL: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M19 12a7 7 0 1 0-2.4 5.3"/><path d="M5 8v4h4"/></svg>',
+  rollR: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12a7 7 0 1 1 2.4 5.3"/><path d="M19 8v4h-4"/></svg>',
+  throttle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 19h16"/><path d="M7 19V9M12 19V5M17 19v-7"/></svg>',
+  brake: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="8"/><path d="M8.4 8.4l7.2 7.2M15.6 8.4l-7.2 7.2"/></svg>',
+  gun: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 10h11l3-2v6l-3-2H3z"/><path d="M17 12h4"/><path d="M6 14v3"/></svg>',
+  missile: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M20 4c-6 .6-10 3.4-13 7l3 3c3.6-3 6.4-7 10-10z"/><path d="M8 16l-3-3-2 6z"/><path d="M11 6l3 3"/></svg>',
+  weaponSel: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3.5" y="6" width="17" height="5" rx="1.4"/><rect x="3.5" y="13" width="17" height="5" rx="1.4"/><path d="M7 8.5h3M7 15.5h3"/></svg>',
+  lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"/><circle cx="12" cy="12" r="2.6"/></svg>',
+  camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8.5h3.4L8 6.4h5.4L15 8.5H18a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="11.5" cy="13" r="3"/></svg>',
+  expand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="7" y="5" width="3.4" height="14" rx="1"/><rect x="13.6" y="5" width="3.4" height="14" rx="1"/></svg>',
   play: '▶', mode: '◈', diff: '▲', loc: '◎', craft: '✈', daily: '★',
   camp: '❐', ach: '✦', stats: '▤', set: '⚙', help: '?', cred: '©',
 };
@@ -218,12 +234,26 @@ export class UI {
       cpOff: $('#cp-offscreen'),
       powerRack: $('#power-rack'),
       touchPowers: $('#touch-powers'),
+      targetLayer: $('#target-layer'),
+      combat: $('#hud-combat'),
+      lockStrip: $('#lock-strip'),
+      lockText: $('#lock-text'),
+      wpnName: $('#wpn-name'),
+      wpnReload: $('#wpn-reload-fill'),
+      cbtWave: $('#cbt-wave'),
+      cbtKills: $('#cbt-kills'),
+      cbtHostiles: $('#cbt-hostiles'),
+      brief: $('#hud-brief'),
+      controls: $('#hud-controls'),
+      machBlock: $('#hud-mach-block'),
+      machValue: $('#hud-mach'),
     };
     this.radarCtx = this.dom.radar.getContext('2d');
 
     this._buildCompass();
     this._buildGauges();
     this._buildPowerRack();
+    this.buildControlLegend();
     this._buildOnboarding();
     this._buildMenuNav();
     this._bindStatic();
@@ -252,6 +282,36 @@ export class UI {
     this.currentScreen = name;
     if (name === 'menu') this._renderMenuPanel();
     this.dom.body.classList.toggle('in-game', name === 'none' || name === 'pause');
+  }
+
+  /**
+   * Draw the always-on control strip top-left from the LIVE bindings, so a
+   * rebound key shows its new cap without a reload. Combat entries are marked
+   * so they can be hidden in modes that have no weapons.
+   */
+  buildControlLegend(showCombat = true) {
+    const host = this.dom.controls;
+    if (!host) return;
+    this._legendCombat = showCombat;
+    const binds = this.save.data.settings.bindings || {};
+    const frag = document.createDocumentFragment();
+    for (const entry of CONTROL_LEGEND) {
+      if (entry.sep) { frag.appendChild(el('div', 'ctl-sep')); continue; }
+      if (entry.combat && !showCombat) continue;
+      const codes = binds[entry.action] || DEFAULT_BINDINGS[entry.action] || [];
+      // Only the primary binding gets a cap — two caps per control turns the
+      // strip into a wall of text.
+      const caps = entry.keyOverride ? [entry.keyOverride] : [prettyKey(codes[0])];
+      const box = el('div', 'ctl');
+      box.title = BINDING_LABELS[entry.action] || entry.short;
+      box.innerHTML = ICONS[entry.icon] || '';
+      const keys = el('div', 'ctl-keys');
+      for (const k of caps) keys.appendChild(el('span', 'ctl-key', k));
+      box.appendChild(keys);
+      box.appendChild(el('span', 'ctl-name', entry.short));
+      frag.appendChild(box);
+    }
+    host.replaceChildren(frag);
   }
 
   setHudVisible(v) {
@@ -505,6 +565,8 @@ export class UI {
         <div class="stat-tile"><i>Best Score</i><b>${nf(st.bestScore)}</b></div>
         <div class="stat-tile"><i>Best Distance</i><b>${(st.bestDistance / 1000).toFixed(2)} km</b></div>
         <div class="stat-tile"><i>Top Speed</i><b>${nf(st.bestSpeedKmh)} km/h</b></div>
+        <div class="stat-tile"><i>Top Mach</i><b>M ${(st.bestMach || 0).toFixed(1)}</b></div>
+        <div class="stat-tile"><i>Total Kills</i><b>${nf(st.totalKills || 0)}</b></div>
         <div class="stat-tile"><i>Runs</i><b>${nf(st.totalRuns)}</b></div>
         <div class="stat-tile"><i>Podiums</i><b>${nf(st.podiums)}</b></div>
         <div class="stat-tile"><i>Credits</i><b>${nf(s.credits)}</b></div>
@@ -516,17 +578,32 @@ export class UI {
     const cards = MODE_ORDER.map((id) => {
       const m = MODES[id];
       const sel = s.selectedMode === id ? ' selected' : '';
+      // Modes that can be lost in mode-specific ways spell out both sides of
+      // the contract on the card: what you are trying to do, and what ends it.
+      const brief = (m.objectives || m.gameOver) ? `
+        <div class="mode-brief">
+          ${m.objectives ? `<div class="brief-col">
+            <i class="brief-head good">OBJECTIVES</i>
+            <ul>${m.objectives.map((o) => `<li>${o}</li>`).join('')}</ul>
+          </div>` : ''}
+          ${m.gameOver ? `<div class="brief-col">
+            <i class="brief-head bad">GAME OVER</i>
+            <ul>${m.gameOver.map((o) => `<li>${o}</li>`).join('')}</ul>
+          </div>` : ''}
+        </div>` : '';
       return `<button class="card${sel}" data-mode="${id}">
         <div class="card-title"><b>${m.name}</b>${m.tag ? `<span class="card-tag">${m.tag}</span>` : ''}</div>
         <div class="card-desc">${m.desc}</div>
+        ${brief}
         <div class="card-meta">
-          <span>${m.hasRivals ? 'RIVALS' : 'SOLO'}</span>
+          <span>${m.combat ? 'COMBAT' : m.hasRivals ? 'RIVALS' : 'SOLO'}</span>
           <span>${m.hasLaps ? `${m.laps} LAPS` : m.hasTimer ? 'TIMED' : 'OPEN'}</span>
           <span>${m.failOnDamage ? 'FAILABLE' : 'NO FAIL'}</span>
         </div>
       </button>`;
     }).join('');
-    return `${this._head('GAME MODE', 'Six ways to fly the same procedural generator. Endless Flight is the default and the deepest.')}
+    return `${this._head('GAME MODE',
+      `${MODE_ORDER.length} ways to fly the same procedural generator. Endless Battle and Endless Race are the new combat modes; Endless Flight is the default.`)}
       <div class="card-grid wide stagger">${cards}</div>`;
   }
 
@@ -699,7 +776,9 @@ export class UI {
       ['Near Misses', nf(st.totalNearMisses)], ['Overtakes', nf(st.totalOvertakes)],
       ['Wins', nf(st.wins)], ['Podiums', nf(st.podiums)], ['Crashes', nf(st.crashes)],
       ['Best Score', nf(st.bestScore)], ['Best Distance', `${(st.bestDistance / 1000).toFixed(2)} km`],
-      ['Top Speed', `${nf(st.bestSpeedKmh)} km/h`], ['Best Combo', `×${st.bestCombo}`],
+      ['Top Speed', `${nf(st.bestSpeedKmh)} km/h`], ['Top Mach', `M ${(st.bestMach || 0).toFixed(1)}`],
+      ['Enemies Destroyed', nf(st.totalKills || 0)], ['Manoeuvres Flown', nf(st.totalManoeuvres || 0)],
+      ['Best Combo', `×${st.bestCombo}`],
       ['Clean Streak', nf(st.bestCleanStreak)], ['Longest Survival', formatTime(st.bestSurvivalTime, false)],
       ['Venues Visited', `${Object.keys(st.biomesVisited || {}).length} / ${BIOMES.length}`],
     ].map(([k, v]) => `<div class="stat-tile"><i>${k}</i><b>${v}</b></div>`).join('');
@@ -1093,6 +1172,90 @@ export class UI {
   }
 
   /** Per-frame HUD refresh. Only touches the DOM when a value actually moved. */
+  /**
+   * Combat overlay: one bracket per hostile with its live speed in Mach and
+   * km/h, plus the weapon and lock strip along the bottom.
+   *
+   * Target boxes are recycled rather than rebuilt — a wave of nine hostiles at
+   * 60 Hz is 540 element creations a second otherwise, which is exactly the
+   * kind of churn that shows up as a stutter.
+   */
+  updateCombatHud(s) {
+    const host = this.dom.targetLayer;
+    if (!host) return;
+    this.dom.combat.classList.add('active');
+
+    const pool = (this._tgtPool ||= []);
+    while (pool.length < s.boxes.length) {
+      const n = el('div', 'tgt');
+      n.innerHTML = '<i></i><i></i><i></i><i></i>'
+        + '<div class="tgt-hull"><b></b></div>'
+        + '<div class="tgt-lock-label">TARGET LOCKED</div>'
+        + '<div class="tgt-info"><span class="mach"></span> · <span class="kmh"></span></div>';
+      host.appendChild(n);
+      pool.push({
+        root: n, hull: n.querySelector('.tgt-hull b'),
+        label: n.querySelector('.tgt-lock-label'),
+        mach: n.querySelector('.mach'), kmh: n.querySelector('.kmh'),
+      });
+    }
+    for (let i = 0; i < pool.length; i++) {
+      const p = pool[i], b = s.boxes[i];
+      if (!b) { p.root.style.display = 'none'; continue; }
+      p.root.style.display = '';
+      p.root.style.left = `${b.x}%`;
+      p.root.style.top = `${b.y}%`;
+      // Distant hostiles get a smaller bracket, which reads as depth.
+      const sc = clamp(1.15 - b.dist / 9000, 0.45, 1.15);
+      p.root.style.transform = `translate(-50%, -50%) scale(${sc.toFixed(2)})`;
+      p.root.classList.toggle('locked', !!b.locked);
+      p.root.classList.toggle('tracking', !!b.tracking && !b.locked);
+      p.hull.style.width = `${Math.round(b.health * 100)}%`;
+      p.label.style.display = b.locked ? '' : 'none';
+      p.mach.textContent = `M ${b.mach}`;
+      p.kmh.textContent = `${b.kmh.toLocaleString('en-US')} km/h`;
+    }
+
+    const strip = this.dom.lockStrip;
+    strip.classList.toggle('locked', !!s.locked);
+    strip.classList.toggle('tracking', !s.locked && s.lock > 0.02);
+    this.dom.lockText.textContent = s.locked ? 'TARGET LOCKED'
+      : s.lock > 0.02 ? `ACQUIRING ${Math.round(s.lock * 100)}%` : 'NO TARGET';
+    this.dom.wpnName.textContent = (s.weapon?.name || '').toUpperCase();
+    this.dom.wpnReload.style.width = `${Math.round(clamp01(s.reload) * 100)}%`;
+    this.dom.cbtWave.textContent = String(s.wave);
+    this.dom.cbtKills.textContent = String(s.kills);
+    this.dom.cbtHostiles.textContent = String(s.hostiles);
+  }
+
+  /** Tear the combat overlay down when a non-combat mode starts. */
+  clearCombatHud() {
+    this.dom.combat?.classList.remove('active');
+    if (this._tgtPool) for (const p of this._tgtPool) p.root.style.display = 'none';
+  }
+
+  /**
+   * Pin the mode's objectives and its game-over conditions to the HUD for the
+   * whole run — the same two lists the main-menu card shows, so what ends the
+   * run is never something the player has to have memorised.
+   */
+  setModeBrief(mode) {
+    // Weapons only exist in the combat modes, so the touch rack follows suit.
+    this.dom.body.classList.toggle('combat-mode', !!mode?.combat);
+    const b = this.dom.brief;
+    if (!b) return;
+    if (!mode || (!mode.objectives && !mode.gameOver)) {
+      b.classList.remove('active');
+      b.innerHTML = '';
+      return;
+    }
+    b.innerHTML = `${mode.objectives ? `<h5 class="good">OBJECTIVES</h5>
+      <ul>${mode.objectives.map((o) => `<li>${o}</li>`).join('')}</ul>` : ''}
+      ${mode.gameOver ? `<h5 class="bad">GAME OVER IF</h5>
+      <ul>${mode.gameOver.map((o) => `<li>${o}</li>`).join('')}</ul>` : ''}`;
+    b.classList.add('active');
+  }
+
   updateHUD(s) {
     if (!this.hudVisible) return;
     const c = this._hudCache || (this._hudCache = {});
@@ -1105,13 +1268,19 @@ export class UI {
     // Solo modes have no grid — show the checkpoint count in that slot instead
     // of a meaningless "1 / 1".
     const solo = s.gridSize <= 1;
-    set('pos', $('#hud-pos'), solo ? String(s.checkpoints) : String(s.position));
-    set('grid', $('#hud-grid'), solo ? 'GATES' : `/ ${s.gridSize}`);
-    set('posLabel', $('.hud-position .hud-label'), solo ? 'CHECKPOINTS' : 'POSITION');
+    set('pos', $('#hud-pos'), solo ? String(s.soloValue ?? s.checkpoints) : String(s.position));
+    set('grid', $('#hud-grid'), solo ? (s.soloUnit || 'GATES') : `/ ${s.gridSize}`);
+    set('posLabel', $('.hud-position .hud-label'), solo ? (s.soloLabel || 'CHECKPOINTS') : 'POSITION');
     set('score', $('#hud-score'), nf(s.score));
     set('dist', $('#hud-distance'), `${(s.distance / 1000).toFixed(2)} km`);
     set('cps', $('#hud-checkpoints'), String(s.checkpoints));
     set('spd', $('#hud-speed'), String(Math.round(s.speedKmh)));
+    const mach = s.mach || 0;
+    set('mach', this.dom.machValue, mach.toFixed(1));
+    if (this.dom.machBlock) {
+      this.dom.machBlock.classList.toggle('hot', mach >= MACH.blurMach);
+      this.dom.machBlock.classList.toggle('max', mach >= MACH.max - 1);
+    }
     set('alt', $('#hud-altitude'), String(Math.round(s.altitude)));
     set('hdg', $('#hud-heading'), String(Math.round(s.heading)).padStart(3, '0'));
     set('timer', $('#hud-timer'), s.timerText);
@@ -1130,8 +1299,8 @@ export class UI {
     }
     comboEl.classList.toggle('hot', s.combo >= 2.2);
 
-    // gauges
-    const spdT = clamp01(s.speedKmh / 2400);
+    // gauges — the speed arc reads across the whole Mach envelope
+    const spdT = clamp01(mach / MACH.max);
     const altT = clamp01(s.altitude / 6000);
     const sLen = +this.spdArc.dataset.len;
     const aLen = +this.altArc.dataset.len;
@@ -1164,7 +1333,11 @@ export class UI {
 
     // terrain warning
     const warn = this.dom.warn;
-    const warnText = s.agl < 110 ? 'PULL UP' : (s.corridorOut > 1.35 ? 'OFF ROUTE' : (s.hull < 0.22 ? 'HULL CRITICAL' : ''));
+    // A mode-specific warning (speed floor, disengagement timer) outranks the
+    // generic ones — it is the thing about to end the run.
+    const warnText = s.warn || (s.agl < 110 ? 'PULL UP'
+      : (s.hasRoute !== false && s.corridorOut > 1.35 ? 'OFF ROUTE'
+        : (s.hull < 0.22 ? 'HULL CRITICAL' : '')));
     if (warnText !== c.warn) {
       c.warn = warnText;
       warn.textContent = warnText;

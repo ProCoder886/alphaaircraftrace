@@ -177,13 +177,38 @@ export const WORLD = {
   gravity: 9.81,
 };
 
+/* ===========================================================================
+ * MACH
+ * ------------------------------------------------------------------------
+ * The airframe is simulated in game units per second — a scale the terrain,
+ * corridor and streaming budget are all built around. True airspeed is
+ * reported from that through one constant: `msPerMach` units of simulated
+ * speed is one Mach, and one Mach is 1234.8 km/h. Both the HUD and every
+ * threshold in the game read Mach, so the whole envelope moves together if
+ * this number is ever retuned.
+ *
+ *   stall  ~Mach 2.1   cruise ~Mach 9   dry max ~Mach 14
+ *   reheat ~Mach 18    turbo overdrive  Mach 20 (hard ceiling)
+ * ======================================================================== */
+export const MACH = {
+  kmh: 1234.8,                 // km/h in one Mach
+  msPerMach: 35,               // simulated m/s per Mach
+  max: 20,                     // absolute ceiling for player and enemies
+  blurMach: 15,                // Mach at which motion blur and trails saturate
+  get maxMs() { return this.msPerMach * this.max; },
+  /** Simulated speed → Mach. */
+  of(ms) { return ms / this.msPerMach; },
+  /** Simulated speed → true airspeed in km/h. */
+  kmhOf(ms) { return (ms / this.msPerMach) * this.kmh; },
+};
+
 export const PHYSICS = {
   gravity: 9.81,               // m/s² — used by the flight model and crash tumble
-  // Speeds are stored in m/s internally; the HUD converts to km/h.
-  minSpeed: 74,                // ~265 km/h — stall floor, engine holds you up
-  cruiseSpeed: 320,            // ~1150 km/h
-  maxSpeed: 500,               // ~1800 km/h
-  boostSpeed: 640,             // ~2300 km/h with Turbo Overdrive stacked
+  // Speeds are stored in game units (m/s) internally; MACH converts for display.
+  minSpeed: 74,                // Mach 2.1 — stall floor, engine holds you up
+  cruiseSpeed: 320,            // Mach 9.1
+  maxSpeed: 500,               // Mach 14.3 — dry thrust ceiling
+  boostSpeed: 640,             // Mach 18.3 on reheat, Mach 20 with Turbo stacked
   baseThrust: 145,             // m/s^2 at full throttle
   brakeDecel: 190,
   dragCoefficient: 0.00042,
@@ -207,9 +232,11 @@ export const PHYSICS = {
   pitchTau: 0.20,              // s — how quickly the airframe reaches its G
   rollTau: 0.11,               // s — roll acceleration
   yawRate: 0.52,               // rad/s of rudder authority at low speed
-  leanSpeed: 170,              // m/s of sideways slip on a full lean
-  leanYaw: 0.30,               // rad/s the nose swings into the slip
-  leanBank: 0.34,              // rad the airframe visually leans with it
+  leanSpeed: 130,              // m/s of sideways slip on a full lean
+  leanYaw: 0.34,               // rad/s the nose swings into the slip
+  leanBank: 0.46,              // rad the airframe visually leans with it
+  leanAssistBank: 0.62,        // rad of bank the assist rolls in for you
+  leanAssistTurn: 0.85,        // how much of a coordinated turn the assist adds
   rollRate: 3.35,              // rad/s — ~190°/s, a real fighter roll rate
   adverseYaw: 0.020,           // yaw induced by rolling — a cue, not a turn
   inducedDrag: 260,            // energy bled by pulling G
@@ -362,7 +389,7 @@ export const AIRCRAFT = [
     id: 'warhawk', name: 'MK-29 WARHAWK', class: 'Heavy Interceptor',
     desc: 'A big twin-engine interceptor built around two enormous powerplants. It does not turn so much as re-aim, but nothing on the grid accelerates through the top of the range like it does.',
     stats: { speed: 0.94, accel: 0.90, handling: 0.66, boost: 0.92, durability: 0.82 },
-    ability: 'Ram Intakes — boost recharges 35% faster above 1400 km/h.',
+    ability: 'Ram Intakes — boost recharges 35% faster above Mach 11.',
     abilityKey: 'ramair',
     unlock: { type: 'default' },
     colors: { primary: 0x9aa3ad, secondary: 0x353c45, accent: 0x7fb8e8, emissive: 0xbfe0ff, trail: 0xbcd8f2 },
@@ -385,26 +412,10 @@ export const AIRCRAFT = [
     },
   },
   {
-    id: 'vector', name: 'AX-01 VECTOR', class: 'Balanced Interceptor',
-    desc: 'The reference airframe of the Alpha circuit. Neutral handling, forgiving recovery and a wide power band — everything a rookie needs and nothing they do not.',
-    stats: { speed: 0.62, accel: 0.66, handling: 0.70, boost: 0.62, durability: 0.66 },
-    ability: 'Adaptive Trim — auto-levelling assist is 30% stronger.',
-    abilityKey: 'trim',
-    unlock: { type: 'default' },
-    colors: { primary: 0x8d99a6, secondary: 0x252b33, accent: 0x2ff0d0, emissive: 0x39f5ff, trail: 0x63e9ff },
-    shape: {
-      length: 17.5, noseLen: 0.30, noseSharp: 1.5, bodyW: 1.55, bodyH: 1.30,
-      wingSpan: 12.4, wingSweep: 0.62, wingRoot: 5.6, wingTip: 1.5, wingDihedral: 0.03, wingPos: 0.06,
-      canard: 0.55, canardSpan: 5.0, tail: 'twin', tailSize: 1.0, tailCant: 0.42,
-      engines: 2, engineSep: 1.35, engineR: 0.86, nozzleFlare: 1.18, intake: 'side',
-      strakes: 1.0, ventral: 0.5, livery: 'stripe',
-    },
-  },
-  {
     id: 'talon', name: 'SR-9 TALON', class: 'Speed Specialist',
     desc: 'A fuselage wrapped around two oversized reheat cores. Devastating on the long sky-highways, punishing in the canyon work.',
     stats: { speed: 0.95, accel: 0.84, handling: 0.44, boost: 0.86, durability: 0.48 },
-    ability: 'Ram Air — boost recharges 35% faster above 1400 km/h.',
+    ability: 'Ram Air — boost recharges 35% faster above Mach 11.',
     abilityKey: 'ramair',
     unlock: { type: 'credits', cost: 4500 },
     colors: { primary: 0xc41f2e, secondary: 0x14161a, accent: 0xff5a3c, emissive: 0xff7a2a, trail: 0xff8a3a },
@@ -414,22 +425,6 @@ export const AIRCRAFT = [
       canard: 0.0, canardSpan: 0, tail: 'twin', tailSize: 1.15, tailCant: 0.30,
       engines: 2, engineSep: 1.5, engineR: 1.02, nozzleFlare: 1.34, intake: 'chin',
       strakes: 1.3, ventral: 0.9, livery: 'blade',
-    },
-  },
-  {
-    id: 'kestrel', name: 'KV-7 KESTREL', class: 'Agility Specialist',
-    desc: 'Forward canards, huge control authority and a body built to change direction. Threads gate chains that other frames have to slow down for.',
-    stats: { speed: 0.66, accel: 0.74, handling: 0.96, boost: 0.60, durability: 0.52 },
-    ability: 'Vector Thrust — 25% tighter turn radius while boosting.',
-    abilityKey: 'vector',
-    unlock: { type: 'credits', cost: 5200 },
-    colors: { primary: 0x2fbf4f, secondary: 0x1c2228, accent: 0x9dff4a, emissive: 0x7bff3d, trail: 0x9dff6a },
-    shape: {
-      length: 16.6, noseLen: 0.27, noseSharp: 1.3, bodyW: 1.66, bodyH: 1.34,
-      wingSpan: 14.2, wingSweep: 0.44, wingRoot: 5.0, wingTip: 2.0, wingDihedral: 0.09, wingPos: 0.08,
-      canard: 0.9, canardSpan: 6.6, tail: 'twin', tailSize: 1.1, tailCant: 0.58,
-      engines: 2, engineSep: 1.22, engineR: 0.80, nozzleFlare: 1.10, intake: 'side',
-      strakes: 0.8, ventral: 0.35, livery: 'splinter',
     },
   },
   {
@@ -921,13 +916,113 @@ export const MODES = {
     desc: 'A countdown you extend by hitting checkpoints. Every gate buys seconds, every mistake costs them.',
     hasLaps: false, hasRivals: false, hasTimer: true, startTime: 45, escalates: true, failOnDamage: true, primary: 'checkpoints',
   },
+  battle: {
+    id: 'battle', name: 'ENDLESS BATTLE', tag: 'NEW',
+    desc: 'Open airspace, no gates and no rings — just hostile fighters. Guns, missiles, laser-guided rounds, grenades and RPGs, with unlimited ammunition. Enemy waves get faster, sharper and better organised the longer you last.',
+    hasLaps: false, hasRivals: false, hasTimer: false, escalates: true, failOnDamage: true,
+    combat: true, noRings: true, primary: 'kills',
+    mandatory: ['kills'],
+    objectives: [
+      'Destroy hostile fighters — every kill escalates the next wave',
+      'Hold a target lock before launching; guided rounds need it',
+      'Stay alive: your hull does not regenerate between waves',
+      'Waves grow in size, accuracy and formation discipline',
+    ],
+    gameOver: [
+      'Hull destroyed by enemy fire',
+      'Ground impact or collision with terrain',
+      'Shot down while stalled below Mach 2',
+      'Leaving the combat airspace for more than 20 seconds',
+    ],
+  },
+  endlessrace: {
+    id: 'endlessrace', name: 'ENDLESS RACE', tag: 'NEW',
+    desc: 'A hostile top-speed run. The same full weapon set as Battle, but the clock is the enemy — hold Mach, fly the manoeuvres and out-run a squadron that tops out at Mach 20 alongside you.',
+    hasLaps: false, hasRivals: true, hasTimer: false, escalates: true, failOnDamage: true,
+    combat: true, speedFocus: true, primary: 'distance',
+    // Aerobatics are not optional here — these are dealt before the random draw.
+    mandatory: ['rolls', 'loops', 'turns', 'machhold'],
+    objectives: [
+      'Hold Mach 15 or above — speed is scored every second',
+      'Complete the mandatory manoeuvre set: rolls, loops, flips and hard turns',
+      'Stay ahead of the enemy squadron — they also reach Mach 20',
+      'Shoot down pursuers that close inside gun range',
+    ],
+    gameOver: [
+      'Hull destroyed by enemy fire',
+      'Ground impact or collision with terrain',
+      'Dropping below Mach 4 for more than 12 seconds',
+      'Falling more than 6 km behind the lead enemy',
+    ],
+  },
   free: {
     id: 'free', name: 'FREE FLIGHT', tag: null,
     desc: 'No timer, no rivals, no failure state. Explore the generated venue, learn an airframe, practise the gate work.',
     hasLaps: false, hasRivals: false, hasTimer: false, escalates: false, failOnDamage: false, primary: 'distance',
   },
 };
-export const MODE_ORDER = ['endless', 'quick', 'campaign', 'survival', 'timeattack', 'free'];
+export const MODE_ORDER = ['endless', 'battle', 'endlessrace', 'quick', 'campaign', 'survival', 'timeattack', 'free'];
+
+/* ===========================================================================
+ * WEAPONS
+ * ------------------------------------------------------------------------
+ * Every airframe carries the full set with unlimited ammunition — the limit
+ * is the reload timer, not a magazine. `guided` rounds need a target lock
+ * before they will launch; unguided ones fly the pipper.
+ * ======================================================================== */
+
+export const WEAPONS = [
+  {
+    id: 'gun', name: 'Cannon', short: 'GUN', icon: 'gun', heavy: false,
+    damage: 7, speed: 2600, life: 2.2, cooldown: 0.075, spread: 0.010,
+    guided: false, radius: 12, color: 0xfff0a8, tracer: true,
+    desc: 'Rapid-fire cannon. No lock required.',
+  },
+  {
+    id: 'missile', name: 'Missile', short: 'MSL', icon: 'missile', heavy: true,
+    damage: 46, speed: 1250, life: 7.0, cooldown: 1.5, spread: 0,
+    guided: true, turnRate: 2.6, radius: 62, blast: 120, color: 0xff9a4a,
+    desc: 'Heat-seeking missile. Needs a lock.',
+  },
+  {
+    id: 'laser', name: 'Laser-Guided Missile', short: 'LGM', icon: 'missile', heavy: true,
+    damage: 62, speed: 1750, life: 6.0, cooldown: 2.6, spread: 0,
+    guided: true, turnRate: 4.6, radius: 58, blast: 110, color: 0x66e8ff, beam: true,
+    desc: 'Beam-riding missile. Tighter tracking, longer reload.',
+  },
+  {
+    id: 'grenade', name: 'Air Grenade', short: 'GRN', icon: 'missile', heavy: true,
+    damage: 54, speed: 720, life: 3.4, cooldown: 1.9, spread: 0.02,
+    guided: false, gravity: 26, radius: 90, blast: 260, color: 0x9dff6a, fuse: 1.5,
+    desc: 'Lobbed cluster charge with a wide blast. Unguided.',
+  },
+  {
+    id: 'rpg', name: 'RPG', short: 'RPG', icon: 'missile', heavy: true,
+    damage: 78, speed: 980, life: 4.5, cooldown: 2.8, spread: 0.006,
+    guided: false, radius: 70, blast: 200, color: 0xff5a3c, smoke: true,
+    desc: 'Heavy unguided rocket. Enormous damage, dead straight.',
+  },
+];
+export const WEAPONS_BY_ID = Object.fromEntries(WEAPONS.map((w) => [w.id, w]));
+/** The order the heavy-weapon selector cycles through. */
+export const HEAVY_ORDER = ['missile', 'laser', 'grenade', 'rpg'];
+
+export const COMBAT = {
+  lockConeDeg: 26,             // half-angle of the seeker cone
+  lockRange: 5200,             // m — furthest a lock will hold
+  lockTime: 0.85,              // s of continuous tracking to acquire
+  lockDecay: 1.9,              // how fast a broken lock bleeds away
+  gunRange: 2400,
+  enemyHealth: 100,
+  playerHitFlash: 0.35,
+  waveInterval: 26,            // s between reinforcement waves
+  maxEnemies: 9,
+  /** Enemy liveries — the recolours the same three airframes are issued in. */
+  liveries: [
+    0x2fd96b, 0x3aa0ff, 0xff5fb0, 0xffd63a, 0xff8a26, 0x1b1d22,
+    0x9b5cff, 0x00d6c4, 0xd63a3a, 0xc9d2dc,
+  ],
+};
 
 /* ===========================================================================
  * CAMPAIGN
@@ -955,7 +1050,17 @@ export const OBJECTIVE_POOL = [
   { id: 'rings',     text: (v) => `Pass through ${v} race rings`,                 metric: 'rings',      values: [25, 45, 70, 100],           reward: 0.9, modes: ['endless', 'survival', 'free', 'timeattack', 'quick'] },
   { id: 'nearmiss',  text: (v) => `Score ${v} near misses`,                       metric: 'nearMisses', values: [10, 20, 35, 55],            reward: 1.2, modes: ['endless', 'survival', 'quick', 'campaign'] },
   { id: 'overtake',  text: (v) => `Overtake ${v} rival aircraft`,                 metric: 'overtakes',  values: [5, 10, 18, 28],             reward: 1.3, modes: ['endless', 'survival', 'quick', 'campaign'] },
-  { id: 'topspeed',  text: (v) => `Reach ${v} km/h`,                              metric: 'topSpeedKmh', values: [1400, 1650, 1850, 2050],   reward: 1.1, modes: ['endless', 'survival', 'free', 'timeattack', 'quick'] },
+  { id: 'topspeed',  text: (v) => `Reach Mach ${v}`,                              metric: 'topMach',    values: [8, 12, 15, 18],             reward: 1.1, modes: ['endless', 'survival', 'free', 'timeattack', 'quick', 'endlessrace'] },
+  /* ---- combat (Endless Battle / Endless Race) ---- */
+  { id: 'kills',     text: (v) => `Shoot down ${v} enemy fighters`,               metric: 'kills',      values: [4, 9, 16, 26],              reward: 1.5, modes: ['battle', 'endlessrace'] },
+  { id: 'missiles',  text: (v) => `Land ${v} guided-weapon hits`,                 metric: 'missiles',   values: [3, 7, 12, 20],              reward: 1.4, modes: ['battle', 'endlessrace'] },
+  { id: 'gunhits',   text: (v) => `Score ${v} cannon hits`,                       metric: 'hits',       values: [30, 70, 120, 200],          reward: 1.1, modes: ['battle', 'endlessrace'] },
+  { id: 'nodamage',  text: (v) => `Destroy ${v} enemies without taking a hit`,    metric: 'cleanKills', values: [2, 4, 7, 11],               reward: 1.9, modes: ['battle'] },
+  /* ---- manoeuvres (mandatory in Endless Race) ---- */
+  { id: 'rolls',     text: (v) => `Complete ${v} full aileron rolls`,             metric: 'rolls',      values: [3, 6, 11, 18],              reward: 1.2, modes: ['endlessrace', 'battle', 'free'] },
+  { id: 'loops',     text: (v) => `Fly ${v} complete loops`,                      metric: 'loops',      values: [2, 4, 7, 11],               reward: 1.4, modes: ['endlessrace', 'battle', 'free'] },
+  { id: 'turns',     text: (v) => `Pull ${v} hard turns above 6 G`,               metric: 'turns',      values: [6, 12, 20, 32],             reward: 1.2, modes: ['endlessrace', 'battle'] },
+  { id: 'machhold',  text: (v) => `Hold Mach 15+ for ${v} seconds`,               metric: 'machTime',   values: [20, 45, 80, 130],           reward: 1.5, modes: ['endlessrace'] },
   { id: 'survive',   text: (v) => `Survive ${Math.round(v / 60)} minutes`,        metric: 'time',       values: [180, 300, 480, 720],        reward: 1.25, modes: ['endless', 'survival'] },
   { id: 'combo',     text: (v) => `Build a x${v} combo`,                          metric: 'maxCombo',   values: [8, 14, 22, 32],             reward: 1.15, modes: ['endless', 'survival', 'quick'] },
   { id: 'clean',     text: (v) => `Clear ${v} checkpoints without a collision`,   metric: 'cleanStreak', values: [6, 10, 16, 24],            reward: 1.4, modes: ['endless', 'survival', 'timeattack', 'quick', 'campaign'] },
@@ -975,7 +1080,10 @@ export const ACHIEVEMENTS = [
   { id: 'firstflight', name: 'First Flight',       desc: 'Complete your first run.',                       check: (s) => s.totalRuns >= 1,             reward: 500 },
   { id: 'centurion',   name: 'Centurion',          desc: 'Clear 100 checkpoints in total.',                check: (s) => s.totalCheckpoints >= 100,    reward: 800 },
   { id: 'marathon',    name: 'Long Haul',          desc: 'Fly 250 km across all runs.',                    check: (s) => s.totalDistance >= 250000,    reward: 1200 },
-  { id: 'sonic',       name: 'Sonic',              desc: 'Reach 1800 km/h.',                               check: (s) => s.bestSpeedKmh >= 1800,       reward: 1000 },
+  { id: 'sonic',       name: 'Sonic',              desc: 'Reach Mach 15.',                                 check: (s) => (s.bestMach || 0) >= 15,      reward: 1000 },
+  { id: 'mach20',      name: 'Terminal Velocity',  desc: 'Touch the Mach 20 ceiling.',                     check: (s) => (s.bestMach || 0) >= 19.9,    reward: 3000 },
+  { id: 'acesuit',     name: 'Ace',                desc: 'Shoot down 5 enemy fighters in one sortie.',     check: (s) => (s.bestKills || 0) >= 5,      reward: 1500 },
+  { id: 'topgun',      name: 'Top Gun',            desc: 'Shoot down 100 enemy fighters in total.',        check: (s) => (s.totalKills || 0) >= 100,   reward: 4000 },
   { id: 'threader',    name: 'Needle Threader',    desc: 'Record 250 near misses.',                        check: (s) => s.totalNearMisses >= 250,     reward: 1400 },
   { id: 'untouchable', name: 'Untouchable',        desc: 'Clear 20 checkpoints in one run without contact.',check: (s) => s.bestCleanStreak >= 20,      reward: 2000 },
   { id: 'overtaker',   name: 'Overtaker',          desc: 'Overtake 100 rival aircraft.',                   check: (s) => s.totalOvertakes >= 100,      reward: 1600 },
@@ -995,10 +1103,10 @@ export const ACHIEVEMENTS = [
 export const DEFAULT_BINDINGS = {
   pitchUp:    ['KeyW', 'ArrowUp'],
   pitchDown:  ['KeyS', 'ArrowDown'],
-  rollLeft:   ['KeyA', 'ArrowLeft'],
-  rollRight:  ['KeyD', 'ArrowRight'],
-  leanLeft:   ['KeyQ'],
-  leanRight:  ['KeyE'],
+  leanLeft:   ['KeyA', 'ArrowLeft'],
+  leanRight:  ['KeyD', 'ArrowRight'],
+  rollLeft:   ['KeyQ'],
+  rollRight:  ['KeyE'],
   throttleUp: ['ShiftLeft', 'ShiftRight'],
   brake:      ['KeyX', 'ControlLeft'],
   boost:      ['Space'],
@@ -1007,22 +1115,58 @@ export const DEFAULT_BINDINGS = {
   power3:     ['Numpad3', 'Digit3'],
   power4:     ['Numpad4', 'Digit4'],
   power5:     ['Numpad5', 'Digit5'],
+  fireGun:      ['KeyG'],
+  fireWeapon:   ['KeyR'],
+  cycleWeapon:  ['KeyB'],
+  cycleTarget:  ['KeyT'],
   pause:      ['Escape'],
   fullscreen: ['KeyF'],
-  camera:     ['KeyC', 'KeyV'],
+  // One key, one press: C toggles between Chase and First Person.
+  camera:     ['KeyC'],
   debug:      ['F8'],
 };
 
 export const BINDING_LABELS = {
   pitchUp: 'Pitch Up / Climb', pitchDown: 'Pitch Down / Dive',
+  leanLeft: 'Lean / Turn Left', leanRight: 'Lean / Turn Right',
   rollLeft: 'Bank Left', rollRight: 'Bank Right',
-  leanLeft: 'Lean Left', leanRight: 'Lean Right',
-  throttleUp: 'Throttle Up', brake: 'Air Brake', boost: 'Boost',
+  throttleUp: 'Throttle Up', brake: 'Air Brake', boost: 'Nitrous Boost',
+  fireGun: 'Fire Guns', fireWeapon: 'Launch Weapon',
+  cycleWeapon: 'Select Weapon', cycleTarget: 'Change Target',
   power1: 'Power 1 — Power Flight', power2: 'Power 2 — Turbo Speed',
   power3: 'Power 3 — Combat Maneuvers', power4: 'Power 4 — Aerial Shield',
   power5: 'Power 5 — Phase Shift',
-  pause: 'Pause', fullscreen: 'Fullscreen', camera: 'Cycle Camera', debug: 'Debug Overlay',
+  pause: 'Pause', fullscreen: 'Fullscreen', camera: 'Camera View', debug: 'Debug Overlay',
 };
+
+/* ---------------------------------------------------------------------------
+ * HUD CONTROL LEGEND
+ * The strip drawn top-left in flight. Order is flying first, then weapons,
+ * then powers, then system — the order a player actually reaches for them.
+ * `icon` names resolve against the ICONS table in ui.js.
+ * ------------------------------------------------------------------------ */
+export const CONTROL_LEGEND = [
+  { action: 'pitchUp', short: 'Climb', icon: 'climb' },
+  { action: 'pitchDown', short: 'Dive', icon: 'dive' },
+  { action: 'leanLeft', short: 'Left', icon: 'leanL' },
+  { action: 'leanRight', short: 'Right', icon: 'leanR' },
+  { action: 'rollLeft', short: 'Bank L', icon: 'rollL' },
+  { action: 'rollRight', short: 'Bank R', icon: 'rollR' },
+  { action: 'throttleUp', short: 'Throttle', icon: 'throttle' },
+  { action: 'brake', short: 'Brake', icon: 'brake' },
+  { action: 'boost', short: 'Nitrous', icon: 'turbo' },
+  { sep: true },
+  { action: 'fireGun', short: 'Guns', icon: 'gun', combat: true },
+  { action: 'fireWeapon', short: 'Launch', icon: 'missile', combat: true },
+  { action: 'cycleWeapon', short: 'Weapon', icon: 'weaponSel', combat: true },
+  { action: 'cycleTarget', short: 'Target', icon: 'lock', combat: true },
+  { sep: true },
+  { action: 'power1', short: 'Powers', icon: 'lift', keyOverride: '1-5' },
+  { sep: true },
+  { action: 'camera', short: 'Camera', icon: 'camera' },
+  { action: 'fullscreen', short: 'Full', icon: 'expand' },
+  { action: 'pause', short: 'Pause', icon: 'pause' },
+];
 
 /* ===========================================================================
  * SCORING
@@ -1045,6 +1189,13 @@ export const SCORE = {
   comboDecay: 4.5,            // seconds of no scoring before combo drops
   collisionPenalty: -300,
   missedCheckpoint: -500,
+  /* ---- combat ---- */
+  gunHit: 25,
+  weaponHit: 90,
+  kill: 1400,
+  killAssist: 300,
+  manoeuvre: 260,             // a completed roll, loop or flip
+  machHoldPerSec: 45,         // scored per second at Mach 15+
 };
 
 export const CREDITS = { perScore: 0.045, perObjective: 350, dailyBonus: 900, podium: [900, 550, 320] };
@@ -1059,7 +1210,7 @@ export const DEFAULT_SAVE = {
   version: 1,
   onboarded: false,
   credits: 0,
-  unlocked: ['vector'],
+  unlocked: ['raptor'],
   selectedAircraft: 'raptor',
   selectedMode: 'endless',
   selectedDifficulty: 'elite',
@@ -1097,8 +1248,9 @@ export const DEFAULT_SAVE = {
   stats: {
     totalRuns: 0, totalDistance: 0, totalCheckpoints: 0, totalNearMisses: 0, totalOvertakes: 0,
     totalRings: 0, totalScore: 0, totalTime: 0, podiums: 0, wins: 0, legendaryWins: 0, crashes: 0,
-    bestScore: 0, bestDistance: 0, bestSpeedKmh: 0, bestCombo: 0, bestCleanStreak: 0,
+    bestScore: 0, bestDistance: 0, bestSpeedKmh: 0, bestMach: 0, bestCombo: 0, bestCleanStreak: 0,
     bestSurvivalTime: 0, bestLapTime: 0, biomesVisited: {}, modeRuns: {},
+    totalKills: 0, bestKills: 0, totalManoeuvres: 0,
   },
   records: {},
 };

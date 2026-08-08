@@ -623,6 +623,41 @@ function makeRockGeometry(seed) {
   return g;
 }
 
+/**
+ * Low ground cover. Deliberately cheap — a handful of crossed, tilted quads —
+ * because it is scattered in the thousands. Its job is to break up the bare
+ * shaded terrain when the aircraft is down in the weeds, which is where the
+ * ground reads as flat geometry rather than landscape.
+ */
+function makeShrubGeometry() {
+  const parts = [];
+  for (let i = 0; i < 3; i++) {
+    const p = new THREE.PlaneGeometry(2.4, 1.9);
+    p.translate(0, 0.95, 0);
+    p.rotateY((i / 3) * Math.PI);
+    p.rotateX(-0.12);
+    parts.push(p);
+  }
+  return mergeGeometriesSafe(parts);
+}
+
+/** Masts, pylons and chimneys — vertical detail that gives scale from the air. */
+function makeMastGeometry() {
+  const parts = [];
+  const shaft = new THREE.CylinderGeometry(0.5, 1.5, 26, 5);
+  shaft.translate(0, 13, 0);
+  parts.push(shaft);
+  for (const y of [14, 20]) {
+    const arm = new THREE.BoxGeometry(9, 0.8, 0.8);
+    arm.translate(0, y, 0);
+    parts.push(arm);
+  }
+  const cap = new THREE.ConeGeometry(1.1, 3, 5);
+  cap.translate(0, 27.5, 0);
+  parts.push(cap);
+  return mergeGeometriesSafe(parts);
+}
+
 /* ===========================================================================
  * WORLD CHUNK — one streamed slice of route content
  * ======================================================================== */
@@ -722,13 +757,26 @@ export class World {
     const treeKind = b.id === 'jungle' ? 'palm' : (b.props.trees > 0.8 || b.id === 'ice' || b.id === 'mountain') ? 'conifer' : 'broadleaf';
     this._propGeos = {
       tree: makeTreeGeometry(treeKind),
+      // A second, visually different tree so a forest is not one silhouette
+      // repeated ten thousand times.
+      tree2: makeTreeGeometry(treeKind === 'conifer' ? 'broadleaf' : 'conifer'),
       rock: makeRockGeometry(this.seed + 5),
+      rock2: makeRockGeometry(this.seed + 137),
       building: new THREE.BoxGeometry(1, 1, 1),
+      // Ground cover: low scrub that fills the space between the big props and
+      // stops the terrain reading as bare shaded geometry from low altitude.
+      shrub: makeShrubGeometry(),
+      // Vertical punctuation — masts, pylons and chimneys.
+      mast: makeMastGeometry(),
     };
     const night = ['night', 'neonNight'].includes(this.weatherId) || this.timeId === 'night' || this.timeId === 'dusk';
     this._propMats = {
       tree: this.materials.foliage(new THREE.Color(b.ground.base).offsetHSL(0, 0.08, -0.06).getHex()),
+      // A second foliage tone so mixed stands read as a real canopy.
+      tree2: this.materials.foliage(new THREE.Color(b.ground.base).offsetHSL(0.03, 0.14, 0.04).getHex()),
       rock: this.materials.rock(b.ground.rock),
+      rock2: this.materials.rock(new THREE.Color(b.ground.rock).offsetHSL(0, -0.05, -0.08).getHex()),
+      shrub: this.materials.foliage(new THREE.Color(b.ground.base).offsetHSL(-0.02, 0.10, -0.12).getHex()),
       building: this.materials.building(night),
     };
     this.isNight = night;
@@ -1243,25 +1291,53 @@ export class World {
 
     const rand = () => rng.float(-extent, extent);
 
-    // Trees
-    const treeCount = Math.round(520 * p.trees * d);
-    addInstanced(this._propGeos.tree, this._propMats.tree, treeCount, (i, m) => {
+    /* --- forest -----------------------------------------------------------
+     * Two species, placed against a low-frequency stand mask rather than
+     * uniformly: real woodland is dense in patches and open in between, and
+     * that contrast is what makes it read as terrain instead of noise. */
+    const placeTree = (scaleLo, scaleHi) => (i, m) => {
       const x = rand(), z = rand();
       const wx = centerX + x, wz = centerZ + z;
       const h = this.terrain.height(wx, wz);
       if (h < this.terrain.waterLevel + 8) return false;
       if (h > this.terrain.snowLine * 0.95) return false;
       if (this.terrain.slope(wx, wz, 60) > 0.55) return false;
-      const s = rng.float(1.5, 4.2);
+      // Stand mask: thin the canopy where the mask is low so clearings appear.
+      if (fbm2(wx * 0.00055, wz * 0.00055, this.seed + 211, 3) + 0.35 < rng.next() * 0.9) return false;
+      const s = rng.float(scaleLo, scaleHi);
       m.makeRotationY(rng.float(0, TAU));
       m.scale(_v1.set(s, s * rng.float(0.8, 1.4), s));
+      m.setPosition(x, h, z);
+      return true;
+    };
+    const treeCount = Math.round(1150 * p.trees * d);
+    addInstanced(this._propGeos.tree, this._propMats.tree, treeCount, placeTree(1.5, 4.2));
+    yield;
+    addInstanced(this._propGeos.tree2, this._propMats.tree2,
+      Math.round(treeCount * 0.45), placeTree(1.1, 3.0));
+    yield;
+
+    /* --- ground cover ---------------------------------------------------
+     * Scrub between the trees. Very cheap geometry, very high count — this is
+     * what removes the bare-shaded-mesh look at low altitude. */
+    const shrubCount = Math.round(1500 * clamp01(p.trees + 0.35) * d);
+    addInstanced(this._propGeos.shrub, this._propMats.shrub, shrubCount, (i, m) => {
+      const x = rand(), z = rand();
+      const wx = centerX + x, wz = centerZ + z;
+      const h = this.terrain.height(wx, wz);
+      if (h < this.terrain.waterLevel + 2) return false;
+      if (h > this.terrain.snowLine) return false;
+      if (this.terrain.slope(wx, wz, 40) > 0.7) return false;
+      const s = rng.float(1.4, 4.6);
+      m.makeRotationY(rng.float(0, TAU));
+      m.scale(_v1.set(s, s * rng.float(0.7, 1.5), s));
       m.setPosition(x, h, z);
       return true;
     });
     yield;
 
     // Buildings
-    const bCount = Math.round(300 * p.buildings * d);
+    const bCount = Math.round(620 * p.buildings * d);
     addInstanced(this._propGeos.building, this._propMats.building, bCount, (i, m) => {
       const x = rand(), z = rand();
       const wx = centerX + x, wz = centerZ + z;
@@ -1281,17 +1357,43 @@ export class World {
     });
     yield;
 
-    // Rocks
-    const rCount = Math.round(260 * p.rocks * d);
-    addInstanced(this._propGeos.rock, this._propMats.rock, rCount, (i, m) => {
+    /* --- rock field ------------------------------------------------------
+     * Two size bands from two silhouettes: boulders that read from altitude,
+     * and a much denser scatter of small stone that fills the ground. */
+    const placeRock = (lo, hi, steepOnly) => (i, m) => {
       const x = rand(), z = rand();
       const wx = centerX + x, wz = centerZ + z;
       const h = this.terrain.height(wx, wz);
       if (h < this.terrain.waterLevel) return false;
-      const s = rng.float(6, 40);
+      // Scree collects on steep ground; boulders sit anywhere.
+      if (steepOnly && this.terrain.slope(wx, wz, 50) < 0.22) return false;
+      const s = rng.float(lo, hi);
       m.makeRotationY(rng.float(0, TAU));
       m.scale(_v1.set(s, s * rng.float(0.5, 1.1), s * rng.float(0.7, 1.3)));
       m.setPosition(x, h + s * 0.2, z);
+      return true;
+    };
+    const rCount = Math.round(420 * p.rocks * d);
+    addInstanced(this._propGeos.rock, this._propMats.rock, rCount, placeRock(9, 44, false));
+    yield;
+    addInstanced(this._propGeos.rock2, this._propMats.rock2,
+      Math.round(760 * clamp01(p.rocks + 0.3) * d), placeRock(2.0, 9.0, true));
+    yield;
+
+    /* --- masts ------------------------------------------------------------
+     * Only where there is settlement to justify them, and only on flat ground,
+     * so they read as infrastructure rather than as scattered props. */
+    const mCount = Math.round(90 * p.buildings * d);
+    addInstanced(this._propGeos.mast, this._propMats.rock, mCount, (i, m) => {
+      const x = rand(), z = rand();
+      const wx = centerX + x, wz = centerZ + z;
+      const h = this.terrain.height(wx, wz);
+      if (h < this.terrain.waterLevel + 6) return false;
+      if (this.terrain.slope(wx, wz, 90) > 0.22) return false;
+      const s = rng.float(1.0, 3.4);
+      m.makeRotationY(rng.float(0, TAU));
+      m.scale(_v1.set(s, s * rng.float(0.8, 2.2), s));
+      m.setPosition(x, h, z);
       return true;
     });
   }
@@ -1314,8 +1416,10 @@ export class World {
     chunk.group.position.set(0, 0, 0);
     this.scene.add(chunk.group);
 
-    /* --- checkpoints ---------------------------------------------- */
-    for (let n = chunk.startNode; n < chunk.endNode; n++) {
+    /* --- checkpoints ----------------------------------------------
+     * Battle mode is a dogfight in open sky: no gates to fly, and therefore no
+     * missed-gate penalties for chasing a target off the route. */
+    for (let n = chunk.startNode; !this.mode?.noRings && n < chunk.endNode; n++) {
       const node = this.path.nodes[n];
       if (!node) break;
       if (n % WORLD.checkpointEvery !== 0) continue;
@@ -1333,7 +1437,9 @@ export class World {
     yield;
 
     /* --- race rings ------------------------------------------------- */
-    for (let n = chunk.startNode; n < chunk.endNode; n++) {
+    // Battle mode is fought in open airspace: no gate chains to fly through,
+    // nothing between you and the hostiles.
+    for (let n = chunk.startNode; !this.mode?.noRings && n < chunk.endNode; n++) {
       const node = this.path.nodes[n];
       if (!node) break;
       // One chain every few nodes, not every node — ring chains should be
@@ -1366,7 +1472,11 @@ export class World {
     yield;
 
     /* --- obstacles -------------------------------------------------- */
-    const obsScale = D.obstacleDensity * (this.mode?.escalates ? 1 + Math.min(1.2, index * 0.028) : 1);
+    // Combat needs room to manoeuvre, so the floating obstacle field thins out
+    // to a fraction of its racing density rather than disappearing entirely —
+    // the airspace still has features to fight around.
+    const obsScale = D.obstacleDensity * (this.mode?.escalates ? 1 + Math.min(1.2, index * 0.028) : 1)
+      * (this.mode?.noRings ? 0.28 : 1);
     for (let n = chunk.startNode; n < chunk.endNode; n++) {
       const node = this.path.nodes[n];
       if (!node) break;

@@ -10,7 +10,7 @@ import * as THREE from 'three';
 import {
   AIRCRAFT, AIRCRAFT_BY_ID, BIOMES, BIOMES_BY_ID, MODES, DIFFICULTIES, WEATHER, TIME_OF_DAY,
   CAMPAIGN, OBJECTIVE_POOL, ACHIEVEMENTS, SCORE, CREDITS, POWERS, WORLD,
-  DEFAULT_SAVE, STORAGE_KEY, LOADING_STAGES, DEFAULTS,
+  DEFAULT_SAVE, STORAGE_KEY, LOADING_STAGES, DEFAULTS, MACH, COMBAT, WEAPONS_BY_ID,
   RNG, hashSeed, clamp, clamp01, lerp, damp, TAU,
 } from './config.js';
 import { DeviceProfile, PerfMonitor, AdaptiveQuality, Scheduler, LoadPipeline, nextFrame } from './performance.js';
@@ -18,6 +18,7 @@ import { RenderSystem } from './renderer.js';
 import { World } from './world.js';
 import { Player, InputManager } from './player.js';
 import { RaceDirector } from './ai.js';
+import { CombatSystem } from './combat.js';
 import { AudioSystem } from './audio.js';
 import { UI, formatTime, formatDistance } from './ui.js';
 
@@ -78,7 +79,22 @@ function rollObjectives(rng, mode, difficulty, count = 3) {
   const picked = [];
   const used = new Set();
   const tier = clamp(Math.round(difficulty.order * 0.8), 0, 3);
-  for (let i = 0; i < count && pool.length; i++) {
+
+  // Some modes have objectives that are not optional. Endless Race is scored
+  // on aerobatics as much as on speed, so the manoeuvre set is always dealt
+  // first rather than left to the draw.
+  for (const id of mode.mandatory || []) {
+    const def = pool.find((o) => o.id === id);
+    if (!def || used.has(id)) continue;
+    used.add(id);
+    const value = def.values[Math.min(def.values.length - 1, tier)] ?? def.values[0];
+    picked.push({
+      id, def, value, text: def.text(value), mandatory: true,
+      metric: def.metric, complete: false, reward: def.reward,
+    });
+  }
+
+  for (let i = picked.length; i < count && pool.length; i++) {
     let def = null, guard = 0;
     do { def = rng.pick(pool); } while (used.has(def.id) && guard++ < 24);
     if (used.has(def.id)) break;
@@ -196,9 +212,12 @@ export class Game {
   _blankMetrics() {
     return {
       distance: 0, checkpoints: 0, rings: 0, nearMisses: 0, overtakes: 0,
-      topSpeedKmh: 0, time: 0, maxCombo: 1, cleanStreak: 0, powerUses: 0,
+      topSpeedKmh: 0, topMach: 0, time: 0, maxCombo: 1, cleanStreak: 0, powerUses: 0,
       shortcuts: 0, highAltTime: 0, lowAltTime: 0, position: 1, collisions: 0,
       missedCheckpoints: 0, perfectCheckpoints: 0, boostTime: 0,
+      // Combat + manoeuvre metrics, used by Battle and Race modes.
+      kills: 0, hits: 0, shotsFired: 0, missiles: 0, damageTaken: 0,
+      manoeuvres: 0, rolls: 0, loops: 0, flips: 0, turns: 0, machTime: 0,
     };
   }
 
@@ -415,7 +434,9 @@ export class Game {
     this.render.guide.setEnabled(false);
     this.ui.showScreen('menu');
     this.ui.refreshLoadout();
-    this.render.rig.setMode('far');
+    this.render.rig.setMode('chase');
+    if (this.combat) { this.combat.dispose(); this.combat = null; }
+    this.ui.clearCombatHud();
     this.audio.setMenuMusic();
     this.audio.stopEngine();
     if (this.director) { this.director.dispose(); this.director = null; }
@@ -568,6 +589,14 @@ export class Game {
       });
       // Grid forms around the player's start distance, not ahead of it.
       if (mode.hasRivals) this.director.createGrid(spec, difficulty.aiCount, 300);
+      // Hostiles fly the same three airframes the player can, in other liveries.
+      if (this.combat) { this.combat.dispose(); this.combat = null; }
+      if (mode.combat) {
+        this.combat = new CombatSystem(this.render, this.world, this.audio, difficulty,
+          { speedFocus: !!mode.speedFocus });
+        this._enemySpecs = AIRCRAFT.filter((a) => a.model);
+        this.combat.spawnWave(300, this._enemySpecs);
+      }
       await nextFrame();
     });
     pipe.stage(LOADING_STAGES[8], 1, async () => {
@@ -586,7 +615,12 @@ export class Game {
     if (superseded()) return;
     this.ui.showScreen('none');
     this.ui.setHudVisible(true);
-    this.render.guide.setEnabled(this.save.data.settings.guidance !== false);
+    // Battle mode has no route to follow, so the corridor chevrons would be
+    // pointing at nothing; the racing variant still wants them.
+    this.render.guide.setEnabled(this.save.data.settings.guidance !== false && !mode.noRings);
+    this.ui.buildControlLegend(!!mode.combat);
+    this.ui.setModeBrief(mode);
+    if (!mode.combat) this.ui.clearCombatHud();
     this.ui.setCamera(this.render.rig.mode.name);
     this._startCountdown();
   }
@@ -596,7 +630,7 @@ export class Game {
     this.metrics = this._blankMetrics();
     this.objectives = cfg.daily
       ? [{ ...cfg.daily.objective, def: cfg.daily.objective.def, complete: false, reward: 2, text: cfg.daily.objective.label }]
-      : rollObjectives(cfg.rng, cfg.mode, cfg.difficulty, 3);
+      : rollObjectives(cfg.rng, cfg.mode, cfg.difficulty, cfg.mode.combat ? 4 : 3);
     this.objectiveIndex = 0;
     this.score = 0;
     this.combo = 1;
@@ -699,6 +733,8 @@ export class Game {
     this.input.sensitivity = this.save.data.settings.flightSensitivity ?? 1;
     this.input.invertPitch = !!this.save.data.settings.invertPitch;
     const raw = this.input.sample();
+    // Kept for the combat pass, which runs after the flight model.
+    this._rawInput = raw;
     // Blocked powers (daily modifiers) are filtered before the player sees them.
     if (this.blockedPowers.size) {
       for (let i = 0; i < 5; i++) if (raw.powers[i] && this.blockedPowers.has(POWERS[i].id)) {
@@ -716,9 +752,13 @@ export class Game {
     world.update(dt * timeScale, player.position, this.elapsed);
     world.stream(this.scheduler, player.distanceAlong);
 
+    /* --- combat --------------------------------------------------------- */
+    if (this.combat) this._updateCombat(dt, player, cfg);
+
     /* --- events -------------------------------------------------------- */
     this._processEvents(player.drainEvents(), dt);
     if (this.director) this._processEvents(this.director.drainEvents(), dt);
+    if (this.combat) this._processCombatEvents(this.combat.drainEvents());
 
     /* --- combo --------------------------------------------------------- */
     if (this.comboTimer > 0) {
@@ -729,6 +769,7 @@ export class Game {
     /* --- passive scoring ------------------------------------------------ */
     this.metrics.distance = player.distanceTravelled;
     this.metrics.topSpeedKmh = Math.max(this.metrics.topSpeedKmh, player.speedKmh);
+    this.metrics.topMach = Math.max(this.metrics.topMach, player.mach);
     if (player.speed > player.topSpeed * 0.9) this.score += SCORE.speedBonusPerSec * dt * this.combo;
     if (player.boosting) this.metrics.boostTime += dt;
     if (player.altitude > 3000) this.metrics.highAltTime += dt;
@@ -780,6 +821,7 @@ export class Game {
       this.endRun('RACE COMPLETE', true);
       return;
     }
+    if (cfg.mode.combat && this._checkCombatFailure(dt, player, cfg)) return;
 
     /* --- camera + audio --------------------------------------------------- */
     // Guidance chevrons down the corridor ahead.
@@ -796,17 +838,23 @@ export class Game {
       turbulence: world.turbulence,
       lateral: clamp(player.smoothControls.roll, -1, 1),
       pitchRate: player.smoothControls.pitch,
+      machZoom: player.mach01,
       lagScale: 1 / clamp(this.save.data.settings.cameraSensitivity ?? 1, 0.5, 1.8),
     });
 
-    // Reheat has an audible light and an audible cut.
+    // Reheat has an audible light and an audible cut: the burner lighting is a
+    // fire-and-gear event, not just a volume change.
     const burnerOn = player.boosting || player.turboActive;
     if (burnerOn !== this._burnerWas) {
-      this.audio.play(burnerOn ? 'boost' : 'boostOut', { volume: 0.9 });
+      if (burnerOn) {
+        this.audio.play('boost', { volume: 0.85 });
+        this.audio.play('burnerLight', { volume: 1.0 });   // ignition fire
+        this.audio.play('gearShift', { volume: 0.95 });    // jet gear change
+      } else this.audio.play('boostOut', { volume: 0.9 });
       this._burnerWas = burnerOn;
     }
-    if (player.speedKmh > 2050) this.audio.play('sonicBoom', { volume: 0.7 });
-    if (player.aoa01 > 0.97 && player.speedKmh < 500) this.audio.play('stallWarn', { volume: 0.8 });
+    if (player.mach > 16) this.audio.play('sonicBoom', { volume: 0.7 });
+    if (player.aoa01 > 0.97 && player.mach < 3) this.audio.play('stallWarn', { volume: 0.8 });
 
     this.audio.updateEngine({
       speed01: player.speed01,
@@ -825,6 +873,220 @@ export class Game {
       clamp01((player.speed01 - 0.45) * 1.8) * (this.save.data.settings.motionBlur ? 1 : 0.4),
       player.velocity,
     );
+  }
+
+  /* =====================================================================
+   * COMBAT
+   * ================================================================== */
+
+  /**
+   * One combat frame: weapon input, the squadron, reinforcement waves and the
+   * manoeuvre tracker that Endless Race scores its mandatory objectives from.
+   */
+  _updateCombat(dt, player, cfg) {
+    const c = this.combat;
+    const raw = this._rawInput || {};
+
+    if (raw.cycleWeapon) {
+      const w = c.cycleWeapon();
+      this.audio.ui('click');
+      this.ui.notify(`${w.name.toUpperCase()} SELECTED`);
+    }
+    if (raw.cycleTarget) {
+      const t = c.cycleTarget(player);
+      this.audio.ui(t ? 'select' : 'error');
+    }
+
+    c.update(dt, player, { gun: raw.gun, heavy: raw.heavy });
+
+    /* --- reinforcements --------------------------------------------------
+     * A wave arrives on a timer, and immediately if the sky has been cleared —
+     * the mode is endless, so it must never go quiet. */
+    c.waveTimer -= dt;
+    const live = c.enemies.filter((e) => e.alive).length;
+    if (c.waveTimer <= 0 || live === 0) {
+      // The interval tightens as the fight escalates.
+      c.waveTimer = Math.max(9, COMBAT.waveInterval - this.runTime / 22);
+      c.spawnWave(player.distanceAlong, this._enemySpecs);
+      this.ui.banner(`WAVE ${c.wave}`, `${live === 0 ? 'AIRSPACE CLEAR — ' : ''}HOSTILES INBOUND`);
+      this.audio.play('alert', { volume: 0.8 });
+      // Reinforcements arriving means you are in the fight again.
+      this._disengageT = 0;
+      this._combatWarn = '';
+    }
+
+    this._trackManoeuvres(dt, player);
+    this._updateCombatHud(player);
+  }
+
+  /**
+   * Watch the airframe's attitude and count completed aerobatics. Rolls are
+   * counted by integrating bank angle through a full turn; loops by
+   * integrating pitch. Both are mandatory objectives in Endless Race, so they
+   * have to be counted from what the aircraft actually did, not from key
+   * presses — holding the key against a wall is not a roll.
+   */
+  _trackManoeuvres(dt, player) {
+    const m = this.metrics;
+    // --- roll: integrate the roll rate, count a turn every 2π ---------------
+    this._rollAcc = (this._rollAcc || 0) + (player.rollRateActual || 0) * dt;
+    while (Math.abs(this._rollAcc) >= TAU) {
+      this._rollAcc -= Math.sign(this._rollAcc) * TAU;
+      m.rolls++; m.manoeuvres++;
+      this.score += SCORE.manoeuvre * this.combo;
+      this.audio.play('overtake', { volume: 0.5 });
+      this.ui.notify('AILERON ROLL', 'good');
+    }
+    // --- loop: integrate pitch rate the same way ---------------------------
+    this._pitchAcc = (this._pitchAcc || 0) + (player.pitchRateActual || 0) * dt;
+    while (Math.abs(this._pitchAcc) >= TAU) {
+      this._pitchAcc -= Math.sign(this._pitchAcc) * TAU;
+      m.loops++; m.flips++; m.manoeuvres++;
+      this.score += SCORE.manoeuvre * 1.6 * this.combo;
+      this.ui.notify('LOOP COMPLETE', 'good');
+    }
+    // --- hard turn: a sustained pull above 6 G counts once ------------------
+    if (Math.abs(player.gLoad || 0) > 6) {
+      this._hardTurnT = (this._hardTurnT || 0) + dt;
+      if (this._hardTurnT > 0.8 && !this._hardTurnCounted) {
+        this._hardTurnCounted = true;
+        m.turns++; m.manoeuvres++;
+        this.score += SCORE.manoeuvre * 0.5 * this.combo;
+      }
+    } else { this._hardTurnT = 0; this._hardTurnCounted = false; }
+
+    // Speed scoring for the racing variant.
+    if (player.mach >= MACH.blurMach) {
+      m.machTime += dt;
+      this.score += SCORE.machHoldPerSec * dt * this.combo;
+    }
+  }
+
+  /** Target boxes, lock state and enemy speed labels. */
+  _updateCombatHud(player) {
+    const c = this.combat;
+    const cam = this.render.camera;
+    const boxes = [];
+    for (const e of c.liveEnemies()) {
+      _v.copy(e.position3);
+      const dist = _v.distanceTo(player.position);
+      if (dist > 7000) continue;
+      _v.project(cam);
+      // Off-screen targets must be dropped, not clamped: projecting a point
+      // behind or beside the camera still yields coordinates, and drawing them
+      // piles every out-of-view hostile into the corners of the HUD.
+      if (_v.z > 1) continue;
+      // Kept a little inside the frame so a bracket never lands on top of the
+      // HUD furniture in the corners.
+      if (_v.x < -0.93 || _v.x > 0.93 || _v.y < -0.90 || _v.y > 0.90) continue;
+      const mach = MACH.of(e.speed);
+      boxes.push({
+        x: (_v.x * 0.5 + 0.5) * 100,
+        y: (-_v.y * 0.5 + 0.5) * 100,
+        dist,
+        locked: e === c.lockTarget && c.locked,
+        tracking: e === c.lockTarget && !c.locked,
+        health: clamp01(e.health / e.maxHealth),
+        mach: mach.toFixed(1),
+        kmh: Math.round(mach * MACH.kmh),
+        color: e.livery,
+      });
+    }
+    this.ui.updateCombatHud({
+      boxes,
+      weapon: c.heavyWeapon,
+      ready: c.heavyCooldown <= 0,
+      reload: c.heavyWeapon.cooldown > 0 ? 1 - clamp01(c.heavyCooldown / c.heavyWeapon.cooldown) : 1,
+      lock: c.lockProgress,
+      locked: c.locked,
+      targetName: c.lockTarget?.name || '',
+      hostiles: c.enemies.filter((e) => e.alive).length,
+      wave: c.wave,
+      kills: this.metrics.kills,
+    });
+  }
+
+  /**
+   * The mode-specific ways a combat sortie ends, matching the game-over list
+   * shown on the main menu and the HUD. Returns true once the run is over.
+   */
+  _checkCombatFailure(dt, player, cfg) {
+    if (cfg.mode.speedFocus) {
+      // Endless Race: you have to keep the speed up, and stay with the pack.
+      if (player.mach < 4) {
+        this._slowT = (this._slowT || 0) + dt;
+        this._combatWarn = `SPEED CRITICAL · ${Math.max(0, 12 - this._slowT).toFixed(0)}s`;
+        if (this._slowT > 12) { this.endRun('SPEED LOST', false); return true; }
+      } else { this._slowT = 0; this._combatWarn = ''; }
+
+      const lead = this.combat?.liveEnemies()
+        .reduce((m, e) => Math.max(m, e.distanceAlong), -Infinity) ?? -Infinity;
+      if (isFinite(lead) && lead - player.distanceAlong > 6000) {
+        this.endRun('OUT-RUN BY THE SQUADRON', false);
+        return true;
+      }
+    } else {
+      /* Endless Battle: leaving the fight is the same as losing it.
+       *
+       * Hysteresis is essential here, not a nicety. At Mach 18 the airframe
+       * covers 12 km in the time this check runs a few hundred times, so a
+       * single threshold has hostiles crossing it back and forth every second
+       * and the warning strobes on and off. The timer therefore starts at
+       * 16 km and only clears once the fight is back inside 11 km. */
+      let nearest = Infinity;
+      for (const e of this.combat?.liveEnemies() || []) {
+        nearest = Math.min(nearest, e.position3.distanceTo(player.position));
+      }
+      const running = (this._disengageT || 0) > 0;
+      const away = nearest > (running ? 11000 : 16000);
+      if (away && this.combat?.enemies.length) {
+        this._disengageT = (this._disengageT || 0) + dt;
+        this._combatWarn = `RETURN TO COMBAT AIRSPACE · ${Math.max(0, 20 - this._disengageT).toFixed(0)}s`;
+        if (this._disengageT > 20) { this.endRun('LEFT THE ENGAGEMENT', false); return true; }
+      } else { this._disengageT = 0; this._combatWarn = ''; }
+
+      // A stalled airframe under fire is a dead airframe.
+      if (player.mach < 2 && player.damage01 > 0.75) {
+        this.endRun('SHOT DOWN WHILE STALLED', false);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  _processCombatEvents(events) {
+    for (const ev of events) {
+      switch (ev.type) {
+        case 'hit':
+          if (!ev.fromPlayer) break;
+          this.metrics.hits++;
+          if (!ev.weapon.tracer) this.metrics.missiles++;
+          this.score += (ev.weapon.tracer ? SCORE.gunHit : SCORE.weaponHit) * this.combo;
+          this._bumpCombo();
+          break;
+        case 'kill':
+          this.metrics.kills++;
+          // A kill taken without being hit since the last one is worth more.
+          if (!this._hitSinceKill) this.metrics.cleanKills = (this.metrics.cleanKills || 0) + 1;
+          this._hitSinceKill = false;
+          this.score += SCORE.kill * this.combo;
+          this._bumpCombo();
+          this.audio.play('explosion', { volume: 0.9 });
+          this.ui.notify('TARGET DESTROYED', 'good');
+          break;
+        case 'playerHit':
+          this.metrics.damageTaken += ev.amount;
+          this._hitSinceKill = true;
+          break;
+        case 'noLock':
+          this.ui.notify('NO LOCK', 'bad');
+          break;
+        case 'launch':
+          this.metrics.shotsFired++;
+          break;
+        default: break;
+      }
+    }
   }
 
   _processEvents(events, dt) {
@@ -975,6 +1237,8 @@ export class Game {
     rec('score', finalScore, 'bestScore');
     rec('distance', m.distance, 'bestDistance');
     rec('speed', Math.round(m.topSpeedKmh), 'bestSpeedKmh');
+    rec('mach', Math.round(m.topMach * 10) / 10, 'bestMach');
+    rec('kills', m.kills, 'bestKills');
     rec('combo', Math.round(m.maxCombo * 10) / 10, 'bestCombo');
     rec('clean', m.cleanStreak, 'bestCleanStreak');
     if (cfg.mode.id === 'survival' || cfg.mode.id === 'endless') rec('survival', m.time, 'bestSurvivalTime');
@@ -987,6 +1251,8 @@ export class Game {
     st.totalRings += m.rings;
     st.totalScore += finalScore;
     st.totalTime += m.time;
+    st.totalKills = (st.totalKills || 0) + m.kills;
+    st.totalManoeuvres = (st.totalManoeuvres || 0) + m.manoeuvres;
     if (!success) st.crashes++;
     if (cfg.mode.hasRivals && this.finished) {
       if (position === 1) { st.wins++; if (cfg.difficulty.order === 4) st.legendaryWins++; }
@@ -1043,7 +1309,8 @@ export class Game {
       { label: 'Distance', value: `${(m.distance / 1000).toFixed(2)} km`, record: !!records.distance },
       { label: 'Time', value: formatTime(m.time, false) },
       { label: 'Position', value: cfg.mode.hasRivals ? `${position} / ${gridSize}` : '—' },
-      { label: 'Top Speed', value: `${Math.round(m.topSpeedKmh)} km/h`, record: !!records.speed },
+      { label: 'Top Speed', value: `${nfmt(Math.round(m.topSpeedKmh))} km/h`, record: !!records.speed },
+      { label: 'Top Mach', value: `M ${m.topMach.toFixed(1)}`, record: !!records.mach },
       { label: 'Checkpoints', value: nfmt(m.checkpoints) },
       { label: 'Rings', value: nfmt(m.rings) },
       { label: 'Near Misses', value: nfmt(m.nearMisses) },
@@ -1053,6 +1320,14 @@ export class Game {
       { label: 'Collisions', value: nfmt(m.collisions) },
     ];
     if (cfg.mode.hasLaps) tiles.push({ label: 'Best Lap', value: formatTime(this.bestLap) });
+    // Combat modes are scored on the fight, so those numbers lead rather than
+    // being buried among the racing ones.
+    if (cfg.mode.combat) {
+      tiles.splice(1, 0,
+        { label: 'Kills', value: nfmt(m.kills), record: !!records.kills },
+        { label: 'Weapon Hits', value: nfmt(m.hits) },
+        { label: 'Manoeuvres', value: nfmt(m.manoeuvres) });
+    }
 
     const rewards = [`+${nfmt(credits)} ◈ CREDITS`];
     if (objDone.length) rewards.push(`${objDone.length} / ${this.objectives.length} OBJECTIVES`);
@@ -1083,7 +1358,6 @@ export class Game {
     if (want && this.state !== 'paused') {
       this.prePauseState = this.state;
       this.state = 'paused';
-      this.input.enabled = false;
       this.audio.stopEngine();
       this.audio.setMusicIntensity(0.15);
       const cfg = this.runConfig;
@@ -1101,7 +1375,6 @@ export class Game {
       this.ui.setHudVisible(false);
     } else if (!want && this.state === 'paused') {
       this.state = this.prePauseState || 'racing';
-      this.input.enabled = true;
       this.audio.startEngine();
       this.ui.showScreen('none');
       this.ui.setHudVisible(true);
@@ -1119,8 +1392,13 @@ export class Game {
       try { this.tick(now); }
       catch (err) {
         console.error('[Loop] frame failed:', err);
+        // Errors decay: only a sustained storm should stop the loop, not a
+        // hundred isolated hiccups spread across a long session.
+        const t = performance.now();
+        if (t - (this._lastFrameError || 0) > 4000) this._frameErrors = 0;
+        this._lastFrameError = t;
         this._frameErrors = (this._frameErrors || 0) + 1;
-        if (this._frameErrors > 120) {
+        if (this._frameErrors > 240) {
           cancelAnimationFrame(this._rafId);
           this._rafId = 0;
           this.ui.toast('A rendering error stopped the loop — reload to continue', 'bad');
@@ -1132,6 +1410,10 @@ export class Game {
 
   tick(now) {
     const dt = this.perf.begin(now);
+    // Derived, never assigned from the individual transitions: pausing used to
+    // disable input and only resuming re-enabled it, so Restart from the pause
+    // menu left the whole keyboard dead until the page was reloaded.
+    this.input.enabled = this.state !== 'paused';
     this.elapsed += dt;
     this.quality.update(dt);
 
@@ -1190,6 +1472,7 @@ export class Game {
     return {
       focus: p.position,
       speed01: p.speed01 || 0,
+      mach01: p.mach01 || 0,
       boost: p.boostBlend || 0,
       damage: this.state === 'racing' ? clamp01((p.damage01 - 0.55) / 0.45) : 0,
       phase: p.phaseActive ? 1 : 0,
@@ -1286,7 +1569,16 @@ export class Game {
       combo: this.combo,
       distance: this.metrics.distance,
       checkpoints: this.metrics.checkpoints,
+      // Battle has no gates, so the slot that normally counts them counts the
+      // thing that actually matters instead.
+      soloLabel: cfg.mode.noRings ? 'KILLS' : 'CHECKPOINTS',
+      soloValue: cfg.mode.noRings ? this.metrics.kills : this.metrics.checkpoints,
+      soloUnit: cfg.mode.noRings ? 'DOWNED' : 'GATES',
+      // There is no route to be off in an open-airspace fight.
+      hasRoute: !cfg.mode.noRings,
       speedKmh: p.speedKmh,
+      mach: p.mach,
+      mach01: p.mach01,
       altitude: p.altitude,
       agl: p.agl,
       aglNorm: clamp01(p.agl / 3000),
@@ -1299,6 +1591,7 @@ export class Game {
       boost: p.boost01,
       hull: p.health / p.maxHealth,
       corridorOut: p.corridorOut,
+      warn: this._combatWarn || '',
       modeName: cfg.mode.name,
       objective: objView,
       powers: p.powers.slots.map((s) => ({
@@ -1421,8 +1714,8 @@ export class Game {
   }
 
   async _returnToMenu() {
-    this.input.enabled = true;
     if (this.director) { this.director.dispose(); this.director = null; }
+    if (this.combat) { this.combat.dispose(); this.combat = null; this.ui.clearCombatHud(); }
     this.ui.showScreen('loading');
     this.ui.setLoadProgress(0, 'Returning to hangar');
     await nextFrame();
