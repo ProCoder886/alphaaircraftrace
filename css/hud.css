@@ -552,6 +552,28 @@ body.touch-mode .zoom-btn { width: 2.1em; height: 2.1em; font-size: 0.95em; }
   color: var(--lime); text-shadow: 0 0 8px rgba(157, 255, 74, 0.55);
 }
 
+/* Guns. No per-weapon keys — the belt cycles on NUM 8 — so the rack shows what
+   is loaded and lights the one that is up. */
+.gun-rack { display: flex; gap: 3px; padding-left: 8px; border-left: 1px solid rgba(120, 230, 255, 0.16); }
+.gun-slot {
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 6px; border-radius: 3px;
+  border: 1px solid rgba(255, 235, 150, 0.20); background: rgba(28, 26, 10, 0.5);
+  font-size: 0.42rem; letter-spacing: 0.08em; color: rgba(255, 244, 200, 0.55);
+}
+.gun-slot.armed {
+  border-color: #ffe06a; background: rgba(92, 76, 12, 0.72);
+  color: #fff6cf; box-shadow: 0 0 12px rgba(255, 220, 90, 0.4);
+}
+.rack-key {
+  align-self: center; flex: none;
+  font-family: var(--font-num); font-size: 0.42rem; font-weight: 700; line-height: 1;
+  padding: 2px 3px; border-radius: 2px; color: #fff6cf;
+  border: 1px solid rgba(255, 224, 106, 0.45); background: rgba(40, 34, 6, 0.9);
+}
+.wpn-rack .rack-key { color: #ffd9c2; border-color: rgba(255, 150, 90, 0.45); background: rgba(46, 18, 8, 0.9); }
+.gun-rack, .wpn-rack { align-items: center; }
+
 /* The four heavy weapons and their keys, with the armed one lit. Sits beside
    the lock strip so selecting and firing never needs a menu. */
 .wpn-rack { display: flex; gap: 3px; padding-left: 8px; border-left: 1px solid rgba(120, 230, 255, 0.16); }

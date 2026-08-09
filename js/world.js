@@ -420,11 +420,20 @@ export class TerrainMesh {
     this.active = new Map();
     this.buildQueue = [];
 
-    // Water plane (biomes with standing water only).
+    /* --- water ------------------------------------------------------------
+     * One plane centred on the camera, but the surface detail is analytic in
+     * the shader rather than a tiled texture, so it stays sharp at every
+     * distance and never blocks up into squares. The grid is only there so the
+     * plane has enough vertices to interpolate world position accurately
+     * across a hundred kilometres; the waves themselves are per-pixel. */
     this.waterEnabled = field.biome.relief.water > 0.1;
     if (this.waterEnabled) {
-      const g = new THREE.PlaneGeometry(1, 1, 1, 1).rotateX(-Math.PI / 2);
-      this.water = new THREE.Mesh(g, materials.water(field.biome.ground.water));
+      const g = new THREE.PlaneGeometry(1, 1, 24, 24).rotateX(-Math.PI / 2);
+      const deep = new THREE.Color(field.biome.ground.water);
+      // Shallows are the same water lifted and pushed toward green — the
+      // colour you get when there is a bottom close enough to scatter light.
+      const shallow = deep.clone().offsetHSL(-0.03, 0.06, 0.16);
+      this.water = new THREE.Mesh(g, materials.waterSurface(deep.getHex(), shallow.getHex()));
       this.water.frustumCulled = false;
       this.water.renderOrder = -5;
       this.group.add(this.water);
@@ -551,11 +560,6 @@ export class TerrainMesh {
       const s = this.baseSize * Math.pow(2, this.levels) * 3;
       this.water.scale.set(s, 1, s);
       this.water.position.set(focus.x, this.field.waterLevel, focus.z);
-      this.water.material.normalScale?.set(2.5, 2.5);
-      if (this.water.material.normalMap) {
-        this.water.material.normalMap.repeat.set(s / 60, s / 60);
-        this.water.material.normalMap.offset.x = (performance.now() * 0.00001) % 1;
-      }
     }
     if (this.ceiling) {
       const s = this.baseSize * 6;

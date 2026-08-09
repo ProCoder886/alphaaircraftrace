@@ -553,6 +553,7 @@ export class MaterialLibrary {
     this.envMap = null;
     this.tracked = [];    // materials that need envMap re-assignment
     this.energyMats = []; // materials with a uTime uniform
+    this.waterMats = [];  // water surfaces, driven by sky + weather each frame
   }
 
   _track(m) { this.tracked.push(m); if (this.envMap) m.envMap = this.envMap; return m; }
@@ -682,6 +683,176 @@ export class MaterialLibrary {
     })));
   }
 
+  /**
+   * Open water.
+   *
+   * The old surface was one flat plane wearing a 256 px normal map tiled a
+   * thousand times across a hundred kilometres. Everything wrong with it came
+   * from that: the tiling read as square blocks close up, the sub-pixel normals
+   * aliased into a field of white sparkles at range, and a mirror-smooth
+   * roughness turned every one of those sparkles into a specular pop.
+   *
+   * This replaces the texture entirely with analytic waves evaluated per pixel.
+   * Six octaves of travelling sine ridges, differentiated for the normal, so
+   * there is no texture and therefore no tiling at any distance. The octave
+   * amplitudes fall off with distance from the camera — the fix for the
+   * glitter, because it removes the detail that cannot be resolved rather than
+   * trying to filter it afterwards — and the specular is one controlled
+   * Blinn lobe with a roughness that widens with distance, which turns the
+   * scattered sparkle into a single coherent sun track on the water.
+   *
+   * Colour comes from a Fresnel blend between depth-graded water and the sky
+   * gradient, so the sea takes the mood of whatever time of day and weather
+   * the venue is running.
+   */
+  waterSurface(deep, shallow) {
+    const key = `waterS_${deep}_${shallow}`;
+    if (this.cache.has(key)) return this.cache.get(key);
+    const m = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      uniforms: {
+        uTime: { value: 0 },
+        uDeep: { value: new THREE.Color(deep) },
+        uShallow: { value: new THREE.Color(shallow) },
+        uSunDir: { value: new THREE.Vector3(0.3, 0.4, -0.86) },
+        uSunColor: { value: new THREE.Color(0xfff0d8) },
+        uZenith: { value: new THREE.Color(0x2b5f9e) },
+        uHorizon: { value: new THREE.Color(0xbcd4e8) },
+        uWind: { value: new THREE.Vector2(1, 0.35) },
+        uChop: { value: 1 },            // wave amplitude, driven by weather
+        uOpacity: { value: 0.94 },
+        uFogColor: { value: new THREE.Color(0xbcd4e8) },
+        uFogNear: { value: 4000 },
+        uFogFar: { value: 42000 },
+      },
+      vertexShader: /* glsl */`
+        varying vec3 vWorld;
+        void main(){
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          vWorld = wp.xyz;
+          gl_Position = projectionMatrix * viewMatrix * wp;
+        }`,
+      fragmentShader: /* glsl */`
+        precision highp float;
+        uniform float uTime, uChop, uOpacity, uFogNear, uFogFar;
+        uniform vec3 uDeep, uShallow, uSunDir, uSunColor, uZenith, uHorizon, uFogColor;
+        uniform vec2 uWind;
+        varying vec3 vWorld;
+
+        /* One travelling wave train. Returns height and writes the analytic
+         * gradient, so the normal is exact rather than sampled — no texture,
+         * no tiling, no aliasing. */
+        float wave(vec2 p, vec2 dir, float len, float speed, float t, inout vec2 grad) {
+          float k = 6.28318 / len;
+          float ph = dot(p, dir) * k + t * speed * k;
+          // Sharpened crests: real water has narrow peaks and broad troughs.
+          float s = sin(ph);
+          float h = s;
+          float d = cos(ph) * k;
+          grad += dir * d;
+          return h;
+        }
+
+        void main(){
+          vec3 V = cameraPosition - vWorld;
+          float dist = length(V);
+          V /= dist;
+
+          /* --- detail LOD ---------------------------------------------------
+           * Each octave fades out once its wavelength drops below what this
+           * pixel can resolve. This is the whole reason the surface stops
+           * sparkling: the detail is removed before it can alias, instead of
+           * being drawn and then fought with. */
+          vec2 p = vWorld.xz;
+          vec2 grad = vec2(0.0);
+          float amp = 1.0;
+          float len = 260.0;
+          float t = uTime;
+          vec2 d1 = normalize(uWind + vec2(0.001));
+          float h = 0.0;
+          float norm = 0.0;
+          for (int i = 0; i < 6; i++) {
+            // Rotate each octave so the swell is not one repeating direction.
+            float a = float(i) * 1.9;
+            vec2 dir = normalize(vec2(d1.x * cos(a) - d1.y * sin(a), d1.x * sin(a) + d1.y * cos(a)));
+            // Resolve limit: fade the octave as the wavelength approaches the
+            // on-screen size of a pixel at this distance.
+            float fade = smoothstep(0.0, 1.0, clamp(len * 900.0 / max(dist, 1.0) - 0.35, 0.0, 1.0));
+            vec2 g = vec2(0.0);
+            h += wave(p, dir, len, 7.0 + float(i) * 2.2, t, g) * amp * fade;
+            grad += g * amp * fade;
+            norm += amp * fade;
+            amp *= 0.62;
+            len *= 0.47;
+          }
+          float chop = uChop * 0.020;
+          vec3 N = normalize(vec3(-grad.x * chop, 1.0, -grad.y * chop));
+
+          /* --- sky and sun ------------------------------------------------ */
+          vec3 R = reflect(-V, N);
+          float up = clamp(R.y, 0.0, 1.0);
+          vec3 sky = mix(uHorizon, uZenith, pow(up, 0.55));
+
+          // Fresnel: water is nearly a mirror at grazing angles and nearly
+          // transparent looking straight down, which is most of what makes it
+          // read as water rather than as a coloured plane.
+          float f = clamp(dot(N, V), 0.0, 1.0);
+          float fres = 0.02 + 0.98 * pow(1.0 - f, 5.0);
+
+          // Depth grading: shallow where the surface faces you, deep at range.
+          vec3 body = mix(uShallow, uDeep, smoothstep(0.0, 0.55, 1.0 - f));
+
+          vec3 col = mix(body, sky, fres);
+
+          /* --- specular ----------------------------------------------------
+           * One lobe, widening with distance. A constant tight lobe is exactly
+           * what produced the field of white dots: at range every wave facet
+           * either hits the mirror angle or misses it entirely. Widening it
+           * merges them into a sun track. */
+          vec3 L = normalize(uSunDir);
+          vec3 H = normalize(L + V);
+          float rough = mix(0.10, 0.40, clamp(dist / 26000.0, 0.0, 1.0));
+          float shin = 2.0 / (rough * rough) - 2.0;
+          float spec = pow(max(dot(N, H), 0.0), shin) * (shin + 8.0) / 25.13;
+          // Gated on the sun being ABOVE the horizon, not on it being high.
+          // A low sun is when the track across the water is at its longest and
+          // most dramatic — fading it out at sunset threw away the best light
+          // the shader ever gets.
+          spec *= smoothstep(-0.04, 0.10, L.y);
+          // Rolled off rather than left to run away: an unbounded Blinn lobe
+          // clips to a flat white blob at the centre of the sun track, which
+          // is the one bit of glare that reads as a bug rather than as sun.
+          spec = spec / (1.0 + spec * 0.55);
+          col += uSunColor * spec * 1.15 * fres;
+
+          /* --- crest detail ---------------------------------------------
+           * Sub-surface scatter through the top of a wave, plus a thin band of
+           * broken white right on the sharpest crests. Both are gated on the
+           * same resolve limit as the octaves, so they add detail up close and
+           * quietly disappear before they can turn into speckle at range. */
+          float crest = clamp(h / max(norm, 0.001), 0.0, 1.0);
+          float near = 1.0 - clamp(dist / 9000.0, 0.0, 1.0);
+          col += uShallow * crest * 0.16;
+          float foam = smoothstep(0.72, 0.97, crest) * near * clamp(uChop - 0.5, 0.0, 1.6);
+          col = mix(col, vec3(0.86, 0.92, 0.95), foam * 0.35);
+
+          // Match the scene fog so the horizon does not cut a hard line.
+          float fog = clamp((dist - uFogNear) / max(1.0, uFogFar - uFogNear), 0.0, 1.0);
+          col = mix(col, uFogColor, fog * fog);
+
+          gl_FragColor = vec4(col, mix(uOpacity, 1.0, fres * 0.6));
+        }`,
+    });
+    // Deliberately not _track()ed: it is a ShaderMaterial doing its own sky
+    // reflection, so an assigned envMap would be an unused property.
+    this.cache.set(key, m);
+    this.waterMats.push(m);
+    // Pick up whatever sky is already configured — see syncWater().
+    this._applyWaterEnv(m);
+    return m;
+  }
+
   rock(color) {
     return this.cached(`rock_${color}`, () => this._track(new THREE.MeshStandardMaterial({
       color, roughness: 0.92, metalness: 0.03, flatShading: true, envMapIntensity: 0.5,
@@ -716,7 +887,40 @@ export class MaterialLibrary {
 
   cached(key, fn) { if (!this.cache.has(key)) this.cache.set(key, fn()); return this.cache.get(key); }
 
-  update(time) { for (const m of this.energyMats) m.uniforms.uTime.value = time; }
+  update(time) {
+    for (const m of this.energyMats) m.uniforms.uTime.value = time;
+    for (const m of this.waterMats) m.uniforms.uTime.value = time;
+  }
+
+  /**
+   * Point every water surface at the current sky. Called when the venue is
+   * configured and whenever the weather transitions, so the sea reflects the
+   * sky it is actually under rather than a fixed blue.
+   */
+  syncWater(sky, fog, chop = 1) {
+    // Remembered, because the venue is configured BEFORE the world builds its
+    // terrain — so the water material does not exist yet at the moment the sky
+    // is set, and without this it would spend the whole run reflecting the
+    // default midday blue whatever the venue actually looks like.
+    this._waterEnv = { sky, fog, chop };
+    for (const m of this.waterMats) this._applyWaterEnv(m);
+  }
+
+  _applyWaterEnv(m) {
+    const e = this._waterEnv;
+    if (!e) return;
+    const u = m.uniforms;
+    u.uSunDir.value.copy(e.sky.sunDirection);
+    u.uSunColor.value.copy(e.sky.sunColor);
+    u.uZenith.value.copy(e.sky.uniforms.uZenith.value);
+    u.uHorizon.value.copy(e.sky.uniforms.uHorizon.value);
+    u.uChop.value = e.chop;
+    if (e.fog) {
+      u.uFogColor.value.copy(e.fog.color);
+      u.uFogNear.value = e.fog.near ?? 4000;
+      u.uFogFar.value = e.fog.far ?? 42000;
+    }
+  }
 
   dispose() {
     for (const m of this.cache.values()) {
@@ -724,6 +928,8 @@ export class MaterialLibrary {
       else if (m.map) { m.map.dispose?.(); m.rough?.dispose?.(); }
     }
     this.cache.clear(); this.tracked.length = 0; this.energyMats.length = 0;
+    this.waterMats.length = 0;
+    this._waterEnv = null;
   }
 }
 
@@ -3007,6 +3213,57 @@ export class VFX {
     });
   }
 
+  /**
+   * An aircraft coming apart.
+   *
+   * A single `explode()` reads as "a thing happened over there". A kill should
+   * read as an airframe being destroyed, which is a sequence: the warhead or
+   * the fuel goes first as a white flash, the fireball blooms behind it, the
+   * shockwave ring punches outward, burning fuel and structure are thrown
+   * along the aircraft's own velocity — not radially, because it was doing
+   * Mach 12 when it died — and a black column is left hanging in the air.
+   *
+   * @param vel the dying aircraft's velocity, so debris inherits its motion
+   */
+  aircraftKill(pos, vel, color = 0xffa040, scale = 1) {
+    // 1. Detonation: white core, then the coloured fireball a beat behind it.
+    this.explode(pos, 22 * scale, 0xfff3d0);
+    this.explode(pos, 34 * scale, 0xff8a2a);
+
+    // 2. Shrapnel, thrown forward with the wreck rather than in a neat sphere.
+    this._col.set(0xffc266);
+    const along = vel ? this._tmp.copy(vel).multiplyScalar(0.35) : null;
+    this.sparks.emit(pos, 110, {
+      speed: 190 * scale, life: 1.6, size: 2.6, drag: 0.9,
+      color: this._col, colorVar: 0.45, spread: 2, dir: along,
+    });
+    // 3. Burning fuel — slower, redder, longer-lived.
+    this._col.set(0xff5a1e);
+    this.sparks.emit(pos, 60, {
+      speed: 90 * scale, life: 2.8, size: 4.2, drag: 1.6,
+      color: this._col, colorVar: 0.3, spread: 2,
+    });
+    // 4. The smoke column that hangs there afterwards.
+    this._col.set(0x2c2c2e);
+    this.smoke.emit(pos, 34, {
+      speed: 60 * scale, life: 4.2, size: 26 * scale, drag: 1.8,
+      color: this._col, spread: 2, sizeVar: 0.8,
+    });
+    this._col.set(0x6a5a52);
+    this.smoke.emit(pos, 18, {
+      speed: 26 * scale, life: 5.5, size: 40 * scale, drag: 2.4,
+      color: this._col, spread: 2, sizeVar: 0.9,
+    });
+  }
+
+  /** Trailing fire and smoke off a falling wreck. Called each frame while it drops. */
+  wreckTrail(pos, scale = 1) {
+    this._col.set(0x3a3a3c);
+    this.smoke.emit(pos, 2, { speed: 12, life: 2.6, size: 14 * scale, drag: 2.0, color: this._col, spread: 1.6, sizeVar: 0.7 });
+    this._col.set(0xff7a26);
+    this.sparks.emit(pos, 3, { speed: 22, life: 0.9, size: 2.4, drag: 2.2, color: this._col, colorVar: 0.4, spread: 1.8 });
+  }
+
   sparkBurst(pos, dir, amount = 18, color = 0xffcc66) {
     this._col.set(color);
     this.sparks.emit(pos, amount, {
@@ -3189,6 +3446,14 @@ export class RenderSystem {
       * (biome.ceiling ? 1.55 : 1);
 
     this.vfx.setWeather(weatherId, 1);
+    // The sea takes the sky it is under: sun angle, sun colour, the dome
+    // gradient it reflects, the fog it fades into, and how rough the weather
+    // has made it.
+    this.materials.syncWater(this.sky, {
+      color: this.sky.fogColor,
+      near: this.viewRange * 0.12,
+      far: this.viewRange * 1.05,
+    }, lerp(0.55, 2.1, clamp01(w.wind ?? 0.3)));
     this.updateEnvMap(true);
   }
 

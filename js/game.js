@@ -11,7 +11,7 @@ import {
   AIRCRAFT, AIRCRAFT_BY_ID, BIOMES, BIOMES_BY_ID, MODES, DIFFICULTIES, WEATHER, TIME_OF_DAY,
   CAMPAIGN, OBJECTIVE_POOL, ACHIEVEMENTS, SCORE, CREDITS, POWERS, WORLD,
   DEFAULT_SAVE, STORAGE_KEY, LOADING_STAGES, DEFAULTS, MACH, COMBAT, WEAPONS_BY_ID,
-  HEAVY_ORDER, DEFAULT_BINDINGS,
+  HEAVY_ORDER, GUN_ORDER, DEFAULT_BINDINGS,
   RNG, hashSeed, clamp, clamp01, lerp, damp, TAU,
 } from './config.js';
 import { DeviceProfile, PerfMonitor, AdaptiveQuality, Scheduler, LoadPipeline, nextFrame } from './performance.js';
@@ -1033,6 +1033,11 @@ export class Game {
     const c = this.combat;
     const raw = this._rawInput || {};
 
+    if (raw.cycleGun) {
+      const w = c.cycleGun();
+      this.audio.ui('click');
+      this.ui.notify(`${w.name.toUpperCase()}`);
+    }
     if (raw.cycleWeapon) {
       const w = c.cycleWeapon();
       this.audio.ui('click');
@@ -1151,10 +1156,18 @@ export class Game {
       const code = (binds[action] || DEFAULT_BINDINGS[action] || [])[0];
       return { id, name: w.name, short: w.short, key: prettyKeyCap(code), armed: c.heavyWeapon.id === id };
     });
+    // The gun rack has no per-weapon keys — the whole set cycles on one — so
+    // the armed one is marked and the rest just show what is in the belt.
+    const gunRack = GUN_ORDER.map((id) => {
+      const w = WEAPONS_BY_ID[id];
+      return { id, name: w.name, short: w.short, armed: c.gunWeapon.id === id };
+    });
 
     this.ui.updateCombatHud({
       boxes,
       rack,
+      gunRack,
+      gun: c.gunWeapon,
       weapon: c.heavyWeapon,
       ready: c.heavyCooldown <= 0,
       reload: c.heavyWeapon.cooldown > 0 ? 1 - clamp01(c.heavyCooldown / c.heavyWeapon.cooldown) : 1,
@@ -1582,6 +1595,9 @@ export class Game {
     // disable input and only resuming re-enabled it, so Restart from the pause
     // menu left the whole keyboard dead until the page was reloaded.
     this.input.enabled = this.state !== 'paused';
+    // The trigger is only under the mouse in flight — in the menus a click is
+    // a click, and right-click must give back the browser's context menu.
+    this.input.mouseEnabled = this.state === 'racing' && !!this.runConfig?.mode?.combat;
     this.elapsed += dt;
     this.quality.update(dt);
 

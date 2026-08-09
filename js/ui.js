@@ -253,6 +253,7 @@ export class UI {
       wpnName: $('#wpn-name'),
       wpnReload: $('#wpn-reload-fill'),
       wpnRack: $('#wpn-rack'),
+      gunRack: $('#gun-rack'),
       cbtWave: $('#cbt-wave'),
       cbtKills: $('#cbt-kills'),
       cbtHostiles: $('#cbt-hostiles'),
@@ -1244,6 +1245,23 @@ export class UI {
     this.dom.lockText.textContent = s.locked ? 'TARGET LOCKED'
       : s.lock > 0.02 ? `ACQUIRING ${Math.round(s.lock * 100)}%` : 'NO TARGET';
     this.dom.wpnName.textContent = (s.weapon?.name || '').toUpperCase();
+    // Gun belt: built once, then only the armed class changes.
+    if (this.dom.gunRack && s.gunRack) {
+      if (!this._gunBuilt) {
+        this._gunBuilt = true;
+        this._gunSlots = s.gunRack.map((w) => {
+          const n = el('div', 'gun-slot');
+          n.title = w.name;
+          n.textContent = w.short;
+          this.dom.gunRack.appendChild(n);
+          return n;
+        });
+        this.dom.gunRack.appendChild(el('span', 'rack-key', 'N8'));
+      }
+      for (let i = 0; i < this._gunSlots.length; i++) {
+        this._gunSlots[i].classList.toggle('armed', s.gunRack[i].armed);
+      }
+    }
     // Weapon rack: built once, then only the armed class changes.
     if (this.dom.wpnRack && s.rack) {
       if (!this._rackBuilt) {
@@ -1256,6 +1274,7 @@ export class UI {
           this.dom.wpnRack.appendChild(n);
           return n;
         });
+        this.dom.wpnRack.appendChild(el('span', 'rack-key', 'N9'));
       }
       for (let i = 0; i < this._rackSlots.length; i++) {
         this._rackSlots[i].classList.toggle('armed', s.rack[i].armed);

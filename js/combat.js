@@ -21,7 +21,7 @@
 
 import * as THREE from 'three';
 import {
-  WEAPONS_BY_ID, HEAVY_ORDER, COMBAT, SCORE, PHYSICS, MACH, AIRCRAFT_BY_ID,
+  WEAPONS_BY_ID, HEAVY_ORDER, GUN_ORDER, COMBAT, SCORE, PHYSICS, MACH, AIRCRAFT_BY_ID,
   RNG, clamp, clamp01, lerp, damp, TAU,
 } from './config.js';
 import { AIRacer } from './ai.js';
@@ -405,6 +405,7 @@ export class CombatSystem {
     this.events = [];
 
     // Player weapon state.
+    this.gunIndex = 0;
     this.heavyIndex = 0;
     this.gunCooldown = 0;
     this.heavyCooldown = 0;
@@ -415,8 +416,10 @@ export class CombatSystem {
     this.wave = 0;
     this.waveTimer = 3;
     this.kills = 0;
+    this._aimQ = new THREE.Quaternion();
   }
 
+  get gunWeapon() { return WEAPONS_BY_ID[GUN_ORDER[this.gunIndex % GUN_ORDER.length]]; }
   get heavyWeapon() { return WEAPONS_BY_ID[HEAVY_ORDER[this.heavyIndex % HEAVY_ORDER.length]]; }
   get locked() { return this.lockProgress >= 1 && !!this.lockTarget; }
 
@@ -424,6 +427,13 @@ export class CombatSystem {
     this.heavyIndex = (this.heavyIndex + 1) % HEAVY_ORDER.length;
     this.heavyCooldown = Math.max(this.heavyCooldown, 0.25);
     return this.heavyWeapon;
+  }
+
+  /** Step to the next gun. Cheap — swapping barrels is not a reload. */
+  cycleGun() {
+    this.gunIndex = (this.gunIndex + 1) % GUN_ORDER.length;
+    this.gunCooldown = Math.max(this.gunCooldown, 0.12);
+    return this.gunWeapon;
   }
 
   /**
@@ -449,15 +459,25 @@ export class CombatSystem {
     return this.lockTarget;
   }
 
-  _candidates(player) {
+  /**
+   * Hostiles the seeker can see.
+   *
+   * `hold` widens the cone: a target that is already locked stays locked
+   * through a much harder angle than it took to acquire. Without that
+   * hysteresis a lock breaks the instant either aircraft starts manoeuvring,
+   * which at these speeds is always.
+   */
+  _candidates(player, hold = false) {
     const out = [];
     _v2.set(0, 0, -1).applyQuaternion(player.quaternion);
-    const cosLimit = Math.cos(COMBAT.lockConeDeg * Math.PI / 180);
+    const deg = hold ? COMBAT.lockHoldDeg : COMBAT.lockConeDeg;
+    const cosLimit = Math.cos(deg * Math.PI / 180);
+    const range = COMBAT.lockRange * (hold ? 1.35 : 1);
     for (const e of this.enemies) {
       if (!e.alive) continue;
       _v.copy(e.position3).sub(player.position);
       const d = _v.length();
-      if (d > COMBAT.lockRange || d < 1) continue;
+      if (d > range || d < 1) continue;
       if (_v.dot(_v2) / d < cosLimit) continue;
       out.push(e);
     }
@@ -549,17 +569,21 @@ export class CombatSystem {
    */
   playerFireGun(player, dt = 0) {
     if (this.gunCooldown > 0) return null;
-    const w = WEAPONS_BY_ID.gun;
+    const w = this.gunWeapon;
     let fired = 0;
-    const owed = Math.min(4, 1 + Math.floor(dt / w.cooldown));
+    const owed = Math.min(6, 1 + Math.floor(dt / w.cooldown));
+    // Aim the burst at the locked target rather than straight down the nose:
+    // at these closing speeds the lead angle is large, and expecting the pilot
+    // to compute it by eye at Mach 15 is not a skill test, it is a lottery.
+    const aim = this._gunAim(player, w);
     while (fired < owed) {
-      // Two barrels, offset either side of the nose.
-      for (const side of [-1, 1]) {
+      const barrels = w.barrels === 1 ? [0] : [-1, 1];
+      for (const side of barrels) {
         _v3.set(side * 1.5, -0.5, -4).applyQuaternion(player.quaternion).add(player.position);
         // Spread successive rounds down the flight path rather than stacking
         // them all on this frame's muzzle point.
         _v3.addScaledVector(player.velocity, -fired * w.cooldown);
-        const s = this.spawn(w, _v3, player.quaternion, player, null, 0xfff0a8);
+        const s = this.spawn(w, _v3, aim, player, null, w.color);
         if (s) s.fromPlayer = true;
       }
       fired++;
@@ -574,8 +598,8 @@ export class CombatSystem {
       this.render.vfx.sparkBurst(_v3, _v, 9, 0xfff2b0);
     }
     this.render.postfx.flash(0.055, 0xffe9a8);
-    this.render.rig.addShake(0.06, 42);
-    this.audio?.play('gunFire', { volume: 1 });
+    this.render.rig.addShake(w.id === 'heavygun' ? 0.16 : 0.06, 42);
+    this.audio?.play(w.id === 'heavygun' ? 'heavyGunFire' : 'gunFire', { volume: 1 });
     return w;
   }
 
@@ -613,6 +637,44 @@ export class CombatSystem {
     this.audio?.play(w.id === 'grenade' ? 'grenadeThrow' : 'missileLaunch', { volume: 1 });
     this.events.push({ type: 'launch', weapon: w });
     return w;
+  }
+
+  /**
+   * Firing solution for the guns.
+   *
+   * Returns a quaternion to spawn rounds along. With no lock this is simply
+   * the nose. With a lock it is a *lead* solution — solved iteratively, because
+   * the flight time depends on the range and the range depends on where the
+   * target will be — blended in by how close the pipper already is to the
+   * answer. That blend is what keeps it an assist rather than an aimbot: point
+   * roughly at the target and the rounds converge, point somewhere else and
+   * they go where you pointed.
+   */
+  _gunAim(player, weapon) {
+    const t = this.lockTarget;
+    if (!t || !t.alive) return player.quaternion;
+    const tp = t.position3 || t.position;
+
+    // Two iterations is plenty: the first gets the range right, the second
+    // gets the lead right at that range.
+    let tof = tp.distanceTo(player.position) / Math.max(1, weapon.speed);
+    for (let i = 0; i < 2; i++) {
+      _v.copy(tp).addScaledVector(t.velocity, tof).sub(player.position);
+      tof = _v.length() / Math.max(1, weapon.speed);
+    }
+    if (weapon.gravity) _v.y += 0.5 * weapon.gravity * tof * tof;
+    if (_v.lengthSq() < 1) return player.quaternion;
+    _v.normalize();
+
+    // How close is the nose already? Full assist when the target is inside the
+    // pipper, none once it is well outside.
+    _v2.set(0, 0, -1).applyQuaternion(player.quaternion);
+    const align = clamp01((_v2.dot(_v) - Math.cos(COMBAT.gunAssistDeg * Math.PI / 180))
+      / (1 - Math.cos(COMBAT.gunAssistDeg * Math.PI / 180)));
+    if (align <= 0) return player.quaternion;
+
+    _q.setFromUnitVectors(_v3.set(0, 0, -1), _v);
+    return this._aimQ.copy(player.quaternion).slerp(_q, align * COMBAT.gunAssist);
   }
 
   /** A hostile squeezes off a burst at the player. */
@@ -666,13 +728,23 @@ export class CombatSystem {
   }
 
   _updateLock(dt, player) {
-    // Drop a target that died, left the cone or ran out of range.
     if (this.lockTarget && !this.lockTarget.alive) this.lockTarget = null;
-    const cands = this._candidates(player);
-    if (!this.lockTarget || !cands.includes(this.lockTarget)) {
-      this.lockTarget = cands[0] || null;
-      if (!this.lockTarget) this.lockProgress = Math.max(0, this.lockProgress - dt * COMBAT.lockDecay);
+
+    // An existing lock is tested against the WIDE cone, a new one against the
+    // narrow one. Only if the current target falls outside even the wide cone
+    // does the seeker go looking for another.
+    const held = this.lockTarget && this._candidates(player, true).includes(this.lockTarget);
+    if (!held) {
+      const fresh = this._candidates(player, false);
+      const next = fresh[0] || null;
+      if (next !== this.lockTarget) {
+        this.lockTarget = next;
+        // Losing the target does not dump the lock instantly — it bleeds, so a
+        // momentary break through the edge of the cone is survivable.
+        if (!next) this.lockProgress = Math.max(0, this.lockProgress - dt * COMBAT.lockDecay);
+      }
     }
+
     if (this.lockTarget) {
       const was = this.lockProgress;
       this.lockProgress = clamp01(this.lockProgress + dt / COMBAT.lockTime);
@@ -680,6 +752,8 @@ export class CombatSystem {
         this.audio?.play('lockTone', { volume: 0.8 });
         this.events.push({ type: 'lock', target: this.lockTarget });
       }
+    } else {
+      this.lockProgress = Math.max(0, this.lockProgress - dt * COMBAT.lockDecay);
     }
   }
 
@@ -708,17 +782,30 @@ export class CombatSystem {
       if (s.delay > 0) { s.delay -= dt; continue; }
       const w = s.weapon;
 
-      /* --- guidance ------------------------------------------------------ */
+      /* --- guidance ------------------------------------------------------
+       * The seeker flies at where the target WILL be, not where it is. Pure
+       * pursuit — steering at the current position — makes a missile chase its
+       * target's tail and lose the tail chase whenever the target is faster
+       * than the closing margin, which at Mach 15 is most of the time. Solving
+       * the intercept instead is the difference between a weapon and a firework.
+       * The turn-rate cap still applies, so an impossible geometry still misses. */
       if (w.guided && s.target && s.target.alive) {
         const tp = s.target.position3 || s.target.position;
+        const speed = s.vel.length();
         _v.copy(tp).sub(s.pos);
+        let tof = _v.length() / Math.max(1, speed);
+        for (let k = 0; k < 2; k++) {
+          _v.copy(tp).addScaledVector(s.target.velocity, tof).sub(s.pos);
+          tof = _v.length() / Math.max(1, speed);
+        }
         const d = _v.length();
         if (d > 1) {
           _v.divideScalar(d);
-          // Proportional steering, capped by the seeker's turn rate.
-          const speed = s.vel.length();
           _v2.copy(s.vel).divideScalar(speed || 1);
-          const maxTurn = w.turnRate * dt;
+          // Terminal homing: the seeker gets sharper as it closes, which is
+          // what stops a near-miss at the last hundred metres.
+          const terminal = 1 + clamp01(1 - d / 900) * 2.2;
+          const maxTurn = w.turnRate * terminal * dt;
           const cosA = clamp(_v2.dot(_v), -1, 1);
           const ang = Math.acos(cosA);
           const t = ang > 1e-4 ? Math.min(1, maxTurn / ang) : 1;
@@ -887,11 +974,39 @@ export class CombatSystem {
 }
 
 /* Enemy personalities. Deliberately more aggressive than the racing set — a
- * hostile that flies a clean racing line is not a threat. */
+ * hostile that flies a clean racing line is not a threat.
+ *
+ * These MUST carry the full archetype field set, not just the combat-relevant
+ * ones. The flight brain they inherit reads `lineWander`, `blockChance`,
+ * `risk`, `boostGreed` and `drafting`, and a missing field does not read as
+ * zero — it reads as `lerp(a, b, undefined)`, which is NaN. That NaN went
+ * straight into `targetLateral`, from there into every enemy's world position,
+ * and from there into locking, hit tests, target boxes and the kill effects.
+ * Hostiles were flying at coordinates that do not exist. */
 const ENEMY_ARCHETYPES = [
-  { id: 'hunter', name: 'Hunter', skill: 0.78, aggression: 0.90, mistakeBias: 0.7, speedBias: 1.02, agilityBias: 1.06 },
-  { id: 'ace', name: 'Ace', skill: 0.94, aggression: 0.78, mistakeBias: 0.35, speedBias: 1.05, agilityBias: 1.12 },
-  { id: 'brawler', name: 'Brawler', skill: 0.62, aggression: 1.00, mistakeBias: 1.1, speedBias: 0.98, agilityBias: 0.94 },
-  { id: 'sniper', name: 'Sniper', skill: 0.86, aggression: 0.55, mistakeBias: 0.5, speedBias: 1.08, agilityBias: 0.90 },
-  { id: 'wingman', name: 'Wingman', skill: 0.70, aggression: 0.66, mistakeBias: 0.8, speedBias: 1.00, agilityBias: 1.00 },
+  {
+    id: 'hunter', name: 'Hunter', skill: 0.78, aggression: 0.90, risk: 0.75,
+    speedBias: 1.02, agilityBias: 1.06,
+    lineWander: 0.55, blockChance: 0.40, boostGreed: 0.75, mistakeBias: 0.7, drafting: 0.7,
+  },
+  {
+    id: 'ace', name: 'Ace', skill: 0.94, aggression: 0.78, risk: 0.62,
+    speedBias: 1.05, agilityBias: 1.12,
+    lineWander: 0.30, blockChance: 0.30, boostGreed: 0.80, mistakeBias: 0.35, drafting: 0.85,
+  },
+  {
+    id: 'brawler', name: 'Brawler', skill: 0.62, aggression: 1.00, risk: 0.90,
+    speedBias: 0.98, agilityBias: 0.94,
+    lineWander: 0.75, blockChance: 0.55, boostGreed: 0.90, mistakeBias: 1.1, drafting: 0.4,
+  },
+  {
+    id: 'sniper', name: 'Sniper', skill: 0.86, aggression: 0.55, risk: 0.40,
+    speedBias: 1.08, agilityBias: 0.90,
+    lineWander: 0.22, blockChance: 0.15, boostGreed: 0.55, mistakeBias: 0.5, drafting: 0.6,
+  },
+  {
+    id: 'wingman', name: 'Wingman', skill: 0.70, aggression: 0.66, risk: 0.55,
+    speedBias: 1.00, agilityBias: 1.00,
+    lineWander: 0.42, blockChance: 0.28, boostGreed: 0.6, mistakeBias: 0.8, drafting: 0.75,
+  },
 ];

@@ -1006,11 +1006,35 @@ export const MODE_ORDER = ['endless', 'battle', 'endlessrace', 'quick', 'campaig
  * ======================================================================== */
 
 export const WEAPONS = [
+  /* ---- guns -------------------------------------------------------------
+   * Four barrels with genuinely different characters rather than four names
+   * for the same thing: a general-purpose autocannon, a fast weak minigun, a
+   * slow heavy cannon that hurts, and a hitscan-fast plasma repeater. The
+   * whole set cycles on one key, so switching mid-merge is a single press.
+   * -------------------------------------------------------------------- */
   {
-    id: 'gun', name: 'Cannon', short: 'GUN', icon: 'gun', heavy: false,
-    damage: 7, speed: 2600, life: 2.2, cooldown: 0.075, spread: 0.010,
-    guided: false, radius: 12, color: 0xfff0a8, tracer: true,
-    desc: 'Rapid-fire cannon. No lock required.',
+    id: 'gun', name: 'Autocannon', short: 'GUN', icon: 'gun', heavy: false,
+    damage: 9, speed: 2600, life: 2.2, cooldown: 0.075, spread: 0.010,
+    guided: false, radius: 26, color: 0xfff0a8, tracer: true, barrels: 2,
+    desc: '25 mm autocannon. Balanced rate and punch.',
+  },
+  {
+    id: 'minigun', name: 'Minigun', short: 'MIN', icon: 'gun', heavy: false,
+    damage: 4, speed: 2200, life: 1.9, cooldown: 0.030, spread: 0.019,
+    guided: false, radius: 24, color: 0xffd070, tracer: true, barrels: 2,
+    desc: 'Rotary minigun. Enormous rate, wide cone, low damage per round.',
+  },
+  {
+    id: 'heavygun', name: 'Heavy Cannon', short: 'HVY', icon: 'gun', heavy: false,
+    damage: 26, speed: 3000, life: 2.6, cooldown: 0.24, spread: 0.004,
+    guided: false, radius: 32, color: 0xffa03c, tracer: true, barrels: 1,
+    desc: '40 mm cannon. Slow, tight, and it hurts.',
+  },
+  {
+    id: 'plasma', name: 'Plasma Repeater', short: 'PLS', icon: 'gun', heavy: false,
+    damage: 15, speed: 4200, life: 1.6, cooldown: 0.13, spread: 0.002,
+    guided: false, radius: 30, color: 0x7ff0ff, tracer: true, barrels: 2,
+    desc: 'Charged bolts. Almost no lead required at this velocity.',
   },
   {
     id: 'missile', name: 'Missile', short: 'MSL', icon: 'missile', heavy: true,
@@ -1040,12 +1064,30 @@ export const WEAPONS = [
 export const WEAPONS_BY_ID = Object.fromEntries(WEAPONS.map((w) => [w.id, w]));
 /** The order the heavy-weapon selector cycles through. */
 export const HEAVY_ORDER = ['missile', 'laser', 'grenade', 'rpg'];
+/** The order the gun selector cycles through. */
+export const GUN_ORDER = ['gun', 'minigun', 'heavygun', 'plasma'];
 
 export const COMBAT = {
-  lockConeDeg: 26,             // half-angle of the seeker cone
-  lockRange: 5200,             // m — furthest a lock will hold
-  lockTime: 0.85,              // s of continuous tracking to acquire
-  lockDecay: 1.9,              // how fast a broken lock bleeds away
+  /* ---- targeting --------------------------------------------------------
+   * The seeker is deliberately generous. At Mach 15 a 26° cone and a 5 km
+   * range means a target crosses the whole envelope in under a second, so a
+   * lock could barely be acquired before it broke — and a lock you cannot hold
+   * is a weapon you cannot use. The cone is wider, the range far longer, and
+   * once acquired the lock is *sticky*: it keeps tracking through a much wider
+   * cone than it needed to acquire, so a hard break turn no longer throws it.
+   * -------------------------------------------------------------------- */
+  lockConeDeg: 38,             // half-angle to ACQUIRE a lock
+  lockHoldDeg: 62,             // half-angle to KEEP one — hysteresis
+  lockRange: 14000,            // m — furthest a lock will hold
+  lockTime: 0.55,              // s of continuous tracking to acquire
+  lockDecay: 0.8,              // how fast a broken lock bleeds away
+  /* ---- gunnery ----------------------------------------------------------
+   * A lead-pursuit assist on the cannons. Solving deflection by eye at Mach 15
+   * closure is not a skill test, it is a lottery: the lead angle is tens of
+   * degrees and changes faster than a human can track. The assist only bites
+   * once the pipper is already near the target, so aiming still matters. */
+  gunAssist: 0.9,              // how far the burst is bent toward the solution
+  gunAssistDeg: 22,            // half-angle in which the assist applies at all
   gunRange: 2400,
   enemyHealth: 100,
   playerHitFlash: 0.35,
@@ -1149,8 +1191,11 @@ export const DEFAULT_BINDINGS = {
   power3:     ['Numpad3', 'Digit3'],
   power4:     ['Numpad4', 'Digit4'],
   power5:     ['Numpad5', 'Digit5'],
+  // Guns and missiles are on the mouse; the keys stay bound as an alternative.
   fireGun:      ['KeyG'],
   fireWeapon:   ['KeyR'],
+  cycleGun:     ['Numpad8', 'Digit8'],
+  cycleWeapon:  ['Numpad9', 'Digit9'],
   cycleTarget:  ['KeyT'],
   // One key per heavy weapon. Pressing it selects that weapon AND fires it, so
   // picking a missile and launching it is a single action rather than three.
@@ -1159,8 +1204,6 @@ export const DEFAULT_BINDINGS = {
   weaponLaser:   ['KeyX'],
   weaponGrenade: ['KeyV'],
   weaponRpg:     ['KeyB'],
-  // Touch-only: the mobile WPN button steps through the four.
-  cycleWeapon:  [],
   pause:      ['Escape'],
   fullscreen: ['KeyF'],
   // One key, one press: C toggles between Chase and First Person.
@@ -1173,8 +1216,9 @@ export const BINDING_LABELS = {
   leanLeft: 'Lean / Turn Left', leanRight: 'Lean / Turn Right',
   rollLeft: 'Bank Left', rollRight: 'Bank Right',
   throttleUp: 'Throttle Up', brake: 'Air Brake', boost: 'Nitrous Boost',
-  fireGun: 'Fire Guns', fireWeapon: 'Launch Selected Weapon',
-  cycleWeapon: 'Next Weapon', cycleTarget: 'Change Target',
+  fireGun: 'Fire Guns (or Left Mouse)', fireWeapon: 'Launch Missile (or Right Mouse)',
+  cycleGun: 'Next Gun Type', cycleWeapon: 'Next Missile Type',
+  cycleTarget: 'Change Target',
   weaponMissile: 'Missile — select and fire',
   weaponLaser: 'Laser-Guided Missile — select and fire',
   weaponGrenade: 'Air Grenade — select and fire',
@@ -1211,12 +1255,14 @@ export const CONTROL_GROUPS = [
   {
     id: 'combat', name: 'COMBAT', tone: 'red', combat: true,
     items: [
-      { action: 'fireGun', short: 'Guns', icon: 'gun' },
-      { action: 'weaponMissile', short: 'Missile', icon: 'missile' },
-      { action: 'weaponLaser', short: 'Laser', icon: 'laser' },
-      { action: 'weaponGrenade', short: 'Grenade', icon: 'grenade' },
+      { action: 'fireGun', short: 'Guns', icon: 'gun', keyOverride: 'LMB' },
+      { action: 'fireWeapon', short: 'Launch', icon: 'launch', keyOverride: 'RMB' },
+      { action: 'cycleGun', short: 'Gun', icon: 'gun' },
+      { action: 'cycleWeapon', short: 'Missile', icon: 'missile' },
+      { action: 'weaponMissile', short: 'MSL', icon: 'missile' },
+      { action: 'weaponLaser', short: 'LGM', icon: 'laser' },
+      { action: 'weaponGrenade', short: 'GRN', icon: 'grenade' },
       { action: 'weaponRpg', short: 'RPG', icon: 'rpg' },
-      { action: 'fireWeapon', short: 'Launch', icon: 'launch' },
       { action: 'cycleTarget', short: 'Target', icon: 'lock' },
     ],
   },

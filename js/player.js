@@ -39,9 +39,15 @@ export class InputManager {
     this.pressed = new Set();     // edge-triggered this frame
     this.released = new Set();
     this.enabled = true;
+    /** Mouse firing is only live in flight, never in the menus. */
+    this.mouseEnabled = false;
     this.captureNext = null;      // rebinding callback
 
     this.touch = { x: 0, y: 0, active: false, buttons: new Set(), pressedButtons: new Set() };
+    /* Mouse buttons. Left is the trigger, right launches the selected missile.
+     * Held state and edge state are tracked separately for the same reason the
+     * keyboard tracks both: the guns repeat while held, the launcher does not. */
+    this.mouse = { down: new Set(), pressed: new Set() };
     this.gamepadIndex = null;
     this.gamepadDeadzone = 0.14;
     this.sensitivity = 1;
@@ -67,13 +73,40 @@ export class InputManager {
       this.keys.delete(e.code);
       this.released.add(e.code);
     };
-    this._onBlur = () => { this.keys.clear(); this.touch.buttons.clear(); this.touch.active = false; this.touch.x = this.touch.y = 0; };
+    this._onBlur = () => {
+      this.keys.clear(); this.mouse.down.clear();
+      this.touch.buttons.clear(); this.touch.active = false; this.touch.x = this.touch.y = 0;
+    };
     this._onGamepad = (e) => { this.gamepadIndex = e.gamepad.index; this.lastSource = 'gamepad'; };
     this._onGamepadOut = () => { this.gamepadIndex = null; };
+
+    /* ---- mouse ------------------------------------------------------------
+     * Bound on the whole window rather than the canvas so a click anywhere in
+     * the viewport fires, and only while the game owns the input — otherwise
+     * clicking a menu button would also squeeze the trigger. The context menu
+     * is suppressed for the same reason: right-click is a weapon, and a native
+     * menu popping up mid-merge would be the end of the run. */
+    this._onMouseDown = (e) => {
+      if (!this.enabled || !this.mouseEnabled) return;
+      if (e.button !== 0 && e.button !== 2) return;
+      // Never steal a click that is landing on a real control.
+      if (e.target && e.target.closest && e.target.closest('button, input, select, a, .screen.active')) return;
+      if (!this.mouse.down.has(e.button)) this.mouse.pressed.add(e.button);
+      this.mouse.down.add(e.button);
+      this.lastSource = 'mouse';
+      e.preventDefault();
+    };
+    this._onMouseUp = (e) => { this.mouse.down.delete(e.button); };
+    this._onContextMenu = (e) => { if (this.enabled && this.mouseEnabled) e.preventDefault(); };
+    this._onMouseLeave = () => { this.mouse.down.clear(); };
 
     window.addEventListener('keydown', this._onKeyDown, { passive: false });
     window.addEventListener('keyup', this._onKeyUp);
     window.addEventListener('blur', this._onBlur);
+    window.addEventListener('mousedown', this._onMouseDown);
+    window.addEventListener('mouseup', this._onMouseUp);
+    window.addEventListener('contextmenu', this._onContextMenu);
+    window.addEventListener('mouseleave', this._onMouseLeave);
     window.addEventListener('gamepadconnected', this._onGamepad);
     window.addEventListener('gamepaddisconnected', this._onGamepadOut);
   }
@@ -133,7 +166,7 @@ export class InputManager {
   sample() {
     const s = {
       pitch: 0, roll: 0, lean: 0, throttle: 0, brake: 0, boost: false,
-      gun: false, heavy: false, cycleWeapon: false, cycleTarget: false,
+      gun: false, heavy: false, cycleGun: false, cycleWeapon: false, cycleTarget: false,
       /** Weapon id to select-and-fire this frame, from its dedicated key. */
       weapon: null,
       powers: [false, false, false, false, false],
@@ -153,6 +186,7 @@ export class InputManager {
     // Guns are held; everything else is a discrete press.
     if (this.isDown('fireGun')) s.gun = true;
     if (this.justPressed('fireWeapon')) s.heavy = true;
+    if (this.justPressed('cycleGun')) s.cycleGun = true;
     if (this.justPressed('cycleWeapon')) s.cycleWeapon = true;
     if (this.justPressed('cycleTarget')) s.cycleTarget = true;
     // One key per weapon: select it and fire it in the same press.
@@ -161,6 +195,13 @@ export class InputManager {
     else if (this.justPressed('weaponGrenade')) s.weapon = 'grenade';
     else if (this.justPressed('weaponRpg')) s.weapon = 'rpg';
     for (let i = 0; i < 5; i++) if (this.justPressed(`power${i + 1}`)) s.powers[i] = true;
+
+    // Mouse: left is the trigger, right launches. Left is a HELD state so the
+    // guns keep firing; right is edge-triggered so one click is one missile.
+    if (this.mouseEnabled) {
+      if (this.mouse.down.has(0)) s.gun = true;
+      if (this.mouse.pressed.has(2)) s.heavy = true;
+    }
 
     // Touch. The stick's horizontal axis is the assisted LEAN turn — the same
     // thing A and D do — not the raw bank axis: on a phone the stick is the
@@ -214,6 +255,7 @@ export class InputManager {
   endFrame() {
     this.pressed.clear();
     this.released.clear();
+    this.mouse.pressed.clear();
     this.touch.pressedButtons.clear();
   }
 
@@ -221,6 +263,10 @@ export class InputManager {
     window.removeEventListener('keydown', this._onKeyDown);
     window.removeEventListener('keyup', this._onKeyUp);
     window.removeEventListener('blur', this._onBlur);
+    window.removeEventListener('mousedown', this._onMouseDown);
+    window.removeEventListener('mouseup', this._onMouseUp);
+    window.removeEventListener('contextmenu', this._onContextMenu);
+    window.removeEventListener('mouseleave', this._onMouseLeave);
     window.removeEventListener('gamepadconnected', this._onGamepad);
     window.removeEventListener('gamepaddisconnected', this._onGamepadOut);
   }

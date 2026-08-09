@@ -295,8 +295,12 @@ export class AIRacer {
     const maxOff = radius * 0.92;
     const mag = Math.hypot(tl, tv);
     if (mag > maxOff) { tl *= maxOff / mag; tv *= maxOff / mag; }
-    this.targetLateral = tl;
-    this.targetVertical = tv;
+    // Backstop. This class is subclassed from another module, so an archetype
+    // arriving without a field it reads would otherwise turn into a NaN target
+    // — and a NaN here does not throw, it silently teleports the aircraft to
+    // coordinates that fail every comparison it is ever tested against.
+    this.targetLateral = Number.isFinite(tl) ? tl : 0;
+    this.targetVertical = Number.isFinite(tv) ? tv : 0;
   }
 
   update(dt, player, timeScale = 1) {
@@ -446,13 +450,28 @@ export class AIRacer {
 
   _updateDead(dt) {
     this.velocity.y -= PHYSICS.gravity * 2 * dt;
+    // Air resistance on a wreck with no thrust: it slows as it falls.
+    this.velocity.multiplyScalar(Math.max(0, 1 - dt * 0.55));
     this.position3.addScaledVector(this.velocity, dt);
-    _q.setFromAxisAngle(this._deathAxis || new THREE.Vector3(0, 1, 0), 3 * dt);
+    _q.setFromAxisAngle(this._deathAxis || new THREE.Vector3(0, 1, 0), (this._tumble ?? 3) * dt);
     this.quaternion.premultiply(_q);
+
+    // Burning all the way down, at a fixed rate rather than per frame so the
+    // trail is the same density however fast the machine is running.
+    if (!this._impacted) {
+      this._wreckT = (this._wreckT || 0) - dt;
+      if (this._wreckT <= 0) {
+        this._wreckT = 0.05;
+        this.render.vfx.wreckTrail(this.position3, clamp(this.visual.span / 13, 0.6, 1.5));
+      }
+    }
+
     const ground = this.world.terrainHeight(this.position3.x, this.position3.z);
     if (this.position3.y <= ground + 6 && !this._impacted) {
       this._impacted = true;
-      this.render.vfx.explode(this.position3, 18, 0xffa040);
+      // Ground impact: a second, bigger detonation with a flat shockwave.
+      this.render.vfx.explode(this.position3, 30, 0xffb063, _v.set(0, 1, 0));
+      this.render.vfx.aircraftKill(this.position3, null, 0xff8a2a, 1.3);
       this.visual.setVisible(false);
     }
     if (this.visible) {
@@ -477,7 +496,17 @@ export class AIRacer {
     this.alive = false;
     this._impacted = false;
     this._deathAxis = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
-    this.render.vfx.explode(this.position3, 14, 0xffa040);
+
+    /* The kill sequence. The wreck keeps the velocity it died with — a fighter
+     * hit at Mach 12 does not stop and fall straight down, it carries on and
+     * comes apart while it goes — plus a hard tumble it can no longer arrest. */
+    this.velocity.copy(this.quaternion ? _v.set(0, 0, -1).applyQuaternion(this.quaternion) : _v.set(0, 0, -1))
+      .multiplyScalar(this.speed * 0.72);
+    this.velocity.y += 12;
+    this.render.vfx.aircraftKill(this.position3, this.velocity,
+      this.livery ?? 0xffa040, clamp(this.visual.span / 13, 0.7, 1.6));
+    this._tumble = 3.4 + Math.random() * 4.5;
+    this._wreckT = 0;
     // Rivals rejoin after a short recovery so the grid never empties out.
     this.respawnTimer = 6;
   }

@@ -618,6 +618,16 @@ class SFXKit {
           filter: { type: 'lowpass', freq: 1100, q: 2.6 } });
         this._tone({ freq: 58, type: 'sine', dur: 0.14, gain: 0.46 * v, sweep: -20, attack: 0.002 });
         break;
+      case 'heavyGunFire':
+        // A 40 mm. One round at a time, and you hear the whole thing: the
+        // breech, the muzzle blast, and the low thud rolling off after it.
+        if (!this._guard('heavyGunFire', 130)) return;
+        this._noise({ dur: 0.05, gain: 0.72 * v, type: 'highpass', freq: 2400, sweep: -1600, attack: 0.0008 });
+        this._noise({ dur: 0.24, gain: 0.62 * v, type: 'bandpass', freq: 520, sweep: -300, q: 0.7, attack: 0.002 });
+        this._tone({ freq: 104, type: 'square', dur: 0.16, gain: 0.58 * v, sweep: -58, attack: 0.001,
+          filter: { type: 'lowpass', freq: 760, q: 2.4 } });
+        this._tone({ freq: 41, type: 'sine', dur: 0.36, gain: 0.62 * v, sweep: -12, attack: 0.003 });
+        break;
       case 'gunFireDistant':
         // Somebody else's guns: no muzzle crack, just the report arriving.
         if (!this._guard('gunFireDistant', 130)) return;
