@@ -11,16 +11,36 @@ import {
   AIRCRAFT, AIRCRAFT_BY_ID, BIOMES, BIOMES_BY_ID, MODES, DIFFICULTIES, WEATHER, TIME_OF_DAY,
   CAMPAIGN, OBJECTIVE_POOL, ACHIEVEMENTS, SCORE, CREDITS, POWERS, WORLD,
   DEFAULT_SAVE, STORAGE_KEY, LOADING_STAGES, DEFAULTS, MACH, COMBAT, WEAPONS_BY_ID,
+  HEAVY_ORDER, DEFAULT_BINDINGS,
   RNG, hashSeed, clamp, clamp01, lerp, damp, TAU,
 } from './config.js';
 import { DeviceProfile, PerfMonitor, AdaptiveQuality, Scheduler, LoadPipeline, nextFrame } from './performance.js';
-import { RenderSystem } from './renderer.js';
+import { RenderSystem, CAM_ZOOM_MIN, CAM_ZOOM_MAX, CAM_ZOOM_STEP } from './renderer.js';
 import { World } from './world.js';
 import { Player, InputManager } from './player.js';
 import { RaceDirector } from './ai.js';
 import { CombatSystem } from './combat.js';
 import { AudioSystem } from './audio.js';
 import { UI, formatTime, formatDistance } from './ui.js';
+
+/** How the collision warning names what is about to be hit. */
+const HAZARD_LABEL = {
+  building: 'BUILDING', mast: 'MAST', rock: 'ROCK', terrain: 'TERRAIN',
+  landmark: 'STRUCTURE', structure: 'STRUCTURE', obstacle: 'OBSTACLE',
+  slab: 'SLAB', pylon: 'PYLON', container: 'CONTAINER', rotor: 'ROTOR',
+  barrier: 'BARRIER', debris: 'DEBRIS', island: 'ISLAND', turbine: 'TURBINE',
+  spire: 'SPIRE',
+};
+
+/** Which binding arms each heavy weapon, for the HUD rack. */
+const HEAVY_KEY_ACTION = {
+  missile: 'weaponMissile', laser: 'weaponLaser',
+  grenade: 'weaponGrenade', rpg: 'weaponRpg',
+};
+/** Compact key cap for the HUD (the settings screen has its own prettifier). */
+const prettyKeyCap = (code) => (code || '—')
+  .replace(/^Key/, '').replace(/^Digit/, '').replace(/^Numpad/, 'N')
+  .replace(/^Arrow/, '').toUpperCase();
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -658,6 +678,8 @@ export class Game {
     this.player.powers.cooldownScale = this.player.ability === 'tuning' ? 0.85 : 1;
     this.render.rig.setMode('chase');
     this.render.rig.reducedMotion = !!this.save.data.settings.reducedMotion;
+    this.render.rig.setUserZoom(this.save.data.settings.cameraZoom ?? 1);
+    this.ui.setZoom(this.render.rig.zoomPercent, CAM_ZOOM_MIN * 100, CAM_ZOOM_MAX * 100);
     this.render.rig.reset();
 
     this.audio.igniteEngine();
@@ -751,6 +773,10 @@ export class Game {
     if (this.director) this.director.update(dt, player, timeScale);
     world.update(dt * timeScale, player.position, this.elapsed);
     world.stream(this.scheduler, player.distanceAlong);
+
+    /* --- hazards -------------------------------------------------------- */
+    this._updateHazard(dt, player, world);
+    if (this._updateOverheat(dt, player)) return;
 
     /* --- combat --------------------------------------------------------- */
     if (this.combat) this._updateCombat(dt, player, cfg);
@@ -876,6 +902,126 @@ export class Game {
   }
 
   /* =====================================================================
+   * COLLISION WARNING
+   * ------------------------------------------------------------------
+   * Two hazards, one warning: solid structures on the flight vector, and
+   * terrain the aircraft will fly into if it holds its current attitude.
+   * Both are reported with the distance to impact, because "there is
+   * something ahead" is not actionable and "something ahead in 1.4 km" is.
+   *
+   * The scan is throttled rather than run every frame: it is a broadphase
+   * sweep over thousands of colliders, the answer barely changes in 80 ms,
+   * and the reported distance is extrapolated between scans from the
+   * aircraft's own speed so the readout still counts down smoothly.
+   * ================================================================== */
+  _updateHazard(dt, player, world) {
+    this._hazardScan = (this._hazardScan || 0) - dt;
+    // Six seconds of flight, with a floor generous enough that the warning is
+    // still useful at low speed. At Mach 15 this is a 30 km scan, which sounds
+    // absurd until you notice the airframe crosses it in six seconds.
+    const look = clamp(player.speed * 6, 3000, 22000);
+
+    if (this._hazardScan <= 0) {
+      this._hazardScan = 0.08;
+      const hit = world.forwardHazard(player.position, player.forward, look,
+        player.visual.span * 0.6 + 40);
+      let dist = hit ? hit.distance : Infinity;
+      let kind = hit ? (hit.collider.type || 'obstacle') : null;
+
+      // Terrain: walk forward along the current velocity and find the first
+      // point where the ground is above where the aircraft will be.
+      const STEPS = 14;
+      for (let i = 1; i <= STEPS; i++) {
+        const t = (i / STEPS) * look;
+        _v.copy(player.position).addScaledVector(player.forward, t);
+        const g = world.terrainHeight(_v.x, _v.z);
+        if (_v.y > g + 55) continue;
+        if (t < dist) { dist = t; kind = 'terrain'; }
+        break;
+      }
+      this._hazardDist = dist;
+      this._hazardKind = kind;
+    } else if (this._hazardDist < Infinity) {
+      // Close the gap between scans at the rate we are actually approaching.
+      this._hazardDist -= player.speed * dt;
+    }
+
+    const d = this._hazardDist ?? Infinity;
+    const active = d < look && d > 0;
+    // Severity is time-to-impact, not distance: 2 km is nothing at Mach 3 and
+    // is half a second at Mach 18.
+    const tti = active ? d / Math.max(1, player.speed) : Infinity;
+    this._hazardTTI = tti;
+
+    if (active) {
+      const label = HAZARD_LABEL[this._hazardKind] || 'OBSTACLE';
+      this._hazardText = `COLLISION AHEAD · ${label} · ${(d / 1000).toFixed(2)} KM`;
+      this._hazardLevel = tti < 1.2 ? 2 : tti < 2.6 ? 1 : 0;
+      // The tone tightens as the impact closes, which is the part that makes it
+      // register as urgent without anyone having to read the number.
+      this._hazardBeep = (this._hazardBeep || 0) - dt;
+      if (this._hazardBeep <= 0) {
+        this._hazardBeep = clamp(tti * 0.32, 0.11, 0.85);
+        this.audio.play('collisionWarn', {
+          volume: this._hazardLevel === 2 ? 1 : this._hazardLevel === 1 ? 0.8 : 0.55,
+          pitch: this._hazardLevel,
+        });
+      }
+    } else {
+      this._hazardText = '';
+      this._hazardLevel = 0;
+      this._hazardBeep = 0;
+    }
+  }
+
+  /**
+   * Thermal limit. Above Mach 18 the engine is on a one-minute clock: warn,
+   * count it down, and when it runs out take the aircraft apart. Backing off
+   * cools it, but at less than half the rate it heated, so the redline is a
+   * budget spent across the whole run rather than a line you can hop over.
+   *
+   * @returns true once the run has ended, so the caller stops the frame.
+   */
+  _updateOverheat(dt, player) {
+    const heat = player.updateHeat(dt);
+    const over = player.mach > MACH.redline;
+    const left = player.heatSecondsLeft;
+
+    if (heat >= 1) {
+      // The engine lets go: a real explosion, then the run is over.
+      this.render.vfx.explode(player.position, 30, 0xffb063);
+      this.render.postfx.flash(0.85, 0xffc890);
+      this.render.rig.addShake(1.6, 20);
+      this.audio.play('explosion', { volume: 1 });
+      player.destroy('overheat');
+      this._overheatText = '';
+      this.endRun('ENGINE OVERHEAT', false);
+      return true;
+    }
+
+    if (over) {
+      this._overheatText = `ENGINE OVERHEAT · MACH ${player.mach.toFixed(1)} · ${Math.ceil(left)}s`;
+      this._overheatLevel = left < 15 ? 2 : 1;
+      // Two alert tiers: the standard overheat two-tone, and a faster,
+      // higher one for the last fifteen seconds.
+      this.audio.play(left < 15 ? 'overheatCritical' : 'overheat', { volume: 0.9 });
+      if (!this._overheatWas) {
+        this.ui.banner('ENGINE OVERHEAT', `REDUCE BELOW MACH ${MACH.redline}`);
+        this._overheatWas = true;
+      }
+    } else {
+      // Still shows while the engine is cooling, so the pilot can see the
+      // budget coming back rather than guessing.
+      this._overheatText = heat > 0.02
+        ? `ENGINE COOLING · ${Math.round((1 - heat) * 100)}%` : '';
+      this._overheatLevel = 0;
+      this._overheatWas = false;
+    }
+    this._heat01 = heat;
+    return false;
+  }
+
+  /* =====================================================================
    * COMBAT
    * ================================================================== */
 
@@ -891,6 +1037,11 @@ export class Game {
       const w = c.cycleWeapon();
       this.audio.ui('click');
       this.ui.notify(`${w.name.toUpperCase()} SELECTED`);
+    }
+    // A dedicated weapon key selects AND launches in one press.
+    if (raw.weapon) {
+      const w = c.selectWeapon(raw.weapon);
+      if (w) { this.ui.notify(`${w.name.toUpperCase()}`); raw.heavy = true; }
     }
     if (raw.cycleTarget) {
       const t = c.cycleTarget(player);
@@ -992,8 +1143,18 @@ export class Game {
         color: e.livery,
       });
     }
+    // Which weapon each key arms, and which one is live right now.
+    const binds = this.save.data.settings.bindings || {};
+    const rack = HEAVY_ORDER.map((id) => {
+      const w = WEAPONS_BY_ID[id];
+      const action = HEAVY_KEY_ACTION[id];
+      const code = (binds[action] || DEFAULT_BINDINGS[action] || [])[0];
+      return { id, name: w.name, short: w.short, key: prettyKeyCap(code), armed: c.heavyWeapon.id === id };
+    });
+
     this.ui.updateCombatHud({
       boxes,
+      rack,
       weapon: c.heavyWeapon,
       ready: c.heavyCooldown <= 0,
       reload: c.heavyWeapon.cooldown > 0 ? 1 - clamp01(c.heavyCooldown / c.heavyWeapon.cooldown) : 1,
@@ -1153,8 +1314,15 @@ export class Game {
           this.metrics.cleanStreak = 0;
           this.score = Math.max(0, this.score + SCORE.collisionPenalty);
           this.combo = 1; this.comboSteps = 0;
-          this.audio.play('collision');
-          this.ui.vibrate(90);
+          if (e.fatal) {
+            // Structure strike: loud, and named, so it is obvious what killed you.
+            this.audio.play('explosion', { volume: 1 });
+            this.ui.banner('IMPACT', (HAZARD_LABEL[e.structure] || 'STRUCTURE') + ' STRIKE');
+            this.ui.vibrate(220);
+          } else {
+            this.audio.play('collision');
+            this.ui.vibrate(90);
+          }
           break;
         case 'shielded':
           this.audio.play('shield');
@@ -1592,6 +1760,12 @@ export class Game {
       hull: p.health / p.maxHealth,
       corridorOut: p.corridorOut,
       warn: this._combatWarn || '',
+      hazardText: this._hazardText || '',
+      hazardLevel: this._hazardLevel || 0,
+      overheatText: this._overheatText || '',
+      overheatLevel: this._overheatLevel || 0,
+      heat: this._heat01 || 0,
+      redline: p.mach > MACH.redline,
       modeName: cfg.mode.name,
       objective: objView,
       powers: p.powers.slots.map((s) => ({
@@ -1686,6 +1860,12 @@ export class Game {
       },
       onAircraftChange: () => { this.ui.refreshLoadout(); },
       onCamera: () => { if (this.state === 'racing') this.ui.setCamera(this.render.rig.cycle()); },
+      onZoom: (dir) => {
+        const pct = this.render.rig.stepUserZoom(dir * CAM_ZOOM_STEP);
+        this.ui.setZoom(Math.round(pct * 100), CAM_ZOOM_MIN * 100, CAM_ZOOM_MAX * 100);
+        // Remembered across runs: framing is a preference, not a per-run choice.
+        this.save.setSetting('cameraZoom', pct);
+      },
       onHangarMode: (active) => this.setHangarMode(active),
       onHangarPreview: (id) => this.setShowcaseAircraft(id),
       onHangarSpin: (delta) => this.spinHangar(delta),

@@ -38,40 +38,69 @@
 .hud-run-stats b { font-family: var(--font-num); font-size: 0.80em; font-weight: 400; color: #cfeaff; }
 
 /* ---------------------------------------------------------------------------
- * CONTROL LEGEND — every binding, on screen, all the time.
- * One compact horizontal strip: icon over key cap, wrapping to a second row on
- * narrow viewports rather than pushing the rest of the HUD around.
+ * CONTROL LEGEND
+ * Three colour-coded boxes — flight (green), combat (red), system (blue) —
+ * rather than one long strip, so the group you want is found by colour before
+ * a single key cap is read. Sized to be legible at a glance in flight.
  * ------------------------------------------------------------------------ */
 .hud-controls {
-  margin-top: 9px; display: flex; flex-wrap: wrap; align-items: stretch;
-  gap: 3px; max-width: 30rem; padding: 4px 5px;
-  border: 1px solid rgba(120, 230, 255, 0.20); border-radius: 5px;
-  background: linear-gradient(180deg, rgba(6, 16, 28, 0.66), rgba(4, 10, 20, 0.46));
-  backdrop-filter: blur(3px);
+  margin-top: 10px; display: flex; flex-wrap: wrap; align-items: flex-start;
+  /* Sized so FLIGHT takes a row of its own and COMBAT + SYSTEM share the next
+     one. Two rows keeps the block clear of the airspeed readout below it,
+     which a three-row stack ran straight into. */
+  gap: 7px; max-width: 44rem;
+  opacity: 0.86; transition: opacity 160ms linear;
 }
-.ctl {
-  display: flex; flex-direction: column; align-items: center; gap: 2px;
-  min-width: 2.05rem; padding: 3px 3px 2px; border-radius: 3px;
-  background: rgba(140, 210, 255, 0.05);
-}
-.ctl svg { width: 0.86rem; height: 0.86rem; color: rgba(190, 232, 255, 0.82); flex: none; }
-.ctl-keys { display: flex; gap: 2px; }
-.ctl-key {
-  font-family: var(--font-num); font-size: 0.44rem; line-height: 1; letter-spacing: 0.02em;
-  padding: 2px 3px; border-radius: 2px; color: #dff2ff;
-  border: 1px solid rgba(160, 220, 255, 0.32); background: rgba(12, 30, 48, 0.85);
-  box-shadow: 0 1px 0 rgba(160, 220, 255, 0.18) inset;
-}
-.ctl-name {
-  font-size: 0.40rem; letter-spacing: 0.08em; text-transform: uppercase;
-  color: rgba(190, 226, 255, 0.55); white-space: nowrap;
-}
-.ctl-sep { width: 1px; margin: 3px 2px; background: rgba(120, 230, 255, 0.16); }
-/* The legend is reference, not instrumentation — it steps back while flying
-   and comes forward when the pointer is near it. */
-.hud-controls { opacity: 0.72; transition: opacity 160ms linear; }
 .hud-controls:hover { opacity: 1; }
 body.touch-mode .hud-controls { display: none; }
+
+.ctl-group {
+  --tone: rgba(120, 230, 255, 0.9);
+  padding: 3px 6px 4px; border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent);
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--tone) 11%, rgba(5, 12, 22, 0.80)),
+    rgba(4, 10, 20, 0.62));
+  backdrop-filter: blur(3px);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--tone) 16%, transparent) inset;
+}
+.ctl-group.tone-green { --tone: #5dff9c; }
+.ctl-group.tone-red   { --tone: #ff6472; }
+.ctl-group.tone-blue  { --tone: #56c8ff; }
+
+.ctl-group-name {
+  font-size: 0.44rem; font-weight: 700; letter-spacing: 0.24em;
+  color: var(--tone); margin: 0 0 3px 2px; text-shadow: 0 0 8px color-mix(in srgb, var(--tone) 55%, transparent);
+}
+.ctl-row { display: flex; flex-wrap: wrap; gap: 4px; }
+
+.ctl {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  min-width: 2.9rem; padding: 4px 4px 2px; border-radius: 4px;
+  background: color-mix(in srgb, var(--tone) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tone) 18%, transparent);
+}
+.ctl svg { width: 1.25rem; height: 1.25rem; color: var(--tone); flex: none; }
+.ctl-key {
+  font-family: var(--font-num); font-size: 0.62rem; line-height: 1; font-weight: 700;
+  padding: 3px 5px; border-radius: 3px; color: #f2fbff;
+  border: 1px solid color-mix(in srgb, var(--tone) 55%, transparent);
+  background: rgba(8, 20, 34, 0.9);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--tone) 30%, transparent) inset;
+}
+.ctl-name {
+  font-size: 0.5rem; letter-spacing: 0.08em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--tone) 72%, #ffffff);
+  opacity: 0.82; white-space: nowrap;
+}
+
+@media (max-height: 620px) {
+  .hud-controls { max-width: 36rem; gap: 5px; }
+  .ctl { min-width: 2.4rem; padding: 3px 3px 2px; }
+  .ctl svg { width: 1rem; height: 1rem; }
+  .ctl-key { font-size: 0.52rem; padding: 2px 4px; }
+  .ctl-name { font-size: 0.42rem; }
+}
 
 /* ══════════════════════ TOP CENTRE — compass ═════════════════════════ */
 .hud-compass { position: absolute; top: max(14px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); width: min(46%, 460px); }
@@ -207,6 +236,36 @@ body.touch-mode .hud-brief { display: none !important; }
 .alt-tape-mark { position: absolute; left: -3px; right: -3px; height: 2px; background: #fff; box-shadow: 0 0 6px #fff; bottom: 0; transition: bottom 120ms linear; }
 
 /* ══════════════════════ BOTTOM RIGHT — powers & hull ═════════════════ */
+/* ---------------------------------------------------------------------------
+ * CAMERA ZOOM
+ * Sits above the camera chip. Same control on desktop and in mobile landscape,
+ * because the framing problem is identical on both.
+ * ------------------------------------------------------------------------ */
+.zoom-rack {
+  pointer-events: auto;
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px; border-radius: 5px;
+  border: 1px solid rgba(120, 230, 255, 0.28);
+  background: linear-gradient(180deg, rgba(8, 20, 34, 0.78), rgba(5, 12, 22, 0.6));
+}
+.zoom-btn {
+  width: 1.55em; height: 1.55em; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid rgba(160, 220, 255, 0.35); border-radius: 4px;
+  background: rgba(12, 30, 48, 0.85); color: #dff2ff;
+  font-size: 0.86em; font-weight: 700; line-height: 1; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 90ms, border-color 90ms, transform 90ms;
+}
+.zoom-btn:hover { background: rgba(24, 66, 96, 0.9); border-color: var(--accent); }
+.zoom-btn:active { transform: scale(0.9); }
+.zoom-btn[disabled] { opacity: 0.32; cursor: default; }
+.zoom-value {
+  font-family: var(--font-num); font-size: 0.6em; letter-spacing: 0.06em;
+  min-width: 2.6em; text-align: center; color: #cfeaff;
+}
+body.touch-mode .zoom-btn { width: 2.1em; height: 2.1em; font-size: 0.95em; }
+
 .cam-chip {
   display: flex; align-items: center; gap: 7px;
   padding: 4px 10px 4px 5px; border-radius: 3px;
@@ -313,6 +372,80 @@ body.touch-mode .hud-brief { display: none !important; }
 }
 .warn-strip.show { opacity: 1; animation: warnFlash 0.62s ease-in-out infinite; }
 
+/* ---------------------------------------------------------------------------
+ * COLLISION WARNING
+ * Sits above the terrain warning and below the reticle, so it lands in the
+ * pilot's eyeline without covering the thing they are about to hit.
+ * ------------------------------------------------------------------------ */
+.hazard-strip {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  top: calc(max(14px, env(safe-area-inset-top)) + 6.2rem);
+  display: none; align-items: center; gap: 9px;
+  padding: 7px 20px 7px 15px; border-radius: 4px;
+  border: 1.5px solid rgba(255, 78, 92, 0.85);
+  background: linear-gradient(180deg, rgba(66, 8, 16, 0.86), rgba(38, 4, 10, 0.74));
+  box-shadow: 0 0 26px rgba(255, 40, 60, 0.30), 0 0 0 1px rgba(0, 0, 0, 0.35);
+  color: #ff8d99;
+  font-size: 0.86em; font-weight: 700; letter-spacing: 0.22em; white-space: nowrap;
+  text-shadow: 0 0 12px rgba(255, 60, 80, 0.7);
+}
+.hazard-strip.show { display: flex; }
+.hazard-strip svg { width: 1.25em; height: 1.25em; flex: none; }
+/* Three tiers: advisory, urgent, and imminent — the last one is impossible to
+   look past, because at that point the only thing that matters is turning. */
+.hazard-strip.lvl1 { animation: hazPulse 0.44s ease-in-out infinite; }
+.hazard-strip.lvl2 {
+  color: #fff0f1; border-color: #ff2740;
+  background: linear-gradient(180deg, rgba(150, 10, 24, 0.92), rgba(96, 6, 16, 0.86));
+  animation: hazPulse 0.20s ease-in-out infinite;
+}
+@keyframes hazPulse {
+  0%, 100% { opacity: 1; transform: translateX(-50%) scale(1); }
+  50% { opacity: 0.55; transform: translateX(-50%) scale(1.035); }
+}
+@media (max-height: 460px) { .hazard-strip { font-size: 0.72em; padding: 4px 13px 4px 10px; } }
+
+/* ---------------------------------------------------------------------------
+ * ENGINE OVERHEAT
+ * Above the redline the airframe is on a countdown, so this sits higher than
+ * the collision warning and carries its own remaining-heat bar. Both can be
+ * on screen at once — being about to hit a tower does not cool the engine.
+ * ------------------------------------------------------------------------ */
+.overheat-strip {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  top: calc(max(14px, env(safe-area-inset-top)) + 3.1rem);
+  display: none; align-items: center; gap: 9px;
+  padding: 6px 16px 6px 12px; border-radius: 4px;
+  border: 1.5px solid rgba(255, 150, 50, 0.8);
+  background: linear-gradient(180deg, rgba(72, 32, 4, 0.86), rgba(42, 16, 2, 0.74));
+  box-shadow: 0 0 24px rgba(255, 130, 30, 0.26);
+  color: #ffc27a;
+  font-size: 0.8em; font-weight: 700; letter-spacing: 0.2em; white-space: nowrap;
+  text-shadow: 0 0 12px rgba(255, 140, 40, 0.7);
+}
+.overheat-strip.show { display: flex; }
+.overheat-strip svg { width: 1.2em; height: 1.2em; flex: none; }
+.heat-bar {
+  display: block; width: 5.5em; height: 4px; border-radius: 2px;
+  background: rgba(255, 255, 255, 0.18); overflow: hidden;
+}
+.heat-bar b { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, #ffd05a, #ff4a2a); }
+/* Cooling: the same strip, calmed down, so the pilot can watch the budget
+   come back instead of guessing when it is safe to push again. */
+.overheat-strip.cooling {
+  border-color: rgba(120, 200, 255, 0.5); color: #a8dcff;
+  background: linear-gradient(180deg, rgba(8, 30, 48, 0.8), rgba(4, 16, 28, 0.7));
+  box-shadow: none; text-shadow: none;
+}
+.overheat-strip.cooling .heat-bar b { background: linear-gradient(90deg, #4ad6ff, #9fe8ff); }
+.overheat-strip.lvl1 { animation: hazPulse 0.5s ease-in-out infinite; }
+.overheat-strip.lvl2 {
+  color: #fff1e2; border-color: #ff5a1e;
+  background: linear-gradient(180deg, rgba(150, 46, 6, 0.92), rgba(96, 26, 4, 0.86));
+  animation: hazPulse 0.24s ease-in-out infinite;
+}
+@media (max-height: 460px) { .overheat-strip { font-size: 0.68em; padding: 4px 11px 4px 8px; } }
+
 .damage-vignette {
   position: absolute; inset: 0; pointer-events: none; opacity: 0;
   background: radial-gradient(ellipse at 50% 50%, transparent 42%, rgba(190, 20, 34, 0.42) 100%);
@@ -414,7 +547,31 @@ body.touch-mode .hud-brief { display: none !important; }
 
 .weapon-strip { display: flex; align-items: center; gap: 6px; padding-left: 8px; border-left: 1px solid rgba(120, 230, 255, 0.16); }
 .wpn-name { font-size: 0.5rem; letter-spacing: 0.14em; color: #dff2ff; }
-.wpn-ammo { font-family: var(--font-num); font-size: 0.7rem; color: var(--lime); }
+.wpn-ammo {
+  font-family: var(--font-num); font-size: 0.55rem; letter-spacing: 0.1em;
+  color: var(--lime); text-shadow: 0 0 8px rgba(157, 255, 74, 0.55);
+}
+
+/* The four heavy weapons and their keys, with the armed one lit. Sits beside
+   the lock strip so selecting and firing never needs a menu. */
+.wpn-rack { display: flex; gap: 3px; padding-left: 8px; border-left: 1px solid rgba(120, 230, 255, 0.16); }
+.wpn-slot {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  min-width: 2.2rem; padding: 3px 4px; border-radius: 3px;
+  border: 1px solid rgba(255, 140, 90, 0.22); background: rgba(30, 14, 6, 0.5);
+}
+.wpn-slot .wk {
+  font-family: var(--font-num); font-size: 0.52rem; font-weight: 700; line-height: 1;
+  padding: 2px 4px; border-radius: 2px; color: #ffd9c2;
+  border: 1px solid rgba(255, 150, 90, 0.4); background: rgba(46, 18, 8, 0.85);
+}
+.wpn-slot .wn { font-size: 0.4rem; letter-spacing: 0.06em; color: rgba(255, 200, 170, 0.6); }
+.wpn-slot.armed {
+  border-color: #ff9a4a; background: rgba(96, 38, 8, 0.75);
+  box-shadow: 0 0 12px rgba(255, 150, 60, 0.45);
+}
+.wpn-slot.armed .wn { color: #ffd7a8; }
+.wpn-slot.armed .wk { color: #fff; border-color: #ff9a4a; }
 .wpn-reload { width: 3.2rem; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.14); overflow: hidden; }
 .wpn-reload i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, #4ad6ff, #9dff6a); }
 

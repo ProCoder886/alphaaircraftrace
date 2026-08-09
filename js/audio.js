@@ -24,12 +24,41 @@ const NOTE = (semitonesFromA4) => 440 * Math.pow(2, semitonesFromA4 / 12);
  * ======================================================================== */
 
 /**
+ * Haas widener.
+ *
+ * Everything in this engine is synthesised mono, and mono broadband noise sits
+ * as a point in the centre of the head — which is exactly why the jet read as
+ * small. Delaying one channel by a few milliseconds and rolling its top off
+ * slightly makes the same signal occupy the full stereo field without any
+ * comb-filtering you can hear, and it is the single biggest difference on
+ * headphones. `bass` is fed straight through: low frequencies carry no useful
+ * localisation and splitting them just thins the low end.
+ */
+function widener(ctx, dest, delayMs = 11, tilt = 4200) {
+  const input = ctx.createGain();
+  const merge = ctx.createChannelMerger(2);
+
+  const left = ctx.createGain();
+  input.connect(left);
+  left.connect(merge, 0, 0);
+
+  const delay = ctx.createDelay(0.05);
+  delay.delayTime.value = delayMs / 1000;
+  const tone = ctx.createBiquadFilter();
+  tone.type = 'lowpass'; tone.frequency.value = tilt; tone.Q.value = 0.4;
+  input.connect(delay); delay.connect(tone); tone.connect(merge, 0, 1);
+
+  merge.connect(dest);
+  return input;
+}
+
+/**
  * A military turbofan, not an engine block.
  *
  * The distinguishing sound of a fighter is a stack of *inharmonic* blade-
  * passing tones from the fan and compressor sitting on top of an enormous
  * broadband core roar — not the buzzy sawtooth of a piston engine, which is
- * what this used to be and why it read as a car. Five layers:
+ * what this used to be and why it read as a car. Seven layers:
  *
  *   fan      — blade-passing partials at non-integer multiples of N1, swept
  *              through a resonant bandpass. This is the "whine".
@@ -37,24 +66,45 @@ const NOTE = (semitonesFromA4) => 440 * Math.pow(2, semitonesFromA4 / 12);
  *              giving the shimmering edge a real intake has at speed.
  *   core     — band-passed noise: combustion and the exhaust column, the body
  *              of the sound and most of its level.
+ *   rumble   — the low band of that column, kept centred and pushed hard. This
+ *              is the chest-hit, and it is what makes it read as military
+ *              rather than as an airliner going over.
+ *   sub      — a pure tone well below the blade-passing fundamental, so the
+ *              weight survives on headphones and small speakers.
  *   hiss     — high-passed noise, the tearing edge of the exhaust plume.
  *   reheat   — sub-bass rumble with an unstable amplitude, plus a mid-band
  *              roar. Afterburners are not smooth, and the wobble is the tell.
  *
  * Airframe noise (the air itself) rides on top, scaled with V², so speed is
- * audible even at idle thrust.
+ * audible even at idle thrust. Everything but the bass is widened across the
+ * stereo field; a low shelf on the way out weights the whole engine downward.
  */
 class EngineSynth {
   constructor(ctx, dest, noiseBuffer) {
     this.ctx = ctx;
     this.out = ctx.createGain();
     this.out.gain.value = 0;
-    this.out.connect(dest);
+
+    /* ---- output chain ----------------------------------------------------
+     * The jet is voiced through a low shelf before it reaches the bus, so the
+     * whole engine is weighted toward the bottom of the spectrum the way a
+     * real one is at close range. Mid and top go through the widener; the
+     * sub-bass bypasses it and stays centred. */
+    this.shelf = ctx.createBiquadFilter();
+    this.shelf.type = 'lowshelf';
+    this.shelf.frequency.value = 190;
+    this.shelf.gain.value = 8.5;
+    this.out.connect(this.shelf);
+    this.shelf.connect(dest);
+
+    this.stereo = widener(ctx, this.out, 12, 5200);
+    this.centre = this.out;                     // sub-bass path, no widening
+
     this.running = false;
     this.n1 = 0;              // spool state, 0..1 — lags the throttle
     this.ignitionUntil = 0;
 
-    const noiseSource = (filterType, freq, q) => {
+    const noiseSource = (filterType, freq, q, target = this.stereo) => {
       const src = ctx.createBufferSource();
       src.buffer = noiseBuffer;
       src.loop = true;
@@ -62,7 +112,7 @@ class EngineSynth {
       f.type = filterType; f.frequency.value = freq; f.Q.value = q;
       const g = ctx.createGain();
       g.gain.value = 0;
-      src.connect(f); f.connect(g); g.connect(this.out);
+      src.connect(f); f.connect(g); g.connect(target);
       return { src, filter: f, gain: g };
     };
 
@@ -71,7 +121,7 @@ class EngineSynth {
     this.fanFilter.type = 'bandpass';
     this.fanFilter.frequency.value = 900;
     this.fanFilter.Q.value = 1.5;
-    this.fanFilter.connect(this.out);
+    this.fanFilter.connect(this.stereo);
 
     // Deliberately non-integer: a turbofan's tones do not line up into a
     // musical harmonic series, and integer multiples sound like an organ.
@@ -108,8 +158,22 @@ class EngineSynth {
     this.hiss = noiseSource('highpass', 2600, 0.7);
     this.airframe = noiseSource('highpass', 900, 0.5);
 
+    /* ---- sub-bass: the part you feel -------------------------------------
+     * Two centred layers under everything else. `rumble` is the low band of
+     * the exhaust column — the chest-hit — and `sub` is a pure tone an octave
+     * and a half below the blade-passing fundamental, which is what gives a
+     * military jet its weight on headphones where a small speaker cannot
+     * reproduce the noise floor down there at all. */
+    this.rumble = noiseSource('lowpass', 90, 1.6, this.centre);
+    this.sub = ctx.createOscillator();
+    this.sub.type = 'sine';
+    this.sub.frequency.value = 42;
+    this.subGain = ctx.createGain();
+    this.subGain.gain.value = 0;
+    this.sub.connect(this.subGain); this.subGain.connect(this.centre);
+
     /* ---- reheat: sub rumble with an unstable amplitude ------------------- */
-    this.reheat = noiseSource('lowpass', 130, 1.1);
+    this.reheat = noiseSource('lowpass', 130, 1.1, this.centre);
     this.reheatMid = noiseSource('bandpass', 420, 0.8);
     this.instability = ctx.createGain();
     this.instability.gain.value = 1;
@@ -129,7 +193,7 @@ class EngineSynth {
     this.damageGain.gain.value = 0;
     const df = ctx.createBiquadFilter();
     df.type = 'lowpass'; df.frequency.value = 260;
-    this.damageOsc.connect(this.damageGain); this.damageGain.connect(df); df.connect(this.out);
+    this.damageOsc.connect(this.damageGain); this.damageGain.connect(df); df.connect(this.centre);
   }
 
   start() {
@@ -139,8 +203,9 @@ class EngineSynth {
     try {
       for (const f of this.fan) f.osc.start(t);
       for (const b of this.buzz) b.start(t);
-      for (const n of [this.core, this.hiss, this.airframe, this.reheat, this.reheatMid]) n.src.start(t);
+      for (const n of [this.core, this.hiss, this.airframe, this.reheat, this.reheatMid, this.rumble]) n.src.start(t);
       this.lfoA.start(t); this.lfoB.start(t);
+      this.sub.start(t);
       this.damageOsc.start(t);
     } catch (e) { /* already started */ }
     this.out.gain.cancelScheduledValues(t);
@@ -211,23 +276,32 @@ class EngineSynth {
     for (const b of this.buzz) set(b.frequency, f0 * 5.4, 0.12);
     set(this.buzzGain.gain, buzz * 0.030 * lerp(0.6, 1.0, thr));
 
-    // Core roar — the body of the sound.
-    set(this.core.filter.frequency, lerp(170, 780, n1), 0.12);
-    set(this.core.gain.gain, lerp(0.05, 0.30, n1) * lerp(0.75, 1.15, thr));
+    // Core roar — the body of the sound. Voiced lower and louder than a
+    // civil turbofan: the combustion band on a military engine sits well under
+    // 500 Hz and it is most of what you hear from behind.
+    set(this.core.filter.frequency, lerp(130, 620, n1), 0.12);
+    set(this.core.gain.gain, lerp(0.09, 0.52, n1) * lerp(0.75, 1.15, thr));
+
+    // Sub-bass. The rumble tracks thrust; the tone tracks the fan an octave
+    // and a half down, so it moves with the engine instead of droning.
+    set(this.rumble.filter.frequency, lerp(62, 128, n1), 0.15);
+    set(this.rumble.gain.gain, lerp(0.10, 0.44, Math.pow(n1, 0.85)) + boost * 0.30);
+    set(this.sub.frequency, clamp(f0 * 0.34, 26, 118), 0.14);
+    set(this.subGain.gain, lerp(0.045, 0.185, Math.pow(n1, 1.2)) + boost * 0.13);
     // Exhaust tearing.
     set(this.hiss.filter.frequency, lerp(2200, 5200, spd));
-    set(this.hiss.gain.gain, lerp(0.012, 0.075, Math.pow(spd, 1.3)) + boost * 0.055);
+    set(this.hiss.gain.gain, lerp(0.012, 0.095, Math.pow(spd, 1.3)) + boost * 0.075);
     // Airframe: the air itself, which is loud in a fast jet even at idle.
     set(this.airframe.filter.frequency, lerp(700, 1800, spd));
-    set(this.airframe.gain.gain, Math.pow(spd, 1.9) * 0.085);
+    set(this.airframe.gain.gain, Math.pow(spd, 1.9) * 0.115);
 
-    // Reheat: unstable by nature.
-    set(this.reheat.gain.gain, boost * 0.26 + Math.pow(n1, 3) * 0.03);
+    // Reheat: unstable by nature, and enormous.
+    set(this.reheat.gain.gain, boost * 0.52 + Math.pow(n1, 3) * 0.05);
     set(this.reheat.filter.frequency, lerp(95, 165, boost));
-    set(this.reheatMid.gain.gain, boost * 0.13);
+    set(this.reheatMid.gain.gain, boost * 0.24);
     set(this.reheatMid.filter.frequency, lerp(300, 620, boost));
-    set(this.lfoAG.gain, boost * 0.075);
-    set(this.lfoBG.gain, boost * 0.045);
+    set(this.lfoAG.gain, boost * 0.14);
+    set(this.lfoBG.gain, boost * 0.075);
 
     // A damaged compressor stalls and surges.
     const dmg = clamp01((s.damage01 - 0.45) / 0.55);
@@ -242,8 +316,8 @@ class EngineSynth {
     try {
       for (const f of this.fan) f.osc.stop();
       for (const b of this.buzz) b.stop();
-      for (const n of [this.core, this.hiss, this.airframe, this.reheat, this.reheatMid]) n.src.stop();
-      this.lfoA.stop(); this.lfoB.stop(); this.damageOsc.stop();
+      for (const n of [this.core, this.hiss, this.airframe, this.reheat, this.reheatMid, this.rumble]) n.src.stop();
+      this.lfoA.stop(); this.lfoB.stop(); this.sub.stop(); this.damageOsc.stop();
     } catch (e) { /* not started */ }
     this.out.disconnect();
   }
@@ -385,25 +459,38 @@ class SFXKit {
     const v = opts.volume ?? 1;
     switch (name) {
       /* ---- UI ---- */
+      // UI sounds share a house style: a short filtered transient over a low
+      // body note, so they sit in the same mix as the jet rather than sounding
+      // like a different application. Every one is guarded — the menu fires
+      // these on pointer move and they would otherwise stack into a buzz.
       case 'hover':
         if (!this._guard('hover', 40)) return;
-        this._tone({ freq: 1180, type: 'sine', dur: 0.055, gain: 0.045 * v, sweep: 180 });
+        this._tone({ freq: 1240, type: 'sine', dur: 0.05, gain: 0.060 * v, sweep: 210 });
+        this._noise({ dur: 0.03, gain: 0.022 * v, type: 'highpass', freq: 5200, sweep: 1800 });
         break;
       case 'click':
-        this._tone({ freq: 720, type: 'square', dur: 0.06, gain: 0.075 * v, sweep: -220, filter: { type: 'lowpass', freq: 2600 } });
-        this._noise({ dur: 0.05, gain: 0.04 * v, type: 'highpass', freq: 2600, sweep: 1400 });
+        this._tone({ freq: 740, type: 'square', dur: 0.055, gain: 0.10 * v, sweep: -240,
+          filter: { type: 'lowpass', freq: 2600 } });
+        this._noise({ dur: 0.045, gain: 0.055 * v, type: 'highpass', freq: 2800, sweep: 1500 });
+        this._tone({ freq: 118, type: 'sine', dur: 0.09, gain: 0.11 * v, sweep: -30 });
         break;
       case 'select':
-        this._tone({ freq: 620, type: 'triangle', dur: 0.11, gain: 0.09 * v, sweep: 380 });
-        this._tone({ freq: 930, type: 'sine', dur: 0.16, gain: 0.06 * v, delay: 0.05 });
+        this._tone({ freq: 620, type: 'triangle', dur: 0.10, gain: 0.12 * v, sweep: 400 });
+        this._tone({ freq: 930, type: 'sine', dur: 0.16, gain: 0.085 * v, delay: 0.05 });
+        this._tone({ freq: 96, type: 'sine', dur: 0.16, gain: 0.14 * v, sweep: -22 });
+        this._noise({ dur: 0.06, gain: 0.04 * v, type: 'bandpass', freq: 3600, sweep: 1200, q: 2 });
         break;
       case 'back':
-        this._tone({ freq: 520, type: 'triangle', dur: 0.12, gain: 0.08 * v, sweep: -220 });
+        this._tone({ freq: 520, type: 'triangle', dur: 0.12, gain: 0.11 * v, sweep: -230 });
+        this._tone({ freq: 88, type: 'sine', dur: 0.18, gain: 0.13 * v, sweep: -18 });
         break;
       case 'confirm':
-        this._tone({ freq: 523, type: 'sine', dur: 0.14, gain: 0.10 * v });
-        this._tone({ freq: 784, type: 'sine', dur: 0.20, gain: 0.09 * v, delay: 0.08 });
-        this._tone({ freq: 1046, type: 'sine', dur: 0.30, gain: 0.07 * v, delay: 0.16 });
+        this._tone({ freq: 523, type: 'sine', dur: 0.14, gain: 0.13 * v });
+        this._tone({ freq: 784, type: 'sine', dur: 0.20, gain: 0.12 * v, delay: 0.08 });
+        this._tone({ freq: 1046, type: 'sine', dur: 0.30, gain: 0.10 * v, delay: 0.16 });
+        // Launch has weight under it — it is the biggest button in the game.
+        this._tone({ freq: 65, type: 'sine', dur: 0.55, gain: 0.22 * v, sweep: -14 });
+        this._noise({ dur: 0.42, gain: 0.09 * v, type: 'bandpass', freq: 900, sweep: 1600, q: 1.2 });
         break;
       case 'error':
         this._tone({ freq: 180, type: 'sawtooth', dur: 0.20, gain: 0.09 * v, sweep: -60, filter: { type: 'lowpass', freq: 900 } });
@@ -430,17 +517,24 @@ class SFXKit {
         this._tone({ freq: 420, type: 'sawtooth', dur: 0.28, gain: 0.11 * v, sweep: 900, filter: { type: 'lowpass', freq: 900, sweep: 3200, q: 4 } });
         break;
       case 'collision':
-        // Airframe strike: skin panel deforming, then the structure ringing.
-        this._noise({ dur: 0.09, gain: 0.34 * v, type: 'highpass', freq: 3400, sweep: -1800 });
-        this._noise({ dur: 0.40, gain: 0.26 * v, type: 'bandpass', freq: 1500, sweep: -1150, q: 1.6 });
-        this._tone({ freq: 148, type: 'triangle', dur: 0.34, gain: 0.18 * v, sweep: -96, filter: { type: 'lowpass', freq: 620 } });
+        // Airframe strike: skin panel deforming, then the structure ringing,
+        // with a real impact under it.
+        this._noise({ dur: 0.07, gain: 0.60 * v, type: 'highpass', freq: 3600, sweep: -2100, attack: 0.0008 });
+        this._noise({ dur: 0.50, gain: 0.44 * v, type: 'bandpass', freq: 1500, sweep: -1220, q: 1.6 });
+        this._tone({ freq: 138, type: 'triangle', dur: 0.40, gain: 0.40 * v, sweep: -92, filter: { type: 'lowpass', freq: 620 } });
+        this._tone({ freq: 46, type: 'sine', dur: 0.70, gain: 0.55 * v, sweep: -16, attack: 0.003 });
         break;
       case 'explosion':
-        // Fuel deflagration, then the airframe coming apart.
-        this._noise({ dur: 0.09, gain: 0.34 * v, type: 'highpass', freq: 4200, sweep: 2000 });
-        this._noise({ dur: 1.7, gain: 0.44 * v, type: 'lowpass', freq: 2400, sweep: -2280, q: 0.7 });
-        this._tone({ freq: 86, type: 'sine', dur: 1.25, gain: 0.34 * v, sweep: -58 });
-        this._noise({ dur: 0.85, gain: 0.16 * v, type: 'bandpass', freq: 2200, sweep: -1600, q: 0.9, delay: 0.18 });
+        // Fuel deflagration, then the airframe coming apart. Two sub layers an
+        // octave apart give the blast a floor you feel rather than only hear,
+        // and the long tail is the debris and the pressure wave coming back.
+        this._noise({ dur: 0.07, gain: 0.62 * v, type: 'highpass', freq: 4600, sweep: 2400, attack: 0.0008 });
+        this._tone({ freq: 112, type: 'sawtooth', dur: 0.30, gain: 0.60 * v, sweep: -76, attack: 0.002,
+          filter: { type: 'lowpass', freq: 900, sweep: -640, q: 2.2 } });
+        this._tone({ freq: 54, type: 'sine', dur: 1.6, gain: 0.85 * v, sweep: -22, attack: 0.004 });
+        this._tone({ freq: 27, type: 'sine', dur: 2.1, gain: 0.62 * v, sweep: -9, attack: 0.010 });
+        this._noise({ dur: 2.0, gain: 0.66 * v, type: 'lowpass', freq: 2800, sweep: -2660, q: 0.7 });
+        this._noise({ dur: 1.1, gain: 0.26 * v, type: 'bandpass', freq: 2400, sweep: -1900, q: 0.9, delay: 0.2 });
         break;
       case 'shield':
         this._tone({ freq: 300, type: 'sine', dur: 0.55, gain: 0.13 * v, sweep: 500, filter: { type: 'bandpass', freq: 900, q: 6 } });
@@ -512,13 +606,17 @@ class SFXKit {
         break;
       /* ---- weapons ---- */
       case 'gunFire':
-        // Rotary cannon: a hard mechanical crack per pair of rounds, with the
-        // muzzle blast under it. Guarded tightly so a held trigger stays a
-        // single continuous rip rather than a wall of overlapping copies.
-        if (!this._guard('gunFire', 55)) return;
-        this._noise({ dur: 0.045, gain: 0.20 * v, type: 'highpass', freq: 2400, sweep: -1200, attack: 0.001 });
-        this._tone({ freq: 168, type: 'square', dur: 0.055, gain: 0.15 * v, sweep: -74, attack: 0.001,
-          filter: { type: 'lowpass', freq: 1300, q: 2.4 } });
+        // Rotary cannon. Four layers because a real one is four things at
+        // once: the crack of the round leaving, the muzzle blast, the low
+        // thump of the gas, and the mechanical clatter of the breech. Guarded
+        // tightly so a held trigger reads as one continuous rip rather than a
+        // wall of overlapping copies.
+        if (!this._guard('gunFire', 52)) return;
+        this._noise({ dur: 0.035, gain: 0.62 * v, type: 'highpass', freq: 3200, sweep: -2000, attack: 0.0008 });
+        this._noise({ dur: 0.11, gain: 0.50 * v, type: 'bandpass', freq: 780, sweep: -430, q: 0.8, attack: 0.001 });
+        this._tone({ freq: 152, type: 'square', dur: 0.075, gain: 0.44 * v, sweep: -84, attack: 0.001,
+          filter: { type: 'lowpass', freq: 1100, q: 2.6 } });
+        this._tone({ freq: 58, type: 'sine', dur: 0.14, gain: 0.46 * v, sweep: -20, attack: 0.002 });
         break;
       case 'gunFireDistant':
         // Somebody else's guns: no muzzle crack, just the report arriving.
@@ -526,12 +624,19 @@ class SFXKit {
         this._noise({ dur: 0.16, gain: 0.09 * v, type: 'bandpass', freq: 620, sweep: -320, q: 1.1 });
         break;
       case 'missileLaunch':
-        // Rail release, then the motor lighting and departing.
-        if (!this._guard('missileLaunch', 140)) return;
-        this._noise({ dur: 0.06, gain: 0.22 * v, type: 'highpass', freq: 3000, sweep: -1500, attack: 0.001 });
-        this._noise({ dur: 0.95, gain: 0.26 * v, type: 'bandpass', freq: 900, sweep: -720, q: 0.8, delay: 0.03 });
-        this._tone({ freq: 210, type: 'sawtooth', dur: 0.70, gain: 0.16 * v, sweep: -140, delay: 0.02,
-          filter: { type: 'lowpass', freq: 1600, sweep: -1100 } });
+        // Rail release, ignition, then the motor tearing away downrange. This
+        // is meant to be the loudest thing the player triggers on purpose —
+        // the launch has to feel like the aircraft just lost weight.
+        if (!this._guard('missileLaunch', 130)) return;
+        this._noise({ dur: 0.05, gain: 0.42 * v, type: 'highpass', freq: 3400, sweep: -1900, attack: 0.0008 });
+        this._tone({ freq: 96, type: 'sawtooth', dur: 0.22, gain: 0.52 * v, sweep: -46, attack: 0.002,
+          filter: { type: 'lowpass', freq: 760, q: 2.0 } });
+        this._tone({ freq: 44, type: 'sine', dur: 0.85, gain: 0.60 * v, sweep: -14, attack: 0.004 });
+        // Motor: broadband, opening then Dopplering away as it departs.
+        this._noise({ dur: 0.30, gain: 0.56 * v, type: 'lowpass', freq: 500, sweep: 3600, q: 0.9, attack: 0.003 });
+        this._noise({ dur: 1.5, gain: 0.40 * v, type: 'bandpass', freq: 1100, sweep: -930, q: 0.7, delay: 0.05 });
+        this._tone({ freq: 260, type: 'sawtooth', dur: 1.1, gain: 0.24 * v, sweep: -190, delay: 0.03,
+          filter: { type: 'lowpass', freq: 1900, sweep: -1400 } });
         break;
       case 'grenadeThrow':
         if (!this._guard('grenadeThrow', 140)) return;
@@ -552,6 +657,40 @@ class SFXKit {
         if (!this._guard('lockWarn', 900)) return;
         this._tone({ freq: 640, type: 'sawtooth', dur: 0.13, gain: 0.09 * v, filter: { type: 'lowpass', freq: 1800 } });
         this._tone({ freq: 640, type: 'sawtooth', dur: 0.13, gain: 0.09 * v, delay: 0.19, filter: { type: 'lowpass', freq: 1800 } });
+        break;
+      case 'collisionWarn': {
+        // Ground-proximity style alert. The pitch steps up with the threat
+        // level so the ear knows how bad it is before the eye reads the
+        // distance, and it is deliberately harsh — this is not a nice sound.
+        const lvl = opts.pitch || 0;
+        const f = [520, 700, 980][clamp(lvl, 0, 2)];
+        this._tone({ freq: f, type: 'square', dur: 0.075, gain: 0.16 * v,
+          filter: { type: 'bandpass', freq: f * 1.6, q: 2.2 } });
+        this._tone({ freq: f * 0.5, type: 'sawtooth', dur: 0.085, gain: 0.11 * v,
+          filter: { type: 'lowpass', freq: 1400 } });
+        if (lvl >= 2) this._tone({ freq: 86, type: 'sine', dur: 0.14, gain: 0.22 * v, sweep: -22 });
+        break;
+      }
+      case 'overheat':
+        // Engine overheat: a hot, distressed two-tone with a metallic strain
+        // under it, so it is unmistakably the ENGINE and not the ground.
+        if (!this._guard('overheat', 780)) return;
+        this._tone({ freq: 880, type: 'sawtooth', dur: 0.20, gain: 0.16 * v, sweep: -180,
+          filter: { type: 'bandpass', freq: 1500, q: 3.0 } });
+        this._tone({ freq: 660, type: 'sawtooth', dur: 0.22, gain: 0.15 * v, sweep: -140, delay: 0.22,
+          filter: { type: 'bandpass', freq: 1200, q: 3.0 } });
+        this._noise({ dur: 0.55, gain: 0.13 * v, type: 'bandpass', freq: 2600, sweep: -900, q: 4.0 });
+        this._tone({ freq: 62, type: 'sine', dur: 0.60, gain: 0.24 * v, sweep: -14 });
+        break;
+      case 'overheatCritical':
+        // The last few seconds before the engine lets go.
+        if (!this._guard('overheatCritical', 420)) return;
+        this._tone({ freq: 1180, type: 'square', dur: 0.10, gain: 0.20 * v,
+          filter: { type: 'bandpass', freq: 2200, q: 3.5 } });
+        this._tone({ freq: 1180, type: 'square', dur: 0.10, gain: 0.20 * v, delay: 0.13,
+          filter: { type: 'bandpass', freq: 2200, q: 3.5 } });
+        this._noise({ dur: 0.34, gain: 0.20 * v, type: 'bandpass', freq: 3400, sweep: -1800, q: 5.0 });
+        this._tone({ freq: 44, type: 'sine', dur: 0.42, gain: 0.34 * v, sweep: -12 });
         break;
       case 'gearLock':
         this._noise({ dur: 0.16, gain: 0.10 * v, type: 'bandpass', freq: 1100, sweep: -600, q: 2.4 });
@@ -831,14 +970,42 @@ export class AudioSystem {
 
       this.master = this.ctx.createGain();
       this.master.gain.value = this.settings.masterVolume;
+
+      /* ---- master voicing ------------------------------------------------
+       * A low shelf and a narrow lift around 55 Hz put real weight under the
+       * whole mix — jet, cannon and detonations alike — and a small presence
+       * bump keeps the top from being buried by it. The limiter then holds the
+       * peaks, which is what lets everything below it run this hot without
+       * clipping on a burst of explosions. */
+      this.bass = this.ctx.createBiquadFilter();
+      this.bass.type = 'lowshelf';
+      this.bass.frequency.value = 145;
+      this.bass.gain.value = 6.0;
+
+      this.subLift = this.ctx.createBiquadFilter();
+      this.subLift.type = 'peaking';
+      this.subLift.frequency.value = 55;
+      this.subLift.Q.value = 0.85;
+      this.subLift.gain.value = 5.0;
+
+      this.presence = this.ctx.createBiquadFilter();
+      this.presence.type = 'peaking';
+      this.presence.frequency.value = 3100;
+      this.presence.Q.value = 0.7;
+      this.presence.gain.value = 2.4;
+
       // A gentle limiter keeps explosions from clipping the mix.
       this.limiter = this.ctx.createDynamicsCompressor();
-      this.limiter.threshold.value = -8;
-      this.limiter.knee.value = 12;
-      this.limiter.ratio.value = 6;
-      this.limiter.attack.value = 0.004;
-      this.limiter.release.value = 0.22;
-      this.master.connect(this.limiter);
+      this.limiter.threshold.value = -10;
+      this.limiter.knee.value = 10;
+      this.limiter.ratio.value = 9;
+      this.limiter.attack.value = 0.003;
+      this.limiter.release.value = 0.20;
+
+      this.master.connect(this.bass);
+      this.bass.connect(this.subLift);
+      this.subLift.connect(this.presence);
+      this.presence.connect(this.limiter);
       this.limiter.connect(this.ctx.destination);
 
       const bus = (v) => { const g = this.ctx.createGain(); g.gain.value = v; g.connect(this.master); return g; };

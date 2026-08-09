@@ -679,9 +679,30 @@ class WorldChunk {
     this.startNode = 0;
     this.endNode = 0;
     this.built = false;
+    // Bounding sphere over this chunk's colliders, maintained as they are
+    // added. Ground structures push the collider count into the thousands per
+    // chunk, and a chunk-level reject turns the broadphase from "test every
+    // collider in the world" into "test the two or three chunks the aircraft
+    // is actually inside".
+    this.bMin = new THREE.Vector3(Infinity, Infinity, Infinity);
+    this.bMax = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
   }
 
-  addCollider(c) { this.colliders.push(c); return c; }
+  addCollider(c) {
+    this.colliders.push(c);
+    this.bMin.set(Math.min(this.bMin.x, c.pos.x - c.radius),
+      Math.min(this.bMin.y, c.pos.y - c.radius), Math.min(this.bMin.z, c.pos.z - c.radius));
+    this.bMax.set(Math.max(this.bMax.x, c.pos.x + c.radius),
+      Math.max(this.bMax.y, c.pos.y + c.radius), Math.max(this.bMax.z, c.pos.z + c.radius));
+    return c;
+  }
+
+  /** Cheap AABB reject for a query sphere. */
+  mayContain(pos, radius) {
+    return pos.x + radius >= this.bMin.x && pos.x - radius <= this.bMax.x
+      && pos.y + radius >= this.bMin.y && pos.y - radius <= this.bMax.y
+      && pos.z + radius >= this.bMin.z && pos.z - radius <= this.bMax.z;
+  }
 
   dispose(scene) {
     scene.remove(this.group);
@@ -691,6 +712,8 @@ class WorldChunk {
     });
     this.group.clear();
     this.colliders.length = 0;
+    this.bMin.set(Infinity, Infinity, Infinity);
+    this.bMax.set(-Infinity, -Infinity, -Infinity);
     this.checkpoints.length = 0;
     this.rings.length = 0;
     this.animated.length = 0;
@@ -1269,10 +1292,66 @@ export class World {
     return g;
   }
 
+  /**
+   * Make an already-built structure solid by deriving colliders from its own
+   * meshes rather than from a hand-written table.
+   *
+   * Landmarks are assembled branch by branch out of dozens of primitives, and a
+   * per-kind collider list would drift out of step with the geometry the first
+   * time one of them was retuned. Walking the finished group instead means a
+   * spire is solid because it *is* a spire — every mesh above the size floor
+   * contributes a sphere, and the whole silhouette ends up hittable.
+   *
+   * @param minR  smallest mesh worth colliding with, in metres
+   * @param maxN  cap on colliders taken from this structure (largest first)
+   */
+  _registerStructureColliders(chunk, root, minR = 20, maxN = 40, type = 'structure') {
+    root.updateMatrixWorld(true);
+    const found = [];
+    root.traverse((n) => {
+      if (!n.isMesh || !n.geometry) return;
+      if (!n.geometry.boundingSphere) n.geometry.computeBoundingSphere();
+      const bs = n.geometry.boundingSphere;
+      if (!bs) return;
+      const c = bs.center.clone().applyMatrix4(n.matrixWorld);
+      // Uniform-ish scale is the norm here; take the largest axis so a stretched
+      // slab is never under-covered.
+      const sc = _v1.setFromMatrixScale(n.matrixWorld);
+      const r = bs.radius * Math.max(sc.x, sc.y, sc.z) * 0.72;
+      if (r < minR) return;
+      found.push({ c, r });
+    });
+    found.sort((a, b) => b.r - a.r);
+    for (const f of found.slice(0, maxN)) {
+      chunk.addCollider({
+        pos: f.c, radius: f.r, damage: 52, type, kind: 'structure', soft: false,
+        object: null, spin: 0, hub: null,
+      });
+    }
+  }
+
   /** Ground scatter for one chunk footprint (trees / buildings / rocks). */
   *_buildScatter(chunk, centerX, centerZ, extent, rng) {
     const d = this.quality.propDensity;
     const p = this.biome.props;
+
+    /**
+     * Register a scatter prop as something the aircraft can hit.
+     *
+     * Structures are placed in chunk-local space but collide in world space,
+     * so the offset has to be applied here. Only things tall or solid enough to
+     * matter get a collider: a tower block or a mast is a wall, a shrub is not,
+     * and putting 20,000 pieces of ground cover into the broadphase would cost
+     * far more than it could ever add.
+     */
+    const solid = (lx, y, lz, radius, damage, type) => {
+      chunk.addCollider({
+        pos: new THREE.Vector3(centerX + lx, y, centerZ + lz),
+        radius, damage, type, kind: 'structure', soft: false,
+        object: null, spin: 0, hub: null,
+      });
+    };
+
     const addInstanced = (geo, mat, count, place) => {
       if (count <= 0) return;
       const mesh = new THREE.InstancedMesh(geo, mat, count);
@@ -1350,9 +1429,22 @@ export class World {
       const tall = clamp01(cluster * 1.6) * (p.buildings > 1 ? 1 : 0.45);
       const bh = rng.float(30, 90) + Math.pow(rng.next(), 3) * 620 * tall;
       const bw = rng.float(24, 62) * (1 + tall * 0.5);
+      const bd = bw * rng.float(0.7, 1.4);
       m.makeRotationY(Math.round(rng.float(0, 4)) * Math.PI / 2);
-      m.scale(_v1.set(bw, bh, bw * rng.float(0.7, 1.4)));
+      m.scale(_v1.set(bw, bh, bd));
       m.setPosition(x, h + bh / 2, z);
+      // A building is a wall. The collider is a sphere around the upper half of
+      // the tower — where an aircraft actually meets it — sized from the
+      // footprint rather than the height, so a 600 m spire is not a 300 m ball
+      // of empty air you die inside.
+      const r = Math.max(bw, bd) * 0.55;
+      // Tall towers get a stack of colliders up the shaft so the whole height
+      // is solid, not just one point on it.
+      const spans = Math.min(6, Math.max(1, Math.round(bh / (r * 2))));
+      for (let k = 0; k < spans; k++) {
+        const y = h + bh * ((k + 0.5) / spans);
+        solid(x, y, z, r, 46, 'building');
+      }
       return true;
     });
     yield;
@@ -1371,6 +1463,9 @@ export class World {
       m.makeRotationY(rng.float(0, TAU));
       m.scale(_v1.set(s, s * rng.float(0.5, 1.1), s * rng.float(0.7, 1.3)));
       m.setPosition(x, h + s * 0.2, z);
+      // Boulders are solid; scree is not — you can belly-scrape gravel, you
+      // cannot fly through a house-sized rock.
+      if (s > 14) solid(x, h + s * 0.5, z, s * 0.85, 34, 'rock');
       return true;
     };
     const rCount = Math.round(420 * p.rocks * d);
@@ -1391,9 +1486,12 @@ export class World {
       if (h < this.terrain.waterLevel + 6) return false;
       if (this.terrain.slope(wx, wz, 90) > 0.22) return false;
       const s = rng.float(1.0, 3.4);
+      const vs = s * rng.float(0.8, 2.2);
       m.makeRotationY(rng.float(0, TAU));
-      m.scale(_v1.set(s, s * rng.float(0.8, 2.2), s));
+      m.scale(_v1.set(s, vs, s));
       m.setPosition(x, h, z);
+      // The mast geometry is 28 units tall before scaling.
+      solid(x, h + 28 * vs * 0.6, z, Math.max(9, 28 * vs * 0.35), 40, 'mast');
       return true;
     });
   }
@@ -1549,6 +1647,7 @@ export class World {
       const lm = this._buildLandmark(rng.pick(this.biome.landmark),
         s.pos.clone().addScaledVector(s.right, side * rng.float(900, 2600)), rng);
       chunk.group.add(lm);
+      this._registerStructureColliders(chunk, lm, 26, 52, 'landmark');
       if (lm.userData.spinners) chunk.animated.push({ spinners: lm.userData.spinners });
     }
     yield;
@@ -1709,9 +1808,43 @@ export class World {
    * Collect colliders within `radius` of a point. Covers both static chunk
    * content and dynamic colliders (traffic), which the AI layer registers here.
    */
+  /**
+   * Nearest thing the aircraft will hit if it holds this heading.
+   *
+   * Sweeps a capsule of `clearance` metres down the flight vector and returns
+   * the closest collider it would strike, with the distance to impact. Used by
+   * the HUD collision warning, so it deliberately looks a long way ahead —
+   * at Mach 15 the airframe covers 5 km a second and a warning that only fires
+   * at 500 m is a warning that arrives after the crash.
+   *
+   * @returns {{collider:Object, distance:number}|null}
+   */
+  forwardHazard(from, dir, maxDist, clearance = 90) {
+    let best = null, bestT = maxDist;
+    const scan = (c) => {
+      _v2.subVectors(c.pos, from);
+      const t = _v2.dot(dir);                       // distance along the heading
+      if (t < 0 || t > bestT) return;
+      // Perpendicular miss distance from the flight line.
+      const perp2 = _v2.lengthSq() - t * t;
+      const hit = c.radius + clearance;
+      if (perp2 > hit * hit) return;
+      bestT = t; best = c;
+    };
+    for (const chunk of this.chunks.values()) {
+      // Reject a chunk unless the swept segment could reach it at all.
+      _v3.copy(from).addScaledVector(dir, maxDist * 0.5);
+      if (!chunk.mayContain(_v3, maxDist * 0.5 + clearance)) continue;
+      for (const c of chunk.colliders) scan(c);
+    }
+    for (const c of this.dynamicColliders) if (c.active) scan(c);
+    return best ? { collider: best, distance: bestT } : null;
+  }
+
   queryColliders(pos, radius, out = this._colliderScratch) {
     out.length = 0;
     for (const chunk of this.chunks.values()) {
+      if (!chunk.mayContain(pos, radius)) continue;
       for (const c of chunk.colliders) {
         const rr = radius + c.radius;
         if (c.pos.distanceToSquared(pos) < rr * rr) out.push(c);

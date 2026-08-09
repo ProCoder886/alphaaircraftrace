@@ -14,6 +14,23 @@
 body.touch-mode .mobile-controls.enabled { display: block; }
 
 /* ---- flight stick -------------------------------------------------------- */
+/* Bank buttons sit directly above the stick, in the same thumb arc.
+   Anchored to the same left/bottom origin as .stick-base (128 px wide, sitting
+   on a 16 px inset) so they stay centred over it at every viewport size. */
+.touch-roll {
+  position: absolute; z-index: 2;
+  left: calc(max(16px, env(safe-area-inset-left)) + 64px);
+  bottom: calc(max(12px, env(safe-area-inset-bottom)) + 128px + 12px);
+  transform: translateX(-50%);
+  display: flex; gap: 14px; pointer-events: auto;
+}
+.tbtn-roll {
+  width: 54px; height: 54px;
+  border-color: rgba(93, 255, 156, 0.5);
+  background: radial-gradient(circle at 40% 34%, rgba(93, 255, 156, 0.18), rgba(8, 26, 18, 0.6));
+}
+.tbtn-roll svg { width: 26px; height: 26px; }
+
 .stick-zone {
   position: absolute; left: 0; bottom: 0;
   width: 42%; height: 62%;
@@ -120,6 +137,13 @@ body.combat-mode .touch-weapons { display: flex; }
   .tbtn-boost { width: 70px; height: 70px; font-size: 0.6rem; }
   .tbtn-brake { width: 46px; height: 46px; }
   .tbtn-lean { width: 42px; height: 42px; font-size: 0.7rem; }
+  .tbtn-roll { width: 44px; height: 44px; }
+  .tbtn-roll svg { width: 21px; height: 21px; }
+  .touch-roll {
+    gap: 10px;
+    left: calc(max(16px, env(safe-area-inset-left)) + 48px);
+    bottom: calc(max(12px, env(safe-area-inset-bottom)) + 96px + 9px);
+  }
   .tbtn-gun { width: 46px; height: 46px; font-size: 0.52rem; }
   .tbtn-wpn { width: 38px; height: 38px; font-size: 0.44rem; }
   .tbtn-small { width: 38px; height: 38px; }
@@ -154,4 +178,22 @@ body.combat-mode .touch-weapons { display: flex; }
 /* ---- when the on-screen controls are up, keep the HUD out of their way --- */
 body.touch-mode .hud-bl { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 128px); }
 body.touch-mode .hud-bc { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 4px); width: min(280px, 34%); }
-body.touch-mode .hud-br { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 118px); }
+/* The bottom-right instrument stack has to get out of the thumb column's way.
+   On a 390 px-tall landscape phone the touch buttons own the right-hand edge
+   from top to bottom, so the stack shifts left into the gap between the stick
+   and the buttons rather than trying to share the same column. */
+body.touch-mode .hud-br {
+  right: calc(max(18px, env(safe-area-inset-right)) + 168px);
+  bottom: calc(max(14px, env(safe-area-inset-bottom)) + 8px);
+  align-items: flex-end;
+}
+/* The touch rack already carries the powers as tappable cells, so the desktop
+   keyboard rack is pure duplication on a phone — and it is what was landing on
+   top of the altitude readout and the camera chip. */
+body.touch-mode #power-rack { display: none; }
+/* CAM already has a dedicated button top-right on touch. */
+body.touch-mode .cam-chip { display: none; }
+/* The right-hand gauge and its readout move inboard so the touch power rack,
+   which owns the right edge, is not sitting on top of the altimeter. */
+body.touch-mode .gauge-right { right: 33%; }
+body.touch-mode .readout-right { right: calc(33% - 78px); }

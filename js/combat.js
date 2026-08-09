@@ -25,6 +25,7 @@ import {
   RNG, clamp, clamp01, lerp, damp, TAU,
 } from './config.js';
 import { AIRacer } from './ai.js';
+import { mergeGeometriesSafe } from './renderer.js';
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -47,12 +48,16 @@ const HEAVY_CAP = 40;
  */
 class TracerBatch {
   constructor(scene) {
-    // A long thin box scaled along -Z: cheap, and it reads as a tracer streak
-    // rather than a dot at any speed.
-    const g = new THREE.BoxGeometry(1, 1, 1);
+    // A capsule scaled along -Z. Rounded rather than a box because a tracer is
+    // a glowing bolt, not a plank, and the extra segments cost nothing at this
+    // instance count. It is drawn deliberately fat: a physically-scaled 20 mm
+    // round is a couple of pixels at combat range, which is invisible, and
+    // invisible tracers make gunnery unreadable.
+    const g = new THREE.CapsuleGeometry(1, 1.6, 3, 7);
+    g.rotateX(Math.PI / 2);
     g.translate(0, 0, -0.5);
     const m = new THREE.MeshBasicMaterial({
-      transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending,
+      transparent: true, opacity: 1, blending: THREE.AdditiveBlending,
       depthWrite: false, toneMapped: false,
     });
     this.mesh = new THREE.InstancedMesh(g, m, TRACER_CAP);
@@ -92,7 +97,24 @@ class TracerBatch {
 /** Heavy rounds — missiles, laser-guided rounds, grenades and RPGs. */
 class HeavyBatch {
   constructor(scene) {
-    const g = new THREE.ConeGeometry(0.55, 3.4, 7);
+    // A real missile silhouette — ogive nose, body tube and tail fins — at a
+    // size that reads from the chase camera. Assembled by hand rather than
+    // merged from three geometries so the whole thing stays one instanced
+    // draw call.
+    const parts = [];
+    const nose = new THREE.ConeGeometry(1.15, 3.2, 10);
+    nose.translate(0, 3.4, 0);
+    parts.push(nose);
+    const body = new THREE.CylinderGeometry(1.15, 1.15, 5.4, 10);
+    body.translate(0, 1.1, 0);
+    parts.push(body);
+    for (let i = 0; i < 4; i++) {
+      const fin = new THREE.BoxGeometry(0.25, 1.8, 2.2);
+      fin.translate(0, -1.0, 1.5);
+      fin.rotateY((i / 4) * Math.PI * 2);
+      parts.push(fin);
+    }
+    const g = mergeGeometriesSafe(parts);
     g.rotateX(-Math.PI / 2);                    // nose along -Z
     const m = new THREE.MeshBasicMaterial({ toneMapped: false });
     this.mesh = new THREE.InstancedMesh(g, m, HEAVY_CAP);
@@ -404,6 +426,19 @@ export class CombatSystem {
     return this.heavyWeapon;
   }
 
+  /**
+   * Select a weapon by id. Unlike cycling, this does NOT stamp a cooldown —
+   * the whole point of the per-weapon keys is that pressing one selects and
+   * launches in a single action, and a switching penalty would make that
+   * strictly worse than cycling to it.
+   */
+  selectWeapon(id) {
+    const i = HEAVY_ORDER.indexOf(id);
+    if (i < 0) return null;
+    this.heavyIndex = i;
+    return this.heavyWeapon;
+  }
+
   /** Manual target step — cycles through everything currently in the cone. */
   cycleTarget(player) {
     const cands = this._candidates(player);
@@ -530,7 +565,17 @@ export class CombatSystem {
       fired++;
       this.gunCooldown += w.cooldown;
     }
-    this.audio?.play('gunFire', { volume: 0.5 });
+    // Muzzle flash: a short spray of sparks off each barrel plus a light
+    // punch on the frame, so the guns register on screen and not only in the
+    // tracer stream leaving it.
+    _v.set(0, 0, -1).applyQuaternion(player.quaternion);
+    for (const side of [-1, 1]) {
+      _v3.set(side * 1.5, -0.5, -5).applyQuaternion(player.quaternion).add(player.position);
+      this.render.vfx.sparkBurst(_v3, _v, 9, 0xfff2b0);
+    }
+    this.render.postfx.flash(0.055, 0xffe9a8);
+    this.render.rig.addShake(0.06, 42);
+    this.audio?.play('gunFire', { volume: 1 });
     return w;
   }
 
@@ -549,7 +594,23 @@ export class CombatSystem {
     _v3.set(0, -1.2, -3).applyQuaternion(player.quaternion).add(player.position);
     const s = this.spawn(w, _v3, player.quaternion, player, this.lockTarget, w.color);
     if (s) s.fromPlayer = true;
-    this.audio?.play(w.id === 'grenade' ? 'grenadeThrow' : 'missileLaunch', { volume: 0.9 });
+
+    /* --- launch ----------------------------------------------------------
+     * The rail release is its own event: a bloom of motor exhaust at the
+     * pylon, a wash of smoke dropping away under the aircraft, a flash tinted
+     * to the weapon, and a shove on the camera. Without it the round simply
+     * appears in front of you and the launch reads as nothing happening. */
+    _v.set(0, 0, -1).applyQuaternion(player.quaternion);
+    this.render.vfx.explode(_v3, 5, w.color);
+    this.render.vfx.sparkBurst(_v3, _v.clone().negate(), 26, w.color);
+    for (let i = 1; i <= 4; i++) {
+      _v2.copy(_v3).addScaledVector(_v, -i * 7);
+      this.render.vfx.smokePuff(_v2, 7, 5.5, 0xd2d7dc);
+    }
+    this.render.postfx.flash(0.20, w.color);
+    this.render.rig.addShake(0.42, 20);
+
+    this.audio?.play(w.id === 'grenade' ? 'grenadeThrow' : 'missileLaunch', { volume: 1 });
     this.events.push({ type: 'launch', weapon: w });
     return w;
   }
@@ -696,17 +757,33 @@ export class CombatSystem {
       /* --- draw ---------------------------------------------------------- */
       if (w.tracer) {
         // Streak length scales with how far the round moved this frame, which
-        // is what makes a tracer look like a tracer at any frame rate.
-        const len = clamp(s.vel.length() * dt * 1.6, 12, 70);
-        this.tracers.push(s.pos, s.dir, len, s.fromPlayer ? 0.7 : 0.55, s.color);
+        // is what makes a tracer look like a tracer at any frame rate. Both
+        // length and width are far larger than a real 20 mm round: at these
+        // closing speeds a physically-scaled tracer is sub-pixel, and gunnery
+        // you cannot see is gunnery you cannot aim.
+        const len = clamp(s.vel.length() * dt * 1.8, 34, 150);
+        this.tracers.push(s.pos, s.dir, len, s.fromPlayer ? 2.6 : 2.0, s.color);
       } else {
-        this.heavies.push(s.pos, s.dir, w.id === 'grenade' ? 0.8 : 1.25, s.color);
-        // Guided and rocket rounds leave smoke.
+        // Motor burn: the round grows briefly as it lights, then settles.
+        const age = w.life - s.life;
+        const boostFlare = 1 + Math.max(0, 0.55 - age) * 1.6;
+        this.heavies.push(s.pos, s.dir,
+          (w.id === 'grenade' ? 2.4 : 3.6) * boostFlare, s.color);
+        // Guided and rocket rounds leave a burning motor plume: a bright core
+        // right at the nozzle and cooling smoke behind it.
+        // Emission rate is capped rather than per-frame: a plume this dense
+        // costs a few hundred live particles per round, and four rounds in the
+        // air must not be able to drain the whole budget.
         s.smokeT = (s.smokeT || 0) - dt;
         if (s.smokeT <= 0) {
-          s.smokeT = 0.045;
-          this.render.vfx.smokePuff(s.pos, w.beam ? 1.0 : 1.8, w.beam ? 0.5 : 1.1,
-            w.beam ? 0x9fe8ff : 0xb0b6bd);
+          s.smokeT = 0.055;
+          _v3.copy(s.pos).addScaledVector(s.dir, -6);
+          this.render.vfx.smokePuff(_v3, w.beam ? 2 : 3, w.beam ? 2.4 : 5.0,
+            w.beam ? 0x9fe8ff : 0xc2c8cf);
+          if (age < 1.2) {
+            this.render.vfx.sparkBurst(_v3, s.dir.clone().negate(), 4,
+              w.beam ? 0x9fe8ff : 0xffb057);
+          }
         }
       }
     }
@@ -723,8 +800,32 @@ export class CombatSystem {
   _detonate(s, hit, player) {
     const w = s.weapon;
     const blast = w.blast || 0;
-    this.render.vfx.explode(s.pos, w.tracer ? 3 : clamp(blast * 0.08, 8, 26), s.color);
-    if (!w.tracer) this.audio?.play('explosion', { volume: clamp01(w.damage / 80) * 0.8 });
+    if (w.tracer) {
+      // A cannon strike is a spark shower, not a fireball.
+      this.render.vfx.sparkBurst(s.pos, s.dir, 14, 0xffd27a);
+      if (hit) this.render.vfx.explode(s.pos, 2.5, 0xffb063);
+    } else {
+      /* A warhead going off is three things layered: the white-hot flash of
+       * the charge, the orange fireball expanding behind it, and the smoke
+       * column that hangs there afterwards. Doing all three is what makes it
+       * read as a detonation instead of a puff. */
+      const scale = clamp(blast * 0.14, 14, 44);
+      this.render.vfx.explode(s.pos, scale, 0xfff0c0);
+      this.render.vfx.explode(s.pos, scale * 0.7, s.color);
+      this.render.vfx.sparkBurst(s.pos, null, 48, 0xffc06a);
+      for (let i = 0; i < 7; i++) {
+        _v2.set((this.rng.next() - 0.5), (this.rng.next() - 0.2), (this.rng.next() - 0.5))
+          .multiplyScalar(scale * 1.6).add(s.pos);
+        this.render.vfx.smokePuff(_v2, 9, scale * 0.75, 0x4a4a4c);
+      }
+      // Felt from the cockpit if it went off anywhere near you.
+      const near = player ? clamp01(1 - s.pos.distanceTo(player.position) / 1400) : 0;
+      if (near > 0.02) {
+        this.render.postfx.flash(0.40 * near, 0xffb570);
+        this.render.rig.addShake(1.1 * near, 18);
+      }
+      this.audio?.play('explosion', { volume: clamp01(0.55 + w.damage / 110) });
+    }
 
     const apply = (victim, amount) => {
       if (!victim || amount <= 0) return;

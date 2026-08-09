@@ -1378,12 +1378,19 @@ export class PostFX {
  * `rigid` modes are bolted to the aircraft; `hideSelf` hides the airframe
  * entirely, which is what makes the first-person view first-person.
  */
+/** Pilot zoom range. 100% is the designed framing; 25% is right on the tail. */
+const CAM_ZOOM_MIN = 0.25;
+const CAM_ZOOM_MAX = 1.0;
+const CAM_ZOOM_STEP = 0.15;
+
 // Two views only, so a single C press is a straight toggle between them
 // rather than a walk through a list.
 const CAM_MODES = [
   { id: 'chase', name: 'Chase', dist: 12.8, height: 3.3, look: 35, fov: 64 },
   { id: 'fpv', name: 'First Person', dist: -3.6, height: 1.15, look: 240, fov: 82, rigid: true, hideSelf: true },
 ];
+
+export { CAM_ZOOM_MIN, CAM_ZOOM_MAX, CAM_ZOOM_STEP };
 
 export class CameraRig {
   constructor(camera) {
@@ -1400,6 +1407,11 @@ export class CameraRig {
     this.fov = 66;
     this.baseFov = 66;
     this.zoom = 1;              // live dolly multiplier on the chase distance
+    /* Player-set zoom, 0.25..1. This is a separate axis from the automatic
+     * speed/reheat dolly: the automatic one is the game reacting to how fast
+     * you are going, this one is the pilot deciding how close they want to sit
+     * regardless. Multiplying them keeps both intact. */
+    this.userZoom = 1;
     this.sensitivity = 1;
     this.reducedMotion = false;
     this.cinematic = null;
@@ -1435,6 +1447,19 @@ export class CameraRig {
   /** Snap instantly — used on race start / respawn so there is no fly-in. */
   reset() { this.initialised = false; this.onReset?.(); }
 
+  /**
+   * Pilot zoom, expressed the way the HUD shows it: 100% is the default
+   * framing and 25% is as close as the camera will sit. Clamped here rather
+   * than at the call site so every path — button, key, touch — agrees.
+   */
+  setUserZoom(v) {
+    this.userZoom = clamp(v, CAM_ZOOM_MIN, CAM_ZOOM_MAX);
+    return this.userZoom;
+  }
+  stepUserZoom(delta) { return this.setUserZoom(this.userZoom + delta); }
+  /** 25..100, for display. */
+  get zoomPercent() { return Math.round(this.userZoom * 100); }
+
   update(dt, target, params = {}) {
     const m = this.mode;
     const speed01 = clamp01(params.speed01 ?? 0);
@@ -1455,7 +1480,7 @@ export class CameraRig {
     // A rigid (first-person) eye point must not drift forward with speed —
     // it is a fixed seat in the airframe, not a chase distance.
     const distance = m.rigid ? m.dist
-      : m.dist * this.zoom * (params.distanceScale ?? 1);
+      : m.dist * this.zoom * this.userZoom * (params.distanceScale ?? 1);
     const height = m.rigid ? m.height : m.height * (1 + speed01 * 0.10) * lerp(1, this.zoom, 0.7);
     this._offset.set(0, height, distance);
     // Trail slightly outside the turn so the airframe reads against the sky.

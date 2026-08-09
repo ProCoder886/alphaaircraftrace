@@ -13,7 +13,7 @@ import {
   AIRCRAFT, AIRCRAFT_BY_ID, BIOMES, BIOMES_BY_ID, MODES, MODE_ORDER,
   DIFFICULTIES, DIFFICULTY_ORDER, POWERS, WEATHER, CAMPAIGN, ACHIEVEMENTS,
   QUALITY_ORDER, QUALITY_PRESETS, BINDING_LABELS, DEFAULT_BINDINGS, TIPS,
-  CONTROL_LEGEND, MACH, WEAPONS, GAME_NAME, VERSION, clamp, clamp01, lerp, TAU,
+  CONTROL_GROUPS, MACH, WEAPONS, GAME_NAME, VERSION, clamp, clamp01, lerp, TAU,
 } from './config.js';
 
 /* ---- helpers ------------------------------------------------------------ */
@@ -63,6 +63,10 @@ const ICONS = {
   missile: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M20 4c-6 .6-10 3.4-13 7l3 3c3.6-3 6.4-7 10-10z"/><path d="M8 16l-3-3-2 6z"/><path d="M11 6l3 3"/></svg>',
   weaponSel: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3.5" y="6" width="17" height="5" rx="1.4"/><rect x="3.5" y="13" width="17" height="5" rx="1.4"/><path d="M7 8.5h3M7 15.5h3"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"/><circle cx="12" cy="12" r="2.6"/></svg>',
+  laser: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 12h7"/><circle cx="13" cy="12" r="2.2"/><path d="M16 12h5"/><path d="M13 5v3M13 16v3"/></svg>',
+  grenade: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="14.5" r="5.5"/><path d="M10 8.4V6.2h4v2.2"/><path d="M14 6.6l3.4-2.2 1.4 2.2"/></svg>',
+  rpg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 12.5h9"/><path d="M12 9.4c3 0 5 1.6 6.4 3.1C17 14 15 15.6 12 15.6z"/><path d="M6 12.5v3.2"/><path d="M19 12.5h2"/></svg>',
+  launch: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3c2.6 2.6 3.8 6 3.8 9.4L12 16l-3.8-3.6C8.2 9 9.4 5.6 12 3z"/><path d="M9 18l3 3 3-3"/></svg>',
   camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8.5h3.4L8 6.4h5.4L15 8.5H18a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="11.5" cy="13" r="3"/></svg>',
   expand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
   pause: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="7" y="5" width="3.4" height="14" rx="1"/><rect x="13.6" y="5" width="3.4" height="14" rx="1"/></svg>',
@@ -225,9 +229,17 @@ export class UI {
       notif: $('#notif-stack'),
       banner: $('#event-banner'),
       camChip: $('#cam-chip'),
+      zoomIn: $('#zoom-in'),
+      zoomOut: $('#zoom-out'),
+      zoomValue: $('#zoom-value'),
       camName: $('#cam-name'),
       countdown: $('#countdown'),
       warn: $('#warn-strip'),
+      hazard: $('#hazard-strip'),
+      hazardText: $('#hazard-text'),
+      overheat: $('#overheat-strip'),
+      overheatText: $('#overheat-text'),
+      heatFill: $('#heat-fill'),
       damageVig: $('#damage-vignette'),
       compassTape: $('#compass-tape'),
       cpMarker: $('#cp-marker'),
@@ -240,6 +252,7 @@ export class UI {
       lockText: $('#lock-text'),
       wpnName: $('#wpn-name'),
       wpnReload: $('#wpn-reload-fill'),
+      wpnRack: $('#wpn-rack'),
       cbtWave: $('#cbt-wave'),
       cbtKills: $('#cbt-kills'),
       cbtHostiles: $('#cbt-hostiles'),
@@ -285,9 +298,13 @@ export class UI {
   }
 
   /**
-   * Draw the always-on control strip top-left from the LIVE bindings, so a
-   * rebound key shows its new cap without a reload. Combat entries are marked
-   * so they can be hidden in modes that have no weapons.
+   * Draw the always-on control legend top-left from the LIVE bindings, so a
+   * rebound key shows its new cap without a reload.
+   *
+   * Three separate colour-coded boxes rather than one strip: nineteen controls
+   * in a single row is a wall, and the thing a pilot actually needs mid-flight
+   * is "where are the weapons" — which a red box answers before any of the
+   * text is read. The combat box is omitted entirely in modes with no weapons.
    */
   buildControlLegend(showCombat = true) {
     const host = this.dom.controls;
@@ -295,20 +312,25 @@ export class UI {
     this._legendCombat = showCombat;
     const binds = this.save.data.settings.bindings || {};
     const frag = document.createDocumentFragment();
-    for (const entry of CONTROL_LEGEND) {
-      if (entry.sep) { frag.appendChild(el('div', 'ctl-sep')); continue; }
-      if (entry.combat && !showCombat) continue;
-      const codes = binds[entry.action] || DEFAULT_BINDINGS[entry.action] || [];
-      // Only the primary binding gets a cap — two caps per control turns the
-      // strip into a wall of text.
-      const caps = entry.keyOverride ? [entry.keyOverride] : [prettyKey(codes[0])];
-      const box = el('div', 'ctl');
-      box.title = BINDING_LABELS[entry.action] || entry.short;
-      box.innerHTML = ICONS[entry.icon] || '';
-      const keys = el('div', 'ctl-keys');
-      for (const k of caps) keys.appendChild(el('span', 'ctl-key', k));
-      box.appendChild(keys);
-      box.appendChild(el('span', 'ctl-name', entry.short));
+
+    for (const group of CONTROL_GROUPS) {
+      if (group.combat && !showCombat) continue;
+      const box = el('div', `ctl-group tone-${group.tone}`);
+      box.appendChild(el('div', 'ctl-group-name', group.name));
+      const row = el('div', 'ctl-row');
+      for (const entry of group.items) {
+        const codes = binds[entry.action] || DEFAULT_BINDINGS[entry.action] || [];
+        // Only the primary binding gets a cap — two caps per control turns the
+        // legend back into the wall of text it is meant to replace.
+        const cap = entry.keyOverride || prettyKey(codes[0]);
+        const cell = el('div', 'ctl');
+        cell.title = BINDING_LABELS[entry.action] || entry.short;
+        cell.innerHTML = ICONS[entry.icon] || '';
+        cell.appendChild(el('span', 'ctl-key', cap));
+        cell.appendChild(el('span', 'ctl-name', entry.short));
+        row.appendChild(cell);
+      }
+      box.appendChild(row);
       frag.appendChild(box);
     }
     host.replaceChildren(frag);
@@ -1222,6 +1244,23 @@ export class UI {
     this.dom.lockText.textContent = s.locked ? 'TARGET LOCKED'
       : s.lock > 0.02 ? `ACQUIRING ${Math.round(s.lock * 100)}%` : 'NO TARGET';
     this.dom.wpnName.textContent = (s.weapon?.name || '').toUpperCase();
+    // Weapon rack: built once, then only the armed class changes.
+    if (this.dom.wpnRack && s.rack) {
+      if (!this._rackBuilt) {
+        this._rackBuilt = true;
+        this._rackSlots = s.rack.map((w) => {
+          const n = el('div', 'wpn-slot');
+          n.title = w.name;
+          n.appendChild(el('span', 'wk', w.key));
+          n.appendChild(el('span', 'wn', w.short));
+          this.dom.wpnRack.appendChild(n);
+          return n;
+        });
+      }
+      for (let i = 0; i < this._rackSlots.length; i++) {
+        this._rackSlots[i].classList.toggle('armed', s.rack[i].armed);
+      }
+    }
     this.dom.wpnReload.style.width = `${Math.round(clamp01(s.reload) * 100)}%`;
     this.dom.cbtWave.textContent = String(s.wave);
     this.dom.cbtKills.textContent = String(s.kills);
@@ -1330,6 +1369,32 @@ export class UI {
     const dv = this.dom.damageVig;
     dv.style.opacity = String(clamp01((1 - s.hull - 0.35) / 0.65) * 0.9);
     dv.classList.toggle('crit', s.hull < 0.22);
+
+    // engine thermal state
+    const oh = this.dom.overheat;
+    if (oh) {
+      const on = !!s.overheatText;
+      if (s.overheatText !== c.overheat) {
+        c.overheat = s.overheatText;
+        this.dom.overheatText.textContent = s.overheatText || '';
+      }
+      oh.classList.toggle('show', on);
+      oh.classList.toggle('cooling', on && !s.redline);
+      oh.classList.toggle('lvl1', on && s.overheatLevel === 1);
+      oh.classList.toggle('lvl2', on && s.overheatLevel === 2);
+      if (on) this.dom.heatFill.style.width = `${Math.round(clamp01(s.heat) * 100)}%`;
+    }
+
+    // collision warning — its own strip, because it can be up at the same time
+    // as a terrain or hull warning and neither should hide the other.
+    const hz = this.dom.hazard;
+    if (hz) {
+      const on = !!s.hazardText;
+      if (s.hazardText !== c.hazard) { c.hazard = s.hazardText; this.dom.hazardText.textContent = s.hazardText || ''; }
+      hz.classList.toggle('show', on);
+      hz.classList.toggle('lvl1', on && s.hazardLevel === 1);
+      hz.classList.toggle('lvl2', on && s.hazardLevel === 2);
+    }
 
     // terrain warning
     const warn = this.dom.warn;
@@ -1530,6 +1595,14 @@ export class UI {
   }
 
   /** Shows which camera is live, bottom-right, and pulses when it changes. */
+  /** Reflect the camera zoom level, and grey the buttons out at the limits. */
+  setZoom(percent, min = 25, max = 100) {
+    if (!this.dom.zoomValue) return;
+    this.dom.zoomValue.textContent = `${percent}%`;
+    this.dom.zoomIn.disabled = percent >= max;
+    this.dom.zoomOut.disabled = percent <= min;
+  }
+
   setCamera(name) {
     const c = this.dom.camChip, n = this.dom.camName;
     if (!c || !n || n.textContent === name) return;
@@ -1605,6 +1678,23 @@ export class UI {
     });
     click('#ob-skip', () => { this.audio.ui('back'); this.callbacks.onOnboardingDone?.(); });
     click('#btn-launch', () => { this.audio.ui('confirm'); this.callbacks.onLaunch?.(); });
+    // Camera zoom. Repeats while held so dragging the framing in is one press
+    // rather than eight, and both pointer and touch drive the same path.
+    const zoomHold = (el, dir) => {
+      if (!el) return;
+      let timer = null, delay = null;
+      const step = () => { this.callbacks.onZoom?.(dir); this.audio.ui('slider', { volume: 0.5 }); };
+      const start = (e) => {
+        e.preventDefault();
+        step();
+        delay = setTimeout(() => { timer = setInterval(step, 90); }, 320);
+      };
+      const stop = () => { clearTimeout(delay); clearInterval(timer); timer = delay = null; };
+      el.addEventListener('pointerdown', start);
+      for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) el.addEventListener(ev, stop);
+    };
+    zoomHold(this.dom.zoomIn, 1);
+    zoomHold(this.dom.zoomOut, -1);
     click('#btn-fullscreen', () => this.toggleFullscreen());
     click('#orient-fullscreen', () => this.toggleFullscreen());
     click('#btn-mute', (e) => {

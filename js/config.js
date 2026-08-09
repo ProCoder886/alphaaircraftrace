@@ -195,6 +195,15 @@ export const MACH = {
   msPerMach: 35,               // simulated m/s per Mach
   max: 20,                     // absolute ceiling for player and enemies
   blurMach: 15,                // Mach at which motion blur and trails saturate
+  /* ---- thermal limit ----------------------------------------------------
+   * The airframe is cleared to Mach 18. Above it the intakes and the leading
+   * edges start soaking heat faster than the fuel can carry it away, and the
+   * engine has exactly one minute of that before it lets go. Dropping back
+   * below the limit cools it again, but slowly — a dozen short excursions add
+   * up the same way one long one does. */
+  redline: 18,                 // Mach — sustained above this and the engine cooks
+  overheatTime: 60,            // s above the redline before the engine explodes
+  coolRate: 0.45,              // heat bled per second below the redline, relative
   get maxMs() { return this.msPerMach * this.max; },
   /** Simulated speed → Mach. */
   of(ms) { return ms / this.msPerMach; },
@@ -209,9 +218,33 @@ export const PHYSICS = {
   cruiseSpeed: 320,            // Mach 9.1
   maxSpeed: 500,               // Mach 14.3 — dry thrust ceiling
   boostSpeed: 640,             // Mach 18.3 on reheat, Mach 20 with Turbo stacked
-  baseThrust: 145,             // m/s^2 at full throttle
-  brakeDecel: 190,
-  dragCoefficient: 0.00042,
+  /* ---- acceleration -----------------------------------------------------
+   * Thrust and drag are deliberately scaled DOWN TOGETHER by 5x. Cutting
+   * thrust alone would also cut the terminal speed — the top of the envelope
+   * is where thrust balances v² drag — so the aircraft would simply never
+   * reach Mach 14 again. Scaling both leaves every equilibrium speed exactly
+   * where it was and makes the approach to it five times slower, which is the
+   * part that was wrong: the airframe used to be at its dry ceiling within a
+   * few seconds of the countdown.
+   * -------------------------------------------------------------------- */
+  baseThrust: 29,              // m/s^2 at full throttle
+  dragCoefficient: 0.000084,
+  /* Gravity for the ENERGY trade — climbing costs speed, diving buys it.
+   * This is deliberately NOT `flightG`. That number is a scaled gravity tuned
+   * to produce flyable turn rates inside a corridor, and at 46 m/s² it is now
+   * larger than the entire thrust budget: sharing it here meant the faintest
+   * climb cancelled every newton the engine made and the aircraft could not
+   * accelerate at all. The energy exchange wants real gravity, and real
+   * gravity is what it gets. */
+  pathGravity: 9.81,
+  /* Sustained-throttle build. Holding military power lets the intakes and the
+   * core settle into their efficient range, and the last third of the speed
+   * range only opens up once they have. This is what makes top speed something
+   * you fly toward over a distance instead of something you switch on. */
+  thrustBuildTime: 26,         // s of held throttle to full authority
+  thrustBuildDecay: 5.5,       // s to bleed it back once the throttle comes off
+  thrustBuildLow: 0.58,        // thrust multiplier from cold
+  thrustBuildHigh: 1.10,       // thrust multiplier fully built
   /* ---- flight dynamics --------------------------------------------------
    * The airframe flies on a real fighter's turn equation rather than on a flat
    * "pitch rate" number: the stick commands a LOAD FACTOR, and the resulting
@@ -239,13 +272,12 @@ export const PHYSICS = {
   leanAssistTurn: 0.85,        // how much of a coordinated turn the assist adds
   rollRate: 3.35,              // rad/s — ~190°/s, a real fighter roll rate
   adverseYaw: 0.020,           // yaw induced by rolling — a cue, not a turn
-  inducedDrag: 260,            // energy bled by pulling G
-  spoolUp: 1.30,               // s — dry thrust lag
-  spoolDown: 0.85,
-  burnerLight: 0.34,           // s — afterburner light-off delay
+  inducedDrag: 52,             // energy bled by pulling G
+  spoolUp: 4.20,               // s — dry thrust lag
+  spoolDown: 2.20,
+  burnerLight: 0.55,           // s — afterburner light-off delay
   stallSink: 115,              // m/s of mush with no lift left
-  autoLevel: 0.9,              // assist strength when the stick is centred
-  boostAccel: 260,
+  boostAccel: 52,
   boostDrain: 26,              // boost units per second (meter is 0..100)
   boostRegen: 11,
   boostRegenDelay: 0.85,
@@ -363,7 +395,7 @@ export const AIRCRAFT = [
     id: 'falcon', name: 'FA-19 FALCON', class: 'Carrier Strike Fighter',
     desc: 'A navalised strike fighter in display-team colours. Built to be caught by a wire at sea, which makes it astonishingly stable in dirty air and at low speed.',
     stats: { speed: 0.80, accel: 0.82, handling: 0.84, boost: 0.78, durability: 0.88 },
-    ability: 'Carrier Trim — auto-levelling assist is 30% stronger.',
+    ability: 'Carrier Trim — the assisted turn banks 30% harder and settles faster.',
     abilityKey: 'trim',
     unlock: { type: 'default' },
     colors: { primary: 0x13182c, secondary: 0xf2c032, accent: 0xffd24a, emissive: 0x9fd8ff, trail: 0xffd98a },
@@ -930,7 +962,8 @@ export const MODES = {
     ],
     gameOver: [
       'Hull destroyed by enemy fire',
-      'Ground impact or collision with terrain',
+      'Ground impact, or collision with a building or structure',
+      'Engine overheat — 60 seconds above Mach 18',
       'Shot down while stalled below Mach 2',
       'Leaving the combat airspace for more than 20 seconds',
     ],
@@ -950,7 +983,8 @@ export const MODES = {
     ],
     gameOver: [
       'Hull destroyed by enemy fire',
-      'Ground impact or collision with terrain',
+      'Ground impact, or collision with a building or structure',
+      'Engine overheat — 60 seconds above Mach 18',
       'Dropping below Mach 4 for more than 12 seconds',
       'Falling more than 6 km behind the lead enemy',
     ],
@@ -1108,7 +1142,7 @@ export const DEFAULT_BINDINGS = {
   rollLeft:   ['KeyQ'],
   rollRight:  ['KeyE'],
   throttleUp: ['ShiftLeft', 'ShiftRight'],
-  brake:      ['KeyX', 'ControlLeft'],
+  brake:      ['ControlLeft', 'KeyH'],
   boost:      ['Space'],
   power1:     ['Numpad1', 'Digit1'],
   power2:     ['Numpad2', 'Digit2'],
@@ -1117,8 +1151,16 @@ export const DEFAULT_BINDINGS = {
   power5:     ['Numpad5', 'Digit5'],
   fireGun:      ['KeyG'],
   fireWeapon:   ['KeyR'],
-  cycleWeapon:  ['KeyB'],
   cycleTarget:  ['KeyT'],
+  // One key per heavy weapon. Pressing it selects that weapon AND fires it, so
+  // picking a missile and launching it is a single action rather than three.
+  // R stays as "fire whatever is selected" for anyone who prefers that.
+  weaponMissile: ['KeyZ'],
+  weaponLaser:   ['KeyX'],
+  weaponGrenade: ['KeyV'],
+  weaponRpg:     ['KeyB'],
+  // Touch-only: the mobile WPN button steps through the four.
+  cycleWeapon:  [],
   pause:      ['Escape'],
   fullscreen: ['KeyF'],
   // One key, one press: C toggles between Chase and First Person.
@@ -1131,8 +1173,12 @@ export const BINDING_LABELS = {
   leanLeft: 'Lean / Turn Left', leanRight: 'Lean / Turn Right',
   rollLeft: 'Bank Left', rollRight: 'Bank Right',
   throttleUp: 'Throttle Up', brake: 'Air Brake', boost: 'Nitrous Boost',
-  fireGun: 'Fire Guns', fireWeapon: 'Launch Weapon',
-  cycleWeapon: 'Select Weapon', cycleTarget: 'Change Target',
+  fireGun: 'Fire Guns', fireWeapon: 'Launch Selected Weapon',
+  cycleWeapon: 'Next Weapon', cycleTarget: 'Change Target',
+  weaponMissile: 'Missile — select and fire',
+  weaponLaser: 'Laser-Guided Missile — select and fire',
+  weaponGrenade: 'Air Grenade — select and fire',
+  weaponRpg: 'RPG — select and fire',
   power1: 'Power 1 — Power Flight', power2: 'Power 2 — Turbo Speed',
   power3: 'Power 3 — Combat Maneuvers', power4: 'Power 4 — Aerial Shield',
   power5: 'Power 5 — Phase Shift',
@@ -1141,31 +1187,48 @@ export const BINDING_LABELS = {
 
 /* ---------------------------------------------------------------------------
  * HUD CONTROL LEGEND
- * The strip drawn top-left in flight. Order is flying first, then weapons,
- * then powers, then system — the order a player actually reaches for them.
+ * ------------------------------------------------------------------------
+ * Three groups rather than one long strip: FLIGHT (green), COMBAT (red) and
+ * SYSTEM (blue). Colour-coding by purpose is what makes a nineteen-key legend
+ * scannable — the eye goes to the right box before it reads a single cap.
  * `icon` names resolve against the ICONS table in ui.js.
  * ------------------------------------------------------------------------ */
-export const CONTROL_LEGEND = [
-  { action: 'pitchUp', short: 'Climb', icon: 'climb' },
-  { action: 'pitchDown', short: 'Dive', icon: 'dive' },
-  { action: 'leanLeft', short: 'Left', icon: 'leanL' },
-  { action: 'leanRight', short: 'Right', icon: 'leanR' },
-  { action: 'rollLeft', short: 'Bank L', icon: 'rollL' },
-  { action: 'rollRight', short: 'Bank R', icon: 'rollR' },
-  { action: 'throttleUp', short: 'Throttle', icon: 'throttle' },
-  { action: 'brake', short: 'Brake', icon: 'brake' },
-  { action: 'boost', short: 'Nitrous', icon: 'turbo' },
-  { sep: true },
-  { action: 'fireGun', short: 'Guns', icon: 'gun', combat: true },
-  { action: 'fireWeapon', short: 'Launch', icon: 'missile', combat: true },
-  { action: 'cycleWeapon', short: 'Weapon', icon: 'weaponSel', combat: true },
-  { action: 'cycleTarget', short: 'Target', icon: 'lock', combat: true },
-  { sep: true },
-  { action: 'power1', short: 'Powers', icon: 'lift', keyOverride: '1-5' },
-  { sep: true },
-  { action: 'camera', short: 'Camera', icon: 'camera' },
-  { action: 'fullscreen', short: 'Full', icon: 'expand' },
-  { action: 'pause', short: 'Pause', icon: 'pause' },
+export const CONTROL_GROUPS = [
+  {
+    id: 'flight', name: 'FLIGHT', tone: 'green',
+    items: [
+      { action: 'pitchUp', short: 'Climb', icon: 'climb' },
+      { action: 'pitchDown', short: 'Dive', icon: 'dive' },
+      { action: 'leanLeft', short: 'Left', icon: 'leanL' },
+      { action: 'leanRight', short: 'Right', icon: 'leanR' },
+      { action: 'rollLeft', short: 'Roll L', icon: 'rollL' },
+      { action: 'rollRight', short: 'Roll R', icon: 'rollR' },
+      { action: 'throttleUp', short: 'Thrust', icon: 'throttle' },
+      { action: 'brake', short: 'Brake', icon: 'brake' },
+      { action: 'boost', short: 'Nitrous', icon: 'turbo' },
+    ],
+  },
+  {
+    id: 'combat', name: 'COMBAT', tone: 'red', combat: true,
+    items: [
+      { action: 'fireGun', short: 'Guns', icon: 'gun' },
+      { action: 'weaponMissile', short: 'Missile', icon: 'missile' },
+      { action: 'weaponLaser', short: 'Laser', icon: 'laser' },
+      { action: 'weaponGrenade', short: 'Grenade', icon: 'grenade' },
+      { action: 'weaponRpg', short: 'RPG', icon: 'rpg' },
+      { action: 'fireWeapon', short: 'Launch', icon: 'launch' },
+      { action: 'cycleTarget', short: 'Target', icon: 'lock' },
+    ],
+  },
+  {
+    id: 'system', name: 'SYSTEM', tone: 'blue',
+    items: [
+      { action: 'power1', short: 'Powers', icon: 'lift', keyOverride: '1-5' },
+      { action: 'camera', short: 'Camera', icon: 'camera' },
+      { action: 'fullscreen', short: 'Full', icon: 'expand' },
+      { action: 'pause', short: 'Pause', icon: 'pause' },
+    ],
+  },
 ];
 
 /* ===========================================================================
@@ -1243,6 +1306,7 @@ export const DEFAULT_SAVE = {
     showDebug: false,
     hudScale: 1.0,
     touchControls: true,
+    cameraZoom: 1,
     bindings: null,
   },
   stats: {

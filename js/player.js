@@ -134,6 +134,8 @@ export class InputManager {
     const s = {
       pitch: 0, roll: 0, lean: 0, throttle: 0, brake: 0, boost: false,
       gun: false, heavy: false, cycleWeapon: false, cycleTarget: false,
+      /** Weapon id to select-and-fire this frame, from its dedicated key. */
+      weapon: null,
       powers: [false, false, false, false, false],
     };
     if (!this.enabled) return s;
@@ -153,12 +155,20 @@ export class InputManager {
     if (this.justPressed('fireWeapon')) s.heavy = true;
     if (this.justPressed('cycleWeapon')) s.cycleWeapon = true;
     if (this.justPressed('cycleTarget')) s.cycleTarget = true;
+    // One key per weapon: select it and fire it in the same press.
+    if (this.justPressed('weaponMissile')) s.weapon = 'missile';
+    else if (this.justPressed('weaponLaser')) s.weapon = 'laser';
+    else if (this.justPressed('weaponGrenade')) s.weapon = 'grenade';
+    else if (this.justPressed('weaponRpg')) s.weapon = 'rpg';
     for (let i = 0; i < 5; i++) if (this.justPressed(`power${i + 1}`)) s.powers[i] = true;
 
-    // Touch
+    // Touch. The stick's horizontal axis is the assisted LEAN turn — the same
+    // thing A and D do — not the raw bank axis: on a phone the stick is the
+    // one control you are always holding, and it should be the one that
+    // actually turns the aircraft. Bank is on its own pair of buttons.
     if (this.touch.active) {
       s.pitch += -this.touch.y;
-      s.roll += this.touch.x;
+      s.lean += this.touch.x;
     }
     const tb = this.touch.buttons;
     if (tb.has('boost')) s.boost = true;
@@ -166,6 +176,8 @@ export class InputManager {
     if (tb.has('throttle')) s.throttle += 1;
     if (tb.has('leanLeft')) s.lean -= 1;
     if (tb.has('leanRight')) s.lean += 1;
+    if (tb.has('rollLeft')) s.roll -= 1;
+    if (tb.has('rollRight')) s.roll += 1;
     if (tb.has('gun')) s.gun = true;
     if (this.touch.pressedButtons.has('heavy')) s.heavy = true;
     if (this.touch.pressedButtons.has('cycleWeapon')) s.cycleWeapon = true;
@@ -533,7 +545,9 @@ export class Player {
     /** Marks rounds fired from this airframe as friendly to the combat system. */
     this.isPlayerSide = true;
 
-    this.speed = PHYSICS.cruiseSpeed * 0.75;
+    this.speed = PHYSICS.cruiseSpeed * 0.55;
+    this.thrustBuild = 0;
+    this.overheat = 0;           // seconds of accumulated time above the redline
     this.throttle = 0.85;
     this.throttleTarget = 0.85;
     this.boostMeter = 100;
@@ -594,12 +608,13 @@ export class Player {
     const ab = spec.abilityKey;
     this.ability = ab;
     this.boostCapacity = ab === 'reserves' ? 130 : 100;
-    this.autoLevelScale = ab === 'trim' ? 1.3 : 1;
     this.damageScale = ab === 'ablative' ? 0.6 : 1;
     this.nearMissBonus = ab === 'predator' ? 1.4 : 1;
     this.scanRangeScale = ab === 'deepscan' ? 1.6 : 1;
     this.turboBonus = ab === 'overcharge' ? 1.12 : 1;
     this.vectorTurn = ab === 'vector' ? 1.25 : 1;
+    // Carrier trim: a stronger, faster-settling assisted turn.
+    this.leanAssistScale = ab === 'trim' ? 1.3 : 1;
     this.ramAir = ab === 'ramair';
     if (this.powers) {
       this.powers.cooldownScale = ab === 'tuning' ? 0.85 : 1;
@@ -631,7 +646,9 @@ export class Player {
       this.visual = new AircraftVisual(this.render, spec, 2);
     }
     // Match the rival grid's launch speed so the start is fair.
-    this.speed = PHYSICS.cruiseSpeed * 0.85;
+    this.speed = PHYSICS.cruiseSpeed * 0.55;
+    this.thrustBuild = 0;
+    this.overheat = 0;
     this.throttle = this.throttleTarget = 0.85;
     this.burner = 0;
     this.loadFactor = 1;
@@ -738,19 +755,27 @@ export class Player {
     const rollAuth = authority * lerp(0.5, 1, clamp01(V / 175)) * lerp(1, 0.66, q01 ** 1.6)
       * lerp(1, 0.72, clamp01(Math.abs(this.loadFactor) / gLimit));
 
-    // The assist flies bank as a *target angle*, not a rate, so it settles
-    // where you asked instead of rolling forever, and unwinds to level on its
-    // own when you let go. Manual bank input overrides it entirely.
-    //
-    // Sign: bankAngle = atan2(right.y, up.y), so banked-right is NEGATIVE,
-    // while a positive roll rate rolls the right wing down and therefore
-    // *decreases* bankAngle. The error term is (current − target), not the
-    // other way round — inverted, the assist accelerates away from the angle
-    // it is meant to hold and ends up flying the aircraft onto its back.
+    /* --- lean assist ------------------------------------------------------
+     * While A or D is held the assist flies bank as a target ANGLE rather than
+     * a rate, so it settles where you asked instead of rolling forever.
+     *
+     * It does nothing at all once you let go. That matters: an assist that
+     * keeps running with the stick centred is an auto-leveller by another
+     * name, quietly rolling the wings back to horizontal behind the pilot's
+     * back. The airframe holds whatever bank it is left in — come out of a
+     * barrel roll inverted and you stay inverted until Q or E rolls you out.
+     *
+     * Sign: bankAngle = atan2(right.y, up.y), so banked-right is NEGATIVE,
+     * while a positive roll rate rolls the right wing down and therefore
+     * *decreases* bankAngle. The error term is (current − target), not the
+     * other way round — inverted, the assist accelerates away from the angle
+     * it is meant to hold and ends up flying the aircraft onto its back.
+     * -------------------------------------------------------------------- */
     const manual = clamp01(Math.abs(sc.roll) * 2.2);
-    const bankTarget = -PHYSICS.leanAssistBank * sc.lean;
-    const assistRoll = clamp(((this.bankAngle || 0) - bankTarget) * 2.6,
-      -PHYSICS.rollRate, PHYSICS.rollRate) * rollAuth * (1 - manual);
+    const leanHeld = clamp01((Math.abs(sc.lean) - 0.04) * 8);
+    const bankTarget = -PHYSICS.leanAssistBank * sc.lean * this.leanAssistScale;
+    const assistRoll = clamp(((this.bankAngle || 0) - bankTarget) * 2.6 * this.leanAssistScale,
+      -PHYSICS.rollRate, PHYSICS.rollRate) * rollAuth * (1 - manual) * leanHeld;
 
     this.rollRateActual = damp(this.rollRateActual,
       PHYSICS.rollRate * rollAuth * sc.roll + assistRoll,
@@ -778,35 +803,14 @@ export class Player {
     _q.setFromAxisAngle(this.upVec, yawRate * dt);
     this.quaternion.premultiply(_q);
 
-    // Auto-level assist: with the stick centred the airframe rolls upright.
-    // It has to stand down for LEAN as well as for bank — the lean assist is
-    // deliberately asking for a bank angle, and a leveller running at full
-    // strength against it cancels the two out exactly, which is why A/D used
-    // to turn the nose without ever visibly banking the airframe.
-    const levelStrength = PHYSICS.autoLevel * this.autoLevelScale
-      * (1 - Math.min(1, Math.abs(c.roll) * 2.2))
-      * (1 - Math.min(1, Math.abs(c.pitch) * 1.1))
-      * (1 - Math.min(1, Math.abs(c.lean) * 2.2));
-    if (levelStrength > 0.01) {
-      this.upVec.set(0, 1, 0).applyQuaternion(this.quaternion);
-      this.forward.set(0, 0, -1).applyQuaternion(this.quaternion);
-      // Target up = world up projected perpendicular to the current heading.
-      _v.copy(_up).addScaledVector(this.forward, -_up.dot(this.forward)).normalize();
-      if (_v.lengthSq() > 0.1) {
-        const dot = clamp(this.upVec.dot(_v), -1, 1);
-        const ang = Math.acos(dot);
-        if (ang > 0.002) {
-          _v2.crossVectors(this.upVec, _v);
-          // Exactly inverted: the cross product degenerates to zero and the
-          // assist would silently do nothing, leaving the aircraft stuck on
-          // its back. Roll about the nose instead so it can right itself.
-          if (_v2.lengthSq() < 1e-9) _v2.copy(this.forward);
-          _v2.normalize();
-          _q.setFromAxisAngle(_v2, Math.min(ang, levelStrength * dt * 1.6));
-          this.quaternion.premultiply(_q);
-        }
-      }
-    }
+    /* --- no auto-level ----------------------------------------------------
+     * The airframe holds whatever attitude it is left in. There is no assist
+     * quietly rolling the wings back to horizontal behind the pilot's back:
+     * bank into a turn and it stays banked, come out of a barrel roll inverted
+     * and it stays inverted until Q or E is used to roll out. The lean assist
+     * (A/D) still flies a bank angle for you while you hold it, and unwinds
+     * that same bank when you release — but that is a control you are asking
+     * for, not a correction happening to you. */
     this.quaternion.normalize();
 
     this.forward.set(0, 0, -1).applyQuaternion(this.quaternion);
@@ -842,12 +846,23 @@ export class Player {
     if (turbo) cap = PHYSICS.boostSpeed * this.turboBonus * (this.topSpeed / PHYSICS.maxSpeed);
     cap *= lerp(1, 0.88, thin);
 
-    let thrust = this.accelPower * this.throttle;
-    thrust += PHYSICS.boostAccel * this.boostPower * this.burner;
+    /* --- sustained-throttle build ----------------------------------------
+     * Holding military power charges the build; easing off bleeds it away
+     * much faster than it charged. The effect is that speed is something the
+     * aircraft works up to over distance rather than something the throttle
+     * switches on, and that backing off in a turn genuinely costs you. */
+    const holding = this.throttle > 0.86 && !c.brake ? 1 : 0;
+    this.thrustBuild = clamp01(this.thrustBuild + (holding
+      ? dt / PHYSICS.thrustBuildTime
+      : -dt / PHYSICS.thrustBuildDecay));
+    const build = lerp(PHYSICS.thrustBuildLow, PHYSICS.thrustBuildHigh, this.thrustBuild);
+
+    let thrust = this.accelPower * this.throttle * build;
+    thrust += PHYSICS.boostAccel * this.boostPower * this.burner * build;
     if (turbo) thrust += PHYSICS.boostAccel * 1.35 * this.boostPower;
     // Gravity along the flight path: a dive is free speed, a climb costs it.
     // Power Flight all but cancels it, which is what makes it a save button.
-    thrust += -this.forward.y * PHYSICS.flightG * (powerFlight ? 0.15 : 1);
+    thrust += -this.forward.y * PHYSICS.pathGravity * (powerFlight ? 0.15 : 1);
     // Parasitic drag goes with V², induced drag with n²/V. Holding a hard turn
     // therefore costs energy exactly where a real one does — and the harder you
     // pull the more it costs, which is what makes the racing line matter.
@@ -1094,6 +1109,25 @@ export class Player {
       this.events.push({ type: 'shielded', position: point.clone() });
       return;
     }
+
+    /* --- flying into a building ------------------------------------------
+     * A tower block is not an obstacle to bounce off. Above about Mach 5 the
+     * airframe is gone, full stop, and the run ends there — anything softer
+     * makes the whole ground structure layer read as scenery you can shrug
+     * through, which is exactly the problem it was added to fix. Slower than
+     * that, it is survivable but very expensive. */
+    if (cbox.kind === 'structure' && this.mach > 5) {
+      this.render.vfx.explode(point, 26, 0xffb063);
+      this.render.postfx.flash(0.9, 0xffd0a0);
+      this.render.rig.addShake(1.7, 18);
+      this.events.push({
+        type: 'collision', damage: this.maxHealth, soft: false,
+        fatal: true, structure: cbox.type, position: point.clone(),
+      });
+      this.applyDamage(this.maxHealth, cbox.type || 'structure');
+      return;
+    }
+
     this.applyDamage(damage, cbox.type);
     this.stunned = Math.max(this.stunned, cbox.soft ? 0.18 : (difficulty?.recoveryWindow ?? 1.5) * 0.28);
     this.render.vfx.explode(point, cbox.soft ? 5 : 11, 0xffa040);
@@ -1208,6 +1242,23 @@ export class Player {
     this.render.rig.addShake(1.35, 22);
     this.visual.setVisible(false);
     this.events.push({ type: 'destroyed', reason });
+  }
+
+  /**
+   * Thermal state, 0..1. Charges in real time above the redline and bleeds off
+   * slowly below it, so the pilot cannot dip under Mach 18 for a second and
+   * reset the clock. At 1 the engine is gone.
+   */
+  updateHeat(dt) {
+    const over = this.mach > MACH.redline;
+    this.overheat = clamp(this.overheat
+      + (over ? dt : -dt * MACH.coolRate), 0, MACH.overheatTime);
+    return this.overheat / MACH.overheatTime;
+  }
+  get heat01() { return this.overheat / MACH.overheatTime; }
+  /** Seconds left before the engine lets go, or Infinity below the redline. */
+  get heatSecondsLeft() {
+    return this.mach > MACH.redline ? Math.max(0, MACH.overheatTime - this.overheat) : Infinity;
   }
 
   get damage01() { return 1 - this.health / this.maxHealth; }

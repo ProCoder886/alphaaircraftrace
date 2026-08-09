@@ -206,6 +206,11 @@
 
   <!-- bottom right: powers + damage -->
   <div class="hud-br">
+    <div class="zoom-rack" id="zoom-rack" title="Camera zoom">
+      <button class="zoom-btn" id="zoom-out" type="button" aria-label="Zoom out">−</button>
+      <span class="zoom-value" id="zoom-value">100%</span>
+      <button class="zoom-btn" id="zoom-in" type="button" aria-label="Zoom in">+</button>
+    </div>
     <div class="cam-chip" id="cam-chip" title="Press C to change camera">
       <span class="cam-key">C</span><span class="cam-name" id="cam-name">Chase</span>
     </div>
@@ -233,9 +238,11 @@
       </div>
       <div class="weapon-strip">
         <span class="wpn-name" id="wpn-name">MISSILE</span>
-        <span class="wpn-ammo">∞</span>
+        <span class="wpn-ammo" title="Unlimited ammunition">∞ AMMO</span>
         <div class="wpn-reload"><i id="wpn-reload-fill"></i></div>
       </div>
+      <!-- Every weapon, its key, and which one is armed. -->
+      <div class="wpn-rack" id="wpn-rack"></div>
       <div class="combat-tally">
         <span><i>WAVE</i><b id="cbt-wave">1</b></span>
         <span><i>KILLS</i><b id="cbt-kills">0</b></span>
@@ -252,6 +259,19 @@
   <div class="notif-stack" id="notif-stack" aria-live="polite"></div>
   <div class="event-banner" id="event-banner"></div>
   <div class="countdown" id="countdown"></div>
+  <div class="overheat-strip" id="overheat-strip" aria-hidden="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
+      <path d="M10 3.2c2.6 2.6 1 4.6.2 6.3-1 2.1.3 3.9 1.8 3.9 1.9 0 3-1.7 2.6-3.6 2 1.5 3.4 3.6 3.4 6.1a6 6 0 0 1-12 0c0-4.6 3-6.6 4-12.7z"/>
+    </svg>
+    <span id="overheat-text"></span>
+    <i class="heat-bar"><b id="heat-fill"></b></i>
+  </div>
+  <div class="hazard-strip" id="hazard-strip" aria-hidden="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
+      <path d="M12 3.5L22 20H2z"/><path d="M12 9.5v5"/><circle cx="12" cy="17.2" r="0.9" fill="currentColor" stroke="none"/>
+    </svg>
+    <span id="hazard-text"></span>
+  </div>
   <div class="warn-strip" id="warn-strip"></div>
   <div class="damage-vignette" id="damage-vignette" aria-hidden="true"></div>
 </div>
@@ -260,7 +280,17 @@
 <div id="mobile-controls" class="mobile-controls" aria-hidden="true">
   <div class="stick-zone" id="stick-zone">
     <div class="stick-base" id="stick-base"><div class="stick-knob" id="stick-knob"></div></div>
-    <div class="stick-hint">FLY</div>
+    <div class="stick-hint">TURN</div>
+  </div>
+  <!-- Manual bank, directly above the stick and outside its drag zone so a
+       press on an arrow is never read as a stick input. -->
+  <div class="touch-roll" id="touch-roll">
+    <button class="tbtn tbtn-roll" data-touch="rollLeft" type="button" aria-label="Roll left">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12a7 7 0 1 0-2.4 5.3"/><path d="M4.6 7.4v4.4h4.4"/></svg>
+    </button>
+    <button class="tbtn tbtn-roll" data-touch="rollRight" type="button" aria-label="Roll right">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12a7 7 0 1 1 2.4 5.3"/><path d="M19.4 7.4v4.4H15"/></svg>
+    </button>
   </div>
   <div class="touch-right">
     <div class="touch-powers" id="touch-powers"></div>
