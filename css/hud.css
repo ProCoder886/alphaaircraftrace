@@ -20,7 +20,14 @@
 .hud-label { font-size: 0.62em; letter-spacing: 0.26em; color: rgba(220, 240, 255, 0.62); text-transform: uppercase; }
 
 /* ══════════════════════ TOP LEFT — position & score ═══════════════════ */
-.hud-tl { position: absolute; top: max(14px, env(safe-area-inset-top)); left: max(18px, env(safe-area-inset-left)); z-index: 3; }
+/* Every corner block is capped so it cannot grow into its neighbour. The
+   compass owns the top centre, so the two top corners each get a little under
+   half the frame, and the legend below wraps inside that rather than sliding
+   under the compass tape. */
+.hud-tl {
+  position: absolute; top: max(14px, env(safe-area-inset-top)); left: max(18px, env(safe-area-inset-left));
+  z-index: 3; max-width: min(42vw, 46rem);
+}
 .hud-position { border-bottom: 1px solid rgba(200, 230, 255, 0.24); padding-bottom: 5px; min-width: 132px; }
 .hud-position-value { display: flex; align-items: baseline; gap: 7px; margin-top: 2px; }
 .hud-position-value span { font-family: var(--font-num); font-size: 2.5em; line-height: 0.95; font-weight: 300; color: #fff; }
@@ -48,7 +55,7 @@
   /* Sized so FLIGHT takes a row of its own and COMBAT + SYSTEM share the next
      one. Two rows keeps the block clear of the airspeed readout below it,
      which a three-row stack ran straight into. */
-  gap: 7px; max-width: 44rem;
+  gap: 7px; max-width: 100%;
   opacity: 0.86; transition: opacity 160ms linear;
 }
 .hud-controls:hover { opacity: 1; }
@@ -112,7 +119,11 @@ body.touch-mode .hud-controls { display: none; }
 .compass-heading { margin: 3px auto 0; width: 62px; padding: 2px 0; text-align: center; border: 1px solid rgba(210, 235, 255, 0.6); border-radius: 2px; background: rgba(4, 10, 16, 0.5); font-family: var(--font-num); font-size: 0.86em; color: #fff; }
 
 /* ══════════════════════ TOP RIGHT — timers ═══════════════════════════ */
-.hud-tr { position: absolute; top: max(14px, env(safe-area-inset-top)); right: max(18px, env(safe-area-inset-right)); text-align: right; z-index: 3; }
+.hud-tr {
+  position: absolute; top: max(14px, env(safe-area-inset-top)); right: max(18px, env(safe-area-inset-right));
+  text-align: right; z-index: 3; max-width: min(30vw, 22rem);
+  display: flex; flex-direction: column; align-items: flex-end;
+}
 .hud-laptime .hud-label { color: rgba(220, 240, 255, 0.55); }
 .hud-timer-value { font-family: var(--font-num); font-size: 1.85em; font-weight: 300; color: #fff; line-height: 1.05; margin-top: 2px; }
 .hud-timer-value.urgent { color: var(--red); animation: warnFlash 0.7s ease-in-out infinite; }
@@ -343,7 +354,27 @@ body.touch-mode .zoom-btn { width: 2.1em; height: 2.1em; font-size: 0.95em; }
 .notif.good { border-right-color: var(--lime); }
 .notif.bad { border-right-color: var(--red); color: #ffd2d8; }
 .notif.gold { border-right-color: var(--amber); }
+.notif.warn { border-right-color: var(--amber); color: #ffe6b0; }
 .notif.leaving { animation: notifOut 200ms var(--ease) both; }
+
+/* Missile verdicts. Every heavy resolves to exactly one of these, and it has to
+ * be readable in the half-second you can spare for it mid-fight — so unlike the
+ * other notifications these get the full colour, not just a border tint. */
+.notif.verdict {
+  font-size: 0.86em; font-weight: 700; letter-spacing: 0.2em;
+  padding: 8px 16px; border-right-width: 3px;
+}
+.notif.verdict.good {
+  color: var(--lime);
+  background: linear-gradient(90deg, transparent, rgba(20, 70, 30, 0.9));
+  text-shadow: 0 0 12px rgba(120, 255, 140, 0.55);
+}
+.notif.verdict.bad {
+  color: var(--red);
+  background: linear-gradient(90deg, transparent, rgba(80, 16, 22, 0.9));
+  text-shadow: 0 0 12px rgba(255, 90, 100, 0.5);
+}
+.notif.verdict b { color: inherit; opacity: 0.85; }
 
 .event-banner {
   position: absolute; top: 15%; left: 50%; transform: translateX(-50%);
@@ -520,6 +551,63 @@ body.touch-mode .zoom-btn { width: 2.1em; height: 2.1em; font-size: 0.95em; }
   text-shadow: 0 0 8px rgba(47, 255, 138, 0.8); white-space: nowrap;
 }
 
+/* The callsign rides above the bracket, opposite the lock legend, so a wave of
+   hostiles can be called out by name instead of by "the one on the left". */
+.tgt-name {
+  position: absolute; left: 50%; bottom: calc(100% + 14px); transform: translateX(-50%);
+  font-size: 0.42rem; letter-spacing: 0.18em; font-weight: 700;
+  color: currentColor; white-space: nowrap; opacity: 0.9;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
+}
+
+/* --- rounds in flight ---------------------------------------------------
+ * The gap between a launched missile and what it is chasing, printed over the
+ * missile itself. Ungated by depth: a round 12 km out is exactly when the
+ * number matters most. */
+.msl-tag {
+  position: absolute; transform: translate(-50%, -50%);
+  font-family: var(--font-num); font-size: 0.46rem; letter-spacing: 0.08em;
+  padding: 1px 5px; border-radius: 999px; white-space: nowrap;
+  border: 1px solid rgba(120, 230, 255, 0.45);
+  background: rgba(4, 12, 22, 0.72);
+  color: #cdf1ff; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+/* Terminal phase — the round is about to resolve into a hit or a miss. */
+.msl-tag.near {
+  border-color: rgba(255, 154, 74, 0.85); color: #ffd9a8;
+  box-shadow: 0 0 12px rgba(255, 154, 74, 0.5);
+  animation: mslNear 0.4s ease-in-out infinite;
+}
+@keyframes mslNear { 0%, 100% { transform: translate(-50%, -50%) scale(1); } 50% { transform: translate(-50%, -50%) scale(1.12); } }
+
+/* --- one-click control blackout ----------------------------------------
+ * The button lives in .hud-tr, outside everything it hides, or there would be
+ * no way back once pressed. */
+.hud-hide-btn {
+  display: inline-flex; align-items: center; gap: 5px; margin-bottom: 8px;
+  padding: 3px 8px; border-radius: 999px; cursor: pointer;
+  border: 1px solid rgba(120, 230, 255, 0.3);
+  background: rgba(6, 14, 24, 0.66);
+  color: rgba(210, 238, 255, 0.8);
+  font: inherit; font-size: 0.48em; letter-spacing: 0.16em; font-weight: 700;
+  transition: border-color var(--t-fast), color var(--t-fast), background var(--t-fast);
+}
+.hud-hide-btn svg { width: 0.95em; height: 0.95em; flex: none; }
+.hud-hide-btn:hover { border-color: var(--accent); color: #eafdff; }
+.hud-hide-btn[aria-pressed="true"] { border-color: rgba(255, 182, 72, 0.6); color: var(--amber); }
+
+body.hud-hidden .hud-controls,
+body.hud-hidden .hud-brief,
+body.hud-hidden .zoom-rack,
+body.hud-hidden .cam-chip,
+body.hud-hidden .power-rack,
+body.hud-hidden .hud-bl,
+body.hud-hidden .hud-combat,
+body.hud-hidden .objective-card,
+body.hud-hidden .hud-run-stats,
+body.hud-hidden #mobile-controls { display: none !important; }
+/* Flight instruments, the verdict feed and the way back all survive. */
+
 /* --- weapon / lock status block ---------------------------------------- */
 .hud-combat {
   display: none; gap: 8px; align-items: center; margin: 0 auto 6px;
@@ -544,6 +632,11 @@ body.touch-mode .zoom-btn { width: 2.1em; height: 2.1em; font-size: 0.95em; }
 .lock-text { font-size: 0.5rem; letter-spacing: 0.16em; color: rgba(220, 240, 255, 0.7); }
 .lock-strip.locked .lock-text { color: #2fff8a; font-weight: 700; }
 .lock-strip.tracking .lock-text { color: #ffc24a; }
+/* Locked, but the armed round cannot reach it. Said before the trigger, not
+   after — the launch would be refused. */
+.lock-strip.outofrange .lock-icon { border-color: var(--red); box-shadow: 0 0 9px rgba(255, 90, 100, 0.6); }
+.lock-strip.outofrange .lock-icon::after { background: transparent; }
+.lock-strip.outofrange .lock-text { color: #ff9aa2; font-weight: 700; }
 
 .weapon-strip { display: flex; align-items: center; gap: 6px; padding-left: 8px; border-left: 1px solid rgba(120, 230, 255, 0.16); }
 .wpn-name { font-size: 0.5rem; letter-spacing: 0.14em; color: #dff2ff; }

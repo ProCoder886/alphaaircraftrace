@@ -423,7 +423,12 @@ export class AIRacer {
     const bankTarget = clamp(-this.lateralVel / maxRate, -1, 1) * 0.95
       + clamp(this._curvatureAhead(400) * 3, 0, 1) * Math.sign(-this.lateralVel) * 0.35;
     this.bank = damp(this.bank, bankTarget, 4, sdt);
-    _v2.copy(s.up).applyAxisAngle(_v, this.bank);
+    /* A hostile flying a named manoeuvre commands roll directly on top of the
+     * bank the line already asks for — that is what makes an aileron roll or a
+     * split-S read as a deliberate move rather than a wide sidestep. Combat
+     * sets `rollBias`; a racer never has one, so this is inert off the fight. */
+    const roll = this.bank + (this.rollBias || 0);
+    _v2.copy(s.up).applyAxisAngle(_v, roll);
     _m.lookAt(_v3.set(0, 0, 0), _v, _v2);
     _q.setFromRotationMatrix(_m);
     this.quaternion.slerp(_q, clamp01(sdt * 9));
@@ -439,7 +444,7 @@ export class AIRacer {
         position: this.position3, quaternion: this.quaternion,
         throttle: 0.85, boost: (this.boosting ? 0.8 : 0) + (this.turboTime > 0 ? 0.5 : 0),
         speed01: clamp01(this.speed / PHYSICS.maxSpeed),
-        pitch: this.pitchVis, roll: -this.bank, yaw: 0, alive: true,
+        pitch: this.pitchVis, roll: -roll, yaw: 0, alive: true,
         gLoad: 1 + Math.abs(this.lateralVel) / 60,
         altitude: this.position3.y,
         damage01: 1 - this.health / this.maxHealth,

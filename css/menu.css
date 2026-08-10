@@ -48,7 +48,41 @@
 .ob-actions { display: flex; gap: 10px; }
 
 /* ═════════════════════════════ MAIN MENU ════════════════════════════════ */
-#main-menu { z-index: 60; background: linear-gradient(100deg, rgba(4, 8, 13, 0.94) 0%, rgba(5, 10, 17, 0.72) 42%, rgba(4, 8, 13, 0.10) 72%, transparent 100%); }
+/* The menu is a card floating over the live scene, not a full-bleed page: at
+   1080p the old edge-to-edge layout stretched a nine-item nav across 1920px and
+   left the panel swimming in dead space. Capped and centred, the same content
+   reads as one object and the flying backdrop stays visible around it.
+
+   `.screen` supplies `position:absolute; inset:0; display:flex`, so the cap is
+   done with margin:auto on the flex item rather than by adding a wrapper — the
+   topbar/body/footer stay direct children and every `#main-menu .x` rule below
+   (including the hangar-open set) keeps matching. */
+#main-menu {
+  z-index: 60;
+  background: radial-gradient(ellipse at 50% 46%, rgba(4, 8, 13, 0.58), rgba(3, 6, 11, 0.92));
+  align-items: stretch; justify-content: center;
+  padding: clamp(8px, 2vh, 26px) clamp(8px, 2vw, 26px);
+}
+#main-menu > .menu-topbar,
+#main-menu > .menu-body,
+#main-menu > .menu-footer { width: min(1100px, 100%); margin-inline: auto; flex: none; }
+#main-menu > .menu-body { flex: 1 1 auto; }
+/* The three bands together form one card: only the outer edges are rounded. */
+#main-menu > .menu-topbar {
+  border: 1px solid var(--line-strong); border-bottom-color: var(--line);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  background: linear-gradient(180deg, rgba(24, 40, 60, 0.78), rgba(6, 11, 18, 0.86));
+}
+#main-menu > .menu-body {
+  border-inline: 1px solid var(--line-strong);
+  background: linear-gradient(155deg, rgba(18, 31, 47, 0.68), rgba(5, 10, 17, 0.92));
+}
+#main-menu > .menu-footer {
+  border: 1px solid var(--line-strong); border-top-color: var(--line);
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+  background: linear-gradient(0deg, rgba(6, 11, 18, 0.92), rgba(12, 22, 34, 0.7));
+  box-shadow: 0 40px 90px -34px #000;
+}
 
 .menu-topbar { display: flex; align-items: center; justify-content: space-between; padding: 14px clamp(16px, 2.6vw, 34px); border-bottom: 1px solid var(--line); background: linear-gradient(180deg, rgba(4, 8, 13, 0.9), transparent); }
 .brand { display: flex; align-items: center; gap: 12px; }
@@ -62,43 +96,52 @@
 .credit-chip { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border: 1px solid var(--line); border-radius: var(--r-md); background: rgba(10, 18, 28, 0.7); font-family: var(--font-num); font-size: 0.82rem; color: var(--amber); }
 .chip-icon { color: var(--amber); }
 
-.menu-body { flex: 1 1 auto; display: grid; grid-template-columns: minmax(180px, 232px) minmax(0, 1fr); gap: 0; min-height: 0; }
+.menu-body { flex: 1 1 auto; display: grid; grid-template-columns: minmax(158px, 196px) minmax(0, 1fr); gap: 0; min-height: 0; }
 
-.menu-nav { display: flex; flex-direction: column; gap: 2px; padding: 18px 10px 18px clamp(12px, 2.4vw, 30px); border-right: 1px solid var(--line); overflow-y: auto; scrollbar-width: none; }
+.menu-nav { display: flex; flex-direction: column; gap: 2px; padding: 14px 8px 14px 12px; border-right: 1px solid var(--line); overflow-y: auto; scrollbar-width: none; }
 .menu-nav::-webkit-scrollbar { display: none; }
 .nav-item {
-  position: relative; display: flex; align-items: center; gap: 11px;
-  padding: 12px 14px; min-height: 46px;
+  position: relative; display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; min-height: 38px;
   border: 1px solid transparent; border-radius: var(--r-md);
   background: transparent; color: var(--text-dim);
-  font-size: 0.78rem; letter-spacing: 0.16em; text-transform: uppercase; font-weight: 600;
+  font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 600;
   cursor: pointer; text-align: left; width: 100%;
   transition: color var(--t-fast), background var(--t-fast), border-color var(--t-fast), padding-left var(--t-fast);
 }
-.nav-item .nav-ico { font-size: 0.9rem; opacity: 0.7; width: 18px; text-align: center; }
-.nav-item:hover { color: var(--text); background: rgba(57, 245, 255, 0.06); padding-left: 18px; }
+.nav-item .nav-ico { font-size: 0.85rem; opacity: 0.7; width: 16px; text-align: center; }
+.nav-item:hover { color: var(--text); background: rgba(57, 245, 255, 0.06); padding-left: 16px; }
 .nav-item.active { color: #eafdff; border-color: var(--accent-line); background: linear-gradient(90deg, rgba(20, 96, 116, 0.5), transparent 78%); }
-.nav-item.active::before { content: ""; position: absolute; left: -1px; top: 8px; bottom: 8px; width: 2px; background: var(--accent); box-shadow: 0 0 12px var(--accent); border-radius: 2px; }
+.nav-item.active::before { content: ""; position: absolute; left: -1px; top: 7px; bottom: 7px; width: 2px; background: var(--accent); box-shadow: 0 0 12px var(--accent); border-radius: 2px; }
 .nav-item.active .nav-ico { opacity: 1; color: var(--accent); }
 
-.menu-panel { padding: clamp(16px, 2.6vw, 34px); min-height: 0; }
-.panel-head { margin-bottom: 18px; }
-.panel-head h2 { font-size: clamp(1.1rem, 2.3vw, 1.6rem); font-weight: 800; letter-spacing: 0.10em; }
-.panel-head p { margin-top: 6px; color: var(--text-faint); font-size: 0.8rem; line-height: 1.6; max-width: 74ch; }
+.menu-panel { padding: clamp(14px, 2vw, 24px); min-height: 0; }
+.panel-head { margin-bottom: 14px; }
+.panel-head h2 { font-size: clamp(1rem, 1.9vw, 1.3rem); font-weight: 800; letter-spacing: 0.10em; }
+.panel-head p { margin-top: 5px; color: var(--text-faint); font-size: 0.74rem; line-height: 1.55; max-width: 74ch; }
+/* Group heading inside a panel — smaller than the panel's own title so the
+   hierarchy survives being repeated four or five times down the page. */
+.panel-head.sub { margin: 16px 0 9px; }
+.panel-head.sub:first-child { margin-top: 0; }
+.panel-head.sub h2 {
+  font-size: 0.64rem; letter-spacing: 0.26em; text-transform: uppercase;
+  color: var(--accent); font-weight: 700;
+  padding-bottom: 6px; border-bottom: 1px solid var(--line);
+}
 
 /* ---- card grids --------------------------------------------------------- */
-.card-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(232px, 1fr)); }
-.card-grid.wide { grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); }
-.card-grid.tight { grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); }
+.card-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(206px, 1fr)); }
+.card-grid.wide { grid-template-columns: repeat(auto-fill, minmax(262px, 1fr)); }
+.card-grid.tight { grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); }
 
 .card {
   position: relative; overflow: hidden;
-  padding: 15px 16px; min-height: 92px;
+  padding: 12px 13px; min-height: 78px;
   border: 1px solid var(--line); border-radius: var(--r-md);
   background: linear-gradient(160deg, rgba(26, 42, 62, 0.5), rgba(7, 12, 20, 0.8));
   cursor: pointer; text-align: left; width: 100%;
   transition: transform var(--t-fast) var(--ease), border-color var(--t-fast), box-shadow var(--t-fast), background var(--t-fast);
-  display: flex; flex-direction: column; gap: 6px;
+  display: flex; flex-direction: column; gap: 5px;
 }
 .card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: var(--accent); opacity: 0; transition: opacity var(--t-fast); box-shadow: 0 0 14px var(--accent); }
 .card:hover { transform: translateY(-2px); border-color: var(--line-strong); background: linear-gradient(160deg, rgba(34, 56, 82, 0.6), rgba(9, 15, 24, 0.85)); }
@@ -148,8 +191,13 @@
 .mini-jet { width: 100%; height: 78px; display: block; }
 .mini-jet path { fill: currentColor; }
 
-/* ---- hangar: clear the centre so the live 3D preview reads --------------- */
-#main-menu.hangar-open { background: linear-gradient(100deg, rgba(4, 8, 13, 0.95) 0%, rgba(5, 10, 17, 0.55) 26%, rgba(4, 8, 13, 0) 44%, rgba(4, 8, 13, 0) 62%, rgba(5, 10, 17, 0.62) 82%, rgba(4, 8, 13, 0.95) 100%); }
+/* ---- hangar: clear the centre so the live 3D preview reads ---------------
+   The card is opaque, so the only way to show the jet behind it is to make the
+   body band itself transparent and pull the two columns to its edges. */
+#main-menu.hangar-open { background: radial-gradient(ellipse at 50% 46%, rgba(4, 8, 13, 0.34), rgba(3, 6, 11, 0.82)); }
+#main-menu.hangar-open > .menu-body {
+  background: linear-gradient(100deg, rgba(9, 16, 25, 0.92) 0%, rgba(7, 13, 21, 0.5) 30%, rgba(6, 11, 18, 0.06) 48%, rgba(6, 11, 18, 0.06) 58%, rgba(7, 13, 21, 0.55) 80%, rgba(9, 16, 25, 0.92) 100%);
+}
 #main-menu.hangar-open .menu-panel { background: transparent; }
 #main-menu.hangar-open .panel-head { max-width: 340px; }
 #main-menu.hangar-open .hangar {
@@ -171,7 +219,7 @@
 
 @media (max-width: 1100px) {
   #main-menu.hangar-open .hangar { gap: 14px; }
-  #main-menu.hangar-open { background: linear-gradient(100deg, rgba(4, 8, 13, 0.95) 0%, rgba(5, 10, 17, 0.8) 40%, rgba(5, 10, 17, 0.8) 100%); }
+  #main-menu.hangar-open > .menu-body { background: linear-gradient(100deg, rgba(9, 16, 25, 0.94) 0%, rgba(7, 13, 21, 0.82) 40%, rgba(7, 13, 21, 0.82) 100%); }
 }
 
 /* ---- stats + achievements ------------------------------------------------ */
@@ -223,8 +271,81 @@
 .credits-body { font-size: 0.8rem; line-height: 1.85; color: var(--text-dim); max-width: 74ch; }
 .credits-body h4 { color: var(--accent); letter-spacing: 0.2em; font-size: 0.74rem; text-transform: uppercase; margin: 18px 0 6px; }
 
+/* ---- launch summary ------------------------------------------------------ */
+/* The ready-room opens with the whole launch contract: every setting that
+   changes the run, in one block, each row jumpable back to its own tab.
+   Rows are buttons so the whole contract is editable without leaving the page. */
+.launch-summary {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 7px; margin-bottom: 16px;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: rgba(8, 14, 22, 0.6); padding: 9px;
+}
+.sum-row {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center; gap: 9px;
+  padding: 6px 9px; border-radius: var(--r-sm);
+  background: transparent; border: 1px solid transparent;
+  text-align: left; cursor: pointer; font: inherit;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.sum-row i {
+  font-style: normal; font-size: 0.58rem; letter-spacing: 0.16em;
+  color: var(--text-faint); text-transform: uppercase;
+}
+.sum-row b {
+  font-family: var(--font-num); font-size: 0.84rem; letter-spacing: 0.05em;
+  color: #eafdff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sum-row em {
+  font-style: normal; font-size: 0.56rem; letter-spacing: 0.12em;
+  color: var(--accent); text-transform: uppercase; opacity: 0;
+  transition: opacity var(--t-fast);
+}
+.sum-row:hover { background: rgba(57, 245, 255, 0.06); border-color: var(--accent-line); }
+.sum-row:hover em { opacity: 1; }
+.sum-row.sum-total {
+  border-top: 1px dashed var(--line);
+  background: rgba(255, 182, 72, 0.05); cursor: default;
+}
+.sum-row.sum-total b { color: var(--amber); }
+.sum-row.sum-total em { opacity: 1; color: var(--text-faint); }
+.sum-total {
+  grid-column: 1 / -1;
+}
+
+/* ---- weather cards -------------------------------------------------------- */
+/* A card in the current location's pool gets the default cyan treatment; one
+   outside it is marked, not disabled — snow over the megacity is not a broken
+   combination, it is simply not the house style. */
+.wx-card .card-meta { margin-top: 2px; flex-wrap: wrap; gap: 8px; }
+.wx-card.offpool { opacity: 0.6; filter: saturate(0.55); }
+.wx-card.offpool:hover { opacity: 0.85; filter: saturate(0.8); }
+.wx-card.selected.offpool { opacity: 1; filter: none; border-color: var(--amber); box-shadow: 0 0 26px -10px rgba(255, 182, 72, 0.7); }
+.wx-card.selected.offpool::before { background: var(--amber); box-shadow: 0 0 14px var(--amber); }
+.card-tag.offTag { border-color: rgba(255, 182, 72, 0.5); color: var(--amber); }
+
+/* ---- aircraft: the active airframe ---------------------------------------- */
+.card.is-active { border-color: var(--lime); box-shadow: 0 0 22px -8px rgba(157, 255, 74, 0.6); }
+.card.is-active::before { background: var(--lime); box-shadow: 0 0 14px var(--lime); }
+.card-tag.activeTag { border-color: rgba(157, 255, 74, 0.55); color: var(--lime); }
+.active-confirm {
+  margin-top: 14px; padding: 10px 12px;
+  border: 1px solid rgba(157, 255, 74, 0.45); border-radius: var(--r-md);
+  background: rgba(30, 60, 24, 0.35);
+  font-size: 0.72rem; letter-spacing: 0.14em; color: #d6ffc0; text-transform: uppercase;
+}
+
 /* ---- footer / launch ------------------------------------------------------- */
 .menu-footer { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px clamp(16px, 2.6vw, 34px); border-top: 1px solid var(--line); background: linear-gradient(0deg, rgba(4, 8, 13, 0.95), transparent); flex-wrap: wrap; }
+
+/* Launch belongs under the Play tab only; every other tab hides it. The
+   `.show-launch` class is set in setSection() so this rule is the one place
+   the button's visibility is decided. */
+#main-menu:not(.show-launch) #btn-launch { display: none; }
+/* With the button gone, the footer falls back to chips-only; keep it from
+   looking abandoned. */
+#main-menu:not(.show-launch) .menu-footer { justify-content: flex-end; }
 .loadout { display: flex; gap: 10px; flex-wrap: wrap; }
 .loadout-chip { display: flex; flex-direction: column; gap: 2px; padding: 7px 14px; border: 1px solid var(--line); border-radius: var(--r-md); background: rgba(10, 18, 28, 0.6); min-width: 104px; }
 .loadout-chip i { font-style: normal; font-size: 0.58rem; letter-spacing: 0.2em; color: var(--text-faint); text-transform: uppercase; }
@@ -243,11 +364,11 @@
 
 /* ═════════════════════════════ PAUSE ════════════════════════════════════ */
 #pause-menu { z-index: 70; }
-.pause-card { width: min(520px, 92vw); padding: 26px; border: 1px solid var(--line-strong); border-radius: var(--r-lg); background: linear-gradient(160deg, rgba(22, 38, 56, 0.82), rgba(5, 10, 17, 0.95)); box-shadow: 0 40px 90px -30px #000; animation: cardPop 240ms var(--ease) both; }
-.pause-head h2 { font-size: 1.5rem; letter-spacing: 0.32em; font-weight: 300; }
-.pause-context { margin-top: 6px; font-size: 0.72rem; letter-spacing: 0.14em; color: var(--accent); text-transform: uppercase; }
-.pause-stats { margin: 20px 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 9px; }
-.pause-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.pause-card { width: min(440px, 92vw); padding: 20px; border: 1px solid var(--line-strong); border-radius: var(--r-lg); background: linear-gradient(160deg, rgba(22, 38, 56, 0.82), rgba(5, 10, 17, 0.95)); box-shadow: 0 40px 90px -30px #000; animation: cardPop 240ms var(--ease) both; }
+.pause-head h2 { font-size: 1.24rem; letter-spacing: 0.28em; font-weight: 300; }
+.pause-context { margin-top: 5px; font-size: 0.66rem; letter-spacing: 0.14em; color: var(--accent); text-transform: uppercase; }
+.pause-stats { margin: 15px 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 8px; }
+.pause-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .pause-actions .btn:first-child { grid-column: 1 / -1; }
 
 /* ═════════════════════════════ OVERLAY PANEL ════════════════════════════ */
@@ -289,16 +410,31 @@
 
 /* ---- responsive ----------------------------------------------------------- */
 @media (max-width: 900px) {
-  .menu-body { grid-template-columns: minmax(150px, 178px) minmax(0, 1fr); }
+  .menu-body { grid-template-columns: minmax(140px, 164px) minmax(0, 1fr); }
   .hangar { grid-template-columns: 1fr; }
   .hangar-detail { position: static; }
   .ob-slide { grid-template-columns: 1fr; }
   .ob-art { display: none; }
+  .launch-summary { grid-template-columns: 1fr; }
 }
 @media (max-height: 560px) {
+  /* A landscape phone has no vertical room to spare, so the card goes
+     edge-to-edge and every band loses its padding rather than the panel
+     losing its content. */
+  #main-menu { padding: 0; }
+  #main-menu > .menu-topbar,
+  #main-menu > .menu-footer { border-radius: 0; }
+  #main-menu > .menu-topbar { border-inline: none; border-top: none; }
+  #main-menu > .menu-body { border-inline: none; }
+  #main-menu > .menu-footer { border-inline: none; border-bottom: none; }
   .menu-topbar { padding-top: 8px; padding-bottom: 8px; }
   .menu-footer { padding-top: 8px; padding-bottom: 8px; }
   .btn-launch { min-width: 190px; padding: 9px 20px; }
   .launch-label { font-size: 0.9rem; }
   .ob-frame { height: 94vh; }
+  .launch-summary { grid-template-columns: 1fr 1fr; gap: 5px; padding: 7px; margin-bottom: 11px; }
+  .sum-row { padding: 4px 7px; gap: 7px; }
+  .sum-row b { font-size: 0.74rem; }
+  .sum-row em { display: none; }
+  .panel-head.sub { margin: 11px 0 7px; }
 }

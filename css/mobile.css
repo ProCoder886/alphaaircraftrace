@@ -93,25 +93,62 @@ body.touch-mode .mobile-controls.enabled { display: block; }
   position: absolute; top: max(10px, env(safe-area-inset-top)); right: max(14px, env(safe-area-inset-right));
   display: flex; gap: 8px; pointer-events: auto;
 }
-/* Lean is a distinct control from bank, so it gets its own pair of keys. */
-.touch-lean { display: flex; gap: 8px; pointer-events: auto; }
-.tbtn-lean { width: 50px; height: 50px; font-size: 0.82rem; border-color: rgba(200, 235, 255, 0.34); }
 
-/* Weapons. Hidden unless the run is a combat mode, so racing keeps its
-   uncluttered thumb layout. */
-.touch-weapons { display: none; gap: 8px; pointer-events: auto; }
+/* ---- weapons -------------------------------------------------------------
+   Hidden unless the run is a combat mode, so racing keeps its uncluttered
+   thumb layout.
+
+   Two rows, because arming and firing are different jobs done at different
+   rates. The top row is a pair of small toggles that step through the gun belt
+   and the missile rack; the bottom row is the two big round triggers. The
+   triggers never move and never change meaning, so the firing thumb learns one
+   position and stays there while the other thumb re-arms.
+   ------------------------------------------------------------------------ */
+.touch-weapons { display: none; flex-direction: column; align-items: flex-end; gap: 8px; pointer-events: auto; }
 body.combat-mode .touch-weapons { display: flex; }
-.tbtn-gun { width: 62px; height: 62px; border-color: rgba(255, 240, 168, 0.5); background: radial-gradient(circle at 40% 34%, rgba(255, 220, 120, 0.18), rgba(30, 24, 8, 0.6)); }
-.tbtn-wpn { width: 50px; height: 50px; font-size: 0.54rem; border-color: rgba(255, 154, 74, 0.45); }
 
-.touch-power {
-  position: relative; width: 52px; height: 52px; overflow: hidden;
-  border-radius: 10px;
-  flex-direction: column; gap: 1px;
+.touch-arm { display: flex; gap: 8px; pointer-events: auto; }
+.tbtn-arm {
+  width: 58px; height: 58px; flex-direction: column; gap: 1px; padding: 0 3px;
+  border-color: rgba(200, 235, 255, 0.34);
+  background: radial-gradient(circle at 40% 32%, rgba(57, 245, 255, 0.12), rgba(8, 18, 26, 0.62));
 }
-.touch-power .tp-num { font-family: var(--font-num); font-size: 0.54rem; color: rgba(210, 240, 255, 0.55); }
-.touch-power .tp-name { font-size: 0.48rem; letter-spacing: 0.08em; }
-.touch-power .tp-cd { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.6); height: 0%; }
+.arm-label { font-size: 0.42rem; letter-spacing: 0.14em; color: rgba(205, 238, 255, 0.6); }
+/* The armed weapon's short code. Clipped rather than wrapped: a two-line label
+   inside a 58 px circle is unreadable at arm's length anyway. */
+.arm-name {
+  font-family: var(--font-num); font-size: 0.5rem; letter-spacing: 0.04em;
+  color: #eafdff; max-width: 100%; overflow: hidden; white-space: nowrap;
+}
+#touch-arm-gun { border-color: rgba(255, 240, 168, 0.46); background: radial-gradient(circle at 40% 32%, rgba(255, 220, 120, 0.14), rgba(28, 24, 8, 0.62)); }
+#touch-arm-gun .arm-label { color: rgba(255, 232, 160, 0.7); }
+#touch-arm-msl { border-color: rgba(255, 154, 74, 0.46); background: radial-gradient(circle at 40% 32%, rgba(255, 154, 74, 0.14), rgba(30, 16, 8, 0.62)); }
+#touch-arm-msl .arm-label { color: rgba(255, 196, 140, 0.75); }
+
+.touch-fire { display: flex; gap: 10px; pointer-events: auto; }
+.tbtn-fire { width: 74px; height: 74px; }
+.tbtn-fire svg { width: 30px; height: 30px; }
+.tbtn-fire-gun {
+  border-color: rgba(255, 240, 168, 0.6); color: #ffeaa8;
+  background: radial-gradient(circle at 40% 34%, rgba(255, 220, 120, 0.24), rgba(30, 24, 8, 0.66));
+}
+.tbtn-fire-msl {
+  border-color: rgba(255, 122, 42, 0.62); color: #ffc79a;
+  background: radial-gradient(circle at 40% 34%, rgba(255, 122, 42, 0.24), rgba(34, 14, 6, 0.66));
+}
+.tbtn-fire-gun:active, .tbtn-fire-gun.held { background: rgba(150, 116, 24, 0.8); border-color: #ffe08a; box-shadow: 0 0 22px rgba(255, 220, 120, 0.6); }
+.tbtn-fire-msl:active, .tbtn-fire-msl.held { background: rgba(148, 60, 16, 0.82); border-color: #ff9a4a; box-shadow: 0 0 22px rgba(255, 122, 42, 0.6); }
+
+/* Powers as small circles: they are a glanceable cooldown ring, not a label to
+   be read, so a disc with the key number and a sweep is enough. */
+.touch-power {
+  position: relative; width: 44px; height: 44px; overflow: hidden;
+  border-radius: 50%;
+  flex-direction: column; gap: 0;
+}
+.touch-power .tp-num { font-family: var(--font-num); font-size: 0.56rem; color: #dff3ff; line-height: 1; }
+.touch-power .tp-name { font-size: 0.36rem; letter-spacing: 0.04em; max-width: 90%; overflow: hidden; white-space: nowrap; color: rgba(205, 238, 255, 0.62); }
+.touch-power .tp-cd { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.62); height: 0%; }
 .touch-power.ready { border-color: rgba(57, 245, 255, 0.6); }
 .touch-power.active { border-color: var(--lime); background: rgba(30, 62, 24, 0.6); }
 
@@ -136,7 +173,6 @@ body.combat-mode .touch-weapons { display: flex; }
   .stick-knob { width: 40px; height: 40px; margin: -20px 0 0 -20px; }
   .tbtn-boost { width: 70px; height: 70px; font-size: 0.6rem; }
   .tbtn-brake { width: 46px; height: 46px; }
-  .tbtn-lean { width: 42px; height: 42px; font-size: 0.7rem; }
   .tbtn-roll { width: 44px; height: 44px; }
   .tbtn-roll svg { width: 21px; height: 21px; }
   .touch-roll {
@@ -144,13 +180,17 @@ body.combat-mode .touch-weapons { display: flex; }
     left: calc(max(16px, env(safe-area-inset-left)) + 48px);
     bottom: calc(max(12px, env(safe-area-inset-bottom)) + 96px + 9px);
   }
-  .tbtn-gun { width: 46px; height: 46px; font-size: 0.52rem; }
-  .tbtn-wpn { width: 38px; height: 38px; font-size: 0.44rem; }
+  .tbtn-arm { width: 46px; height: 46px; }
+  .arm-label { font-size: 0.36rem; letter-spacing: 0.1em; }
+  .arm-name { font-size: 0.42rem; }
+  .tbtn-fire { width: 58px; height: 58px; }
+  .tbtn-fire svg { width: 24px; height: 24px; }
+  .touch-fire { gap: 8px; }
   .tbtn-small { width: 38px; height: 38px; }
-  .touch-power { width: 40px; height: 40px; }
-  .touch-power .tp-name { font-size: 0.42rem; }
+  .touch-power { width: 36px; height: 36px; }
+  .touch-power .tp-num { font-size: 0.5rem; }
+  .touch-power .tp-name { display: none; }
   .stick-hint { display: none; }
-  .touch-lean { margin-bottom: 2px; }
 
   /* The root font-size already scaled the layout; these are the few places
      that use fixed pixels or that still crowd at phone width. */
@@ -179,11 +219,16 @@ body.combat-mode .touch-weapons { display: flex; }
 body.touch-mode .hud-bl { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 128px); }
 body.touch-mode .hud-bc { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 4px); width: min(280px, 34%); }
 /* The bottom-right instrument stack has to get out of the thumb column's way.
-   On a 390 px-tall landscape phone the touch buttons own the right-hand edge
-   from top to bottom, so the stack shifts left into the gap between the stick
-   and the buttons rather than trying to share the same column. */
+   On a landscape phone the touch cluster owns the right-hand edge from top to
+   bottom, so the stack shifts left into the gap between the stick and the
+   buttons rather than trying to share the same column.
+
+   The offset is the width of the widest row in .touch-right — the two 74 px
+   fire buttons plus their 10 px gap, plus the cluster's own right inset and a
+   14 px breathing gap. Boost + brake comes to 168 px, so the fire row at 158 px
+   is not the widest; the number is kept at the boost row's width. */
 body.touch-mode .hud-br {
-  right: calc(max(18px, env(safe-area-inset-right)) + 168px);
+  right: calc(max(18px, env(safe-area-inset-right)) + 182px);
   bottom: calc(max(14px, env(safe-area-inset-bottom)) + 8px);
   align-items: flex-end;
 }
@@ -193,7 +238,20 @@ body.touch-mode .hud-br {
 body.touch-mode #power-rack { display: none; }
 /* CAM already has a dedicated button top-right on touch. */
 body.touch-mode .cam-chip { display: none; }
-/* The right-hand gauge and its readout move inboard so the touch power rack,
+/* Pinch zooms the camera on touch; the +/− rack is desktop-only clutter. */
+body.touch-mode .zoom-rack { display: none; }
+/* The right-hand gauge and its readout move inboard so the touch cluster,
    which owns the right edge, is not sitting on top of the altimeter. */
 body.touch-mode .gauge-right { right: 33%; }
 body.touch-mode .readout-right { right: calc(33% - 78px); }
+
+/* On a short viewport the four-row right cluster reaches nearly to the top, so
+   the instrument stack has nowhere to sit beside it — it drops to a single
+   line under the compass instead of stacking. */
+@media (max-height: 460px) {
+  body.touch-mode .hud-br { right: calc(max(18px, env(safe-area-inset-right)) + 156px); }
+  body.touch-mode .hud-bl { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 100px); }
+  body.touch-mode .radar-wrap { width: 108px; height: 108px; }
+  body.touch-mode .alt-tape { height: 92px; }
+  body.touch-mode .hud-bc { width: min(230px, 30%); }
+}

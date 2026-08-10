@@ -221,7 +221,10 @@ export class InputManager {
     if (tb.has('rollRight')) s.roll += 1;
     if (tb.has('gun')) s.gun = true;
     if (this.touch.pressedButtons.has('heavy')) s.heavy = true;
+    // Both arm toggles are edge-triggered: holding one should not cycle the
+    // whole magazine in a quarter of a second.
     if (this.touch.pressedButtons.has('cycleWeapon')) s.cycleWeapon = true;
+    if (this.touch.pressedButtons.has('cycleGun')) s.cycleGun = true;
     for (let i = 0; i < 5; i++) if (this.touch.pressedButtons.has(`power${i + 1}`)) s.powers[i] = true;
 
     // Gamepad
@@ -389,6 +392,24 @@ export class AircraftVisual {
     // The plume and ribbon carry the livery too, so a wave reads as a wave.
     for (const t of this.engineTrails) { t.baseColor = tint.clone(); t.material.uniforms.uColor.value.copy(tint); }
     for (const b of this.burners) b.uniforms.uColor.value.copy(tint);
+  }
+
+  /**
+   * Override the ribbon colour independently of the livery.
+   *
+   * `recolour` ties the plume to the airframe hue, which is right for the
+   * player but loses hostiles against dark terrain. Enemies call this
+   * afterwards with a pale wash of their livery so their flight path stays
+   * legible from a distance while the airframe keeps its saturated colour.
+   *
+   * @param {number} hex
+   */
+  setTrailColor(hex) {
+    const tint = new THREE.Color(hex);
+    for (const t of this.engineTrails) {
+      t.baseColor = tint.clone();
+      t.material.uniforms.uColor.value.copy(tint);
+    }
   }
 
   /**

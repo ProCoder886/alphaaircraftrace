@@ -186,12 +186,33 @@ export class Game {
     this.audio = new AudioSystem();
     this.scheduler = new Scheduler(5.0);
 
-    const presetName = this.save.data.settings.graphics || this.device.suggestedPreset || DEFAULTS.graphics;
+    /* Opening graphics preset.
+     *
+     * A stored string is an explicit choice by the player and always wins. Only
+     * when nothing has ever been chosen (null) does the device policy apply:
+     * Extreme on a landscape phone, Medium on a desktop, Low in portrait. That
+     * policy deliberately overrides `device.suggestedPreset`, which scores
+     * conservatively from core count and memory and can never return Extreme —
+     * a modern phone in landscape is the case it under-reads most. The scored
+     * suggestion remains the fallback if the policy yields nothing.
+     *
+     * The adaptive quality system still scales down at runtime if the frame
+     * budget is missed, so an optimistic opening preset self-corrects. */
+    const chosen = this.save.data.settings.graphics;
+    const presetName = chosen
+      || DEFAULTS.graphicsFor({
+        mobile: this.device.isMobile,
+        landscape: window.innerWidth >= window.innerHeight,
+      })
+      || this.device.suggestedPreset
+      || DEFAULTS.graphics;
     this.quality = new AdaptiveQuality(this.perf, presetName);
     this.quality.applyOverrides(this.save.data.settings);
 
     this.input = new InputManager(this.save.data.settings.bindings);
     this.ui = new UI({ audio: this.audio, save: this.save, input: this.input, device: this.device });
+    // So Settings can show the running preset even when nothing was ever chosen.
+    this.ui.activePreset = presetName;
 
     this.render = null;
     this.world = null;
@@ -378,11 +399,22 @@ export class Game {
   /* =====================================================================
    * VENUE / WORLD SETUP
    * ================================================================== */
+  /**
+   * Resolve a location + weather + time-of-day triple for a run.
+   *
+   * Weather selection is deliberate about whose choice wins. `random` (and an
+   * absent id) draws from the location's own pool, so a random Glacier Reach is
+   * never a dust storm. An explicit pick is honoured even when it sits outside
+   * that pool — the player asked for snow over the megacity, so they get it —
+   * because the pool is a flavour guide, not a compatibility constraint. Only
+   * an id that is not a real weather state falls back to the pool.
+   */
   pickVenue(rng, locationId, weatherId = null, timeId = null) {
     const biome = locationId && locationId !== 'random'
       ? (BIOMES_BY_ID[locationId] || rng.pick(BIOMES))
       : rng.pick(BIOMES);
-    const weather = weatherId || rng.pick(biome.weather);
+    const wanted = weatherId && weatherId !== 'random' && WEATHER[weatherId] ? weatherId : null;
+    const weather = wanted || rng.pick(biome.weather);
     const w = WEATHER[weather];
     const time = timeId || w.time || rng.pick(biome.times);
     return { biome, weather, time };
@@ -568,7 +600,7 @@ export class Game {
     const seed = overrides.seed ?? ((Math.random() * 1e9) | 0);
 
     const rng = new RNG(seed);
-    const venue = this.pickVenue(rng, locId, overrides.weather, overrides.time);
+    const venue = this.pickVenue(rng, locId, overrides.weather ?? s.selectedWeather, overrides.time);
     const mode = MODES[modeId] || MODES.endless;
     const difficulty = DIFFICULTIES[diffId] || DIFFICULTIES.elite;
     const spec = AIRCRAFT_BY_ID[craftId] || AIRCRAFT_BY_ID.vector;
@@ -1057,7 +1089,9 @@ export class Game {
 
     /* --- reinforcements --------------------------------------------------
      * A wave arrives on a timer, and immediately if the sky has been cleared —
-     * the mode is endless, so it must never go quiet. */
+     * the mode is endless, so it must never go quiet. Between waves `topUp`
+     * holds the squadron at its floor as kills come in, so the airspace is
+     * always at strength rather than emptying out until the next wave lands. */
     c.waveTimer -= dt;
     const live = c.enemies.filter((e) => e.alive).length;
     if (c.waveTimer <= 0 || live === 0) {
@@ -1069,6 +1103,8 @@ export class Game {
       // Reinforcements arriving means you are in the fight again.
       this._disengageT = 0;
       this._combatWarn = '';
+    } else {
+      c.topUp(dt, player.distanceAlong, this._enemySpecs);
     }
 
     this._trackManoeuvres(dt, player);
@@ -1116,6 +1152,17 @@ export class Game {
       m.machTime += dt;
       this.score += SCORE.machHoldPerSec * dt * this.combo;
     }
+
+    /* High-Mach buffet. Past `shakeMach` the airframe starts to complain, and
+     * the shake is what sells the last three Mach as genuinely fast rather than
+     * just a bigger number on the tape. It ramps in over the band shakeMach →
+     * MACH.max instead of snapping on, so crossing the threshold reads as the
+     * aircraft loading up rather than as a glitch. Re-applied every frame at low
+     * amplitude: the rig decays shake, so a steady trickle holds a steady rattle. */
+    if (player.mach > MACH.shakeMach) {
+      const t = clamp01((player.mach - MACH.shakeMach) / Math.max(0.001, MACH.max - MACH.shakeMach));
+      this.render.rig.addShake(MACH.shakeAmount * t * dt * 8, 26);
+    }
   }
 
   /** Target boxes, lock state and enemy speed labels. */
@@ -1146,6 +1193,27 @@ export class Game {
         mach: mach.toFixed(1),
         kmh: Math.round(mach * MACH.kmh),
         color: e.livery,
+        // Stable per-sortie callsign, so the bracket over a fighter names the
+        // same aircraft for as long as it is alive.
+        label: e.callsign,
+      });
+    }
+
+    /* Distance labels for the player's rounds in flight. One per missile, drawn
+     * above it, counting down the gap to the target — the player watches the
+     * shot close rather than guessing whether it will reach. */
+    const missiles = [];
+    for (const m of c.liveMissiles()) {
+      if (m.range == null) continue;
+      _v.copy(m.pos).project(cam);
+      if (_v.z > 1) continue;
+      if (_v.x < -0.95 || _v.x > 0.95 || _v.y < -0.95 || _v.y > 0.95) continue;
+      missiles.push({
+        x: (_v.x * 0.5 + 0.5) * 100,
+        y: (-_v.y * 0.5 + 0.5) * 100,
+        km: (m.range / 1000).toFixed(m.range < 1000 ? 2 : 1),
+        near: m.range < 600,
+        color: m.color,
       });
     }
     // Which weapon each key arms, and which one is live right now.
@@ -1163,8 +1231,10 @@ export class Game {
       return { id, name: w.name, short: w.short, armed: c.gunWeapon.id === id };
     });
 
+    const range = c.targetRange(player);
     this.ui.updateCombatHud({
       boxes,
+      missiles,
       rack,
       gunRack,
       gun: c.gunWeapon,
@@ -1173,7 +1243,14 @@ export class Game {
       reload: c.heavyWeapon.cooldown > 0 ? 1 - clamp01(c.heavyCooldown / c.heavyWeapon.cooldown) : 1,
       lock: c.lockProgress,
       locked: c.locked,
-      targetName: c.lockTarget?.name || '',
+      targetName: c.lockTarget?.callsign || c.lockTarget?.name || '',
+      /* The range to the locked target and whether the armed weapon can
+       * actually reach it — the same test the launch gate applies, so the HUD
+       * can never promise a shot the weapon will refuse. */
+      targetRange: range,
+      targetKm: range != null ? (range / 1000).toFixed(1) : null,
+      inRange: c.targetInRange(player),
+      weaponRangeKm: c.heavyWeapon.range ? (c.heavyWeapon.range / 1000).toFixed(0) : null,
       hostiles: c.enemies.filter((e) => e.alive).length,
       wave: c.wave,
       kills: this.metrics.kills,
@@ -1255,9 +1332,43 @@ export class Game {
         case 'noLock':
           this.ui.notify('NO LOCK', 'bad');
           break;
+        case 'targetAcquired':
+          // Auto-lock acquired a new target
+          this.ui.notify('TARGET ACQUIRED', 'good', ev.target?.callsign || '');
+          this.audio.play('lockTone', { volume: 0.5 });
+          this.ui.vibrate(12);
+          break;
         case 'launch':
           this.metrics.shotsFired++;
           break;
+
+        /* --- per-missile verdicts -------------------------------------
+         * Every player heavy resolves exactly once, either way. Without this
+         * you fire a missile at a target 9 km away and simply never learn what
+         * happened to it — the shot leaves the rail and the feedback stops. */
+        case 'targetHit': {
+          const km = ev.distance != null ? `${(ev.distance / 1000).toFixed(2)} KM` : '';
+          this.ui.notify('TARGET HIT', 'verdict good', km);
+          this.ui.vibrate(26);
+          break;
+        }
+        case 'targetMissed': {
+          // Closest approach is the useful number on a miss: it tells you
+          // whether you were beaten by the target's break or by your own aim.
+          const km = ev.distance != null ? `MISS BY ${Math.round(ev.distance)} M` : '';
+          this.ui.notify('TARGET MISSED', 'verdict bad', km);
+          break;
+        }
+        case 'outOfRange': {
+          const need = ev.max ? `${(ev.max / 1000).toFixed(0)} KM MAX` : '';
+          this.ui.notify(
+            `OUT OF RANGE · ${(ev.distance / 1000).toFixed(1)} KM`, 'warn', need);
+          break;
+        }
+        case 'reinforce':
+          this.ui.notify('HOSTILE REINFORCEMENTS', 'bad', `+${ev.count}`);
+          break;
+
         default: break;
       }
     }

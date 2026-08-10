@@ -583,23 +583,55 @@ export class TerrainMesh {
 
 function makeTreeGeometry(kind) {
   const parts = [];
-  if (kind === 'conifer') {
-    const trunk = new THREE.CylinderGeometry(0.8, 1.3, 8, 5);
-    trunk.translate(0, 4, 0);
+  if (kind === 'conifer' || kind === 'pine') {
+    // Pine is the taller, sparser cousin: fewer, narrower tiers on a longer bole.
+    const pine = kind === 'pine';
+    const trunk = new THREE.CylinderGeometry(0.8, 1.3, pine ? 12 : 8, 5);
+    trunk.translate(0, pine ? 6 : 4, 0);
     parts.push(trunk);
-    for (let i = 0; i < 3; i++) {
-      const r = 5.2 - i * 1.4, h = 9 - i * 1.6;
+    const tiers = pine ? 3 : 3;
+    for (let i = 0; i < tiers; i++) {
+      const r = (pine ? 4.2 : 5.2) - i * (pine ? 1.1 : 1.4);
+      const h = (pine ? 8 : 9) - i * 1.6;
       const c = new THREE.ConeGeometry(r, h, 7);
-      c.translate(0, 8 + i * 5.2, 0);
+      c.translate(0, (pine ? 11 : 8) + i * (pine ? 4.4 : 5.2), 0);
       parts.push(c);
     }
-  } else if (kind === 'broadleaf') {
-    const trunk = new THREE.CylinderGeometry(0.9, 1.5, 7, 5);
-    trunk.translate(0, 3.5, 0);
+  } else if (kind === 'broadleaf' || kind === 'rosewood' || kind === 'gulmohar') {
+    // Rosewood is tall with a high narrow crown; gulmohar is the flame tree —
+    // low, very wide and flat-topped. Same two primitives, different proportions,
+    // and the species colour does the rest.
+    const tall = kind === 'rosewood';
+    const wide = kind === 'gulmohar';
+    const th = tall ? 11 : wide ? 5 : 7;
+    const trunk = new THREE.CylinderGeometry(tall ? 0.8 : 1.1, tall ? 1.3 : 1.8, th, 5);
+    trunk.translate(0, th / 2, 0);
     parts.push(trunk);
-    const crown = new THREE.IcosahedronGeometry(6, 0);
-    crown.scale(1, 0.82, 1); crown.translate(0, 11, 0);
+    const crown = new THREE.IcosahedronGeometry(wide ? 8 : 6, 0);
+    crown.scale(wide ? 1.25 : 1, wide ? 0.45 : tall ? 0.95 : 0.82, wide ? 1.25 : 1);
+    crown.translate(0, th + (wide ? 2.4 : 4), 0);
     parts.push(crown);
+    if (wide) {
+      // A second, offset canopy layer so the flame tree reads as a spreading
+      // umbrella rather than a squashed ball.
+      const c2 = new THREE.IcosahedronGeometry(6, 0);
+      c2.scale(1.1, 0.36, 1.1);
+      c2.translate(1.4, th + 4.4, -1.1);
+      parts.push(c2);
+    }
+  } else if (kind === 'dead') {
+    // No canopy at all — bare forks. What is left after a burn or a flood.
+    const trunk = new THREE.CylinderGeometry(0.35, 1.4, 13, 5);
+    trunk.translate(0, 6.5, 0);
+    parts.push(trunk);
+    for (let i = 0; i < 4; i++) {
+      const b = new THREE.CylinderGeometry(0.14, 0.45, 5.5, 4);
+      b.translate(0, 2.75, 0);
+      b.rotateZ(0.7 + (i % 2) * 0.25);
+      b.rotateY((i / 4) * TAU);
+      b.translate(0, 8 + i * 1.1, 0);
+      parts.push(b);
+    }
   } else { // palm / karst
     const trunk = new THREE.CylinderGeometry(0.6, 1.1, 14, 5);
     trunk.translate(0, 7, 0);
@@ -614,6 +646,26 @@ function makeTreeGeometry(kind) {
   }
   return mergeGeometriesSafe(parts);
 }
+
+/**
+ * Per-species foliage tint, derived from the location's base ground colour so a
+ * pine in Emerald Basin and a pine in Titan Range are the same species in two
+ * different lights rather than the same swatch pasted twice.
+ */
+const TREE_TINT = {
+  pine:      { h: -0.02, s: 0.10, l: -0.14 },
+  conifer:   { h: 0.00,  s: 0.08, l: -0.06 },
+  broadleaf: { h: 0.03,  s: 0.14, l: 0.04 },
+  rosewood:  { h: -0.05, s: 0.16, l: -0.02 },
+  gulmohar:  { h: -0.32, s: 0.55, l: 0.16 },  // flame tree — red-orange canopy
+  palm:      { h: 0.05,  s: 0.20, l: 0.02 },
+  karst:     { h: 0.02,  s: 0.06, l: -0.10 },
+  dead:      { h: 0.06,  s: -0.45, l: -0.04 },
+};
+
+/** Flower bed colours, by kind. */
+const FLOWER_TINT = { daffodil: 0xf2d24b, whiteLily: 0xf3f1e6, wild: 0xc06fb4 };
+
 
 function makeRockGeometry(seed) {
   const g = new THREE.IcosahedronGeometry(1, 1);
@@ -658,6 +710,389 @@ function makeMastGeometry() {
   }
   const cap = new THREE.ConeGeometry(1.1, 3, 5);
   cap.translate(0, 27.5, 0);
+  parts.push(cap);
+  return mergeGeometriesSafe(parts);
+}
+
+/* ===========================================================================
+ * STRUCTURE LIBRARY — the built environment
+ * ------------------------------------------------------------------------
+ * `locations.js` names 45 structure kinds. Modelling 45 bespoke buildings would
+ * be 45 things to keep in tune for very little gain at the altitude this game is
+ * flown at, so each kind instead resolves to one of 17 archetype builders plus a
+ * size and a colour. A church and a bank share no geometry; a bank and a
+ * government office share a builder but differ in footprint, height and tone,
+ * which is the whole of the difference you can see from 400 m up.
+ *
+ * Dimensions are metres, base sitting on y = 0, centred in XZ — so a placement
+ * pass can scale by a jitter factor and derive a collider from w/h/d without
+ * measuring the mesh.
+ * ======================================================================== */
+
+const S = (arch, w, h, d, color, opt = null) => ({ arch, w, h, d, color, ...(opt || {}) });
+
+export const STRUCTURE_SPECS = {
+  /* --- domestic + small commercial ----------------------------------- */
+  house:         S('house',  17,  11,  15, 0xbfae94),
+  neighbourhood: S('row',    52,  10,  16, 0xc3b39a),
+  stiltHouse:    S('stilt',  16,  13,  14, 0xa89478),
+  lodge:         S('house',  23,  14,  19, 0x8d7355),
+  restaurant:    S('house',  21,   9,  19, 0xc9a26a),
+  market:        S('hall',   38,  10,  28, 0xd0c3a4),
+  gasStation:    S('hall',   30,   8,  22, 0xd9d2c4),
+  truckStop:     S('hall',   40,   9,  27, 0xcfc8ba),
+  well:          S('tank',    7,   6,   7, 0x7a7469),
+
+  /* --- civic + institutional ----------------------------------------- */
+  apartment:     S('block',  34,  46,  26, 0xb0a693),
+  hotel:         S('block',  40,  62,  28, 0xcbbfa8),
+  office:        S('block',  38,  54,  30, 0x9aa3ab),
+  government:    S('block',  56,  34,  38, 0xd6d0c2),
+  bank:          S('block',  36,  40,  30, 0xc4bda9),
+  school:        S('block',  54,  18,  30, 0xd2c2a2),
+  hospital:      S('block',  46,  34,  34, 0xe0ddd4),
+  policeStation: S('block',  30,  16,  24, 0x8f9aa6),
+  fireStation:   S('hall',   32,  14,  24, 0x9c3b33),
+  cinema:        S('hall',   40,  16,  32, 0x7a5e72),
+  mall:          S('hall',   66,  18,  48, 0xb8b2a6),
+
+  /* --- industrial ----------------------------------------------------- */
+  warehouse:     S('hall',   58,  15,  36, 0xa8a49a),
+  industrial:    S('hall',   64,  20,  42, 0x8e8a82),
+  factory:       S('hall',   70,  22,  46, 0x7d7a74),
+  construction:  S('frame',  34,  44,  28, 0xb08a3e),
+  powerStation:  S('tank',   26,  34,  26, 0x9a9690),
+  waterTreatment:S('tank',   30,  14,  30, 0x8fa0a4),
+  floodStation:  S('tank',   22,  18,  22, 0x7f8c94),
+  miningRig:     S('frame',  26,  38,  22, 0x7a6a56),
+  solarFarm:     S('panels', 70,   6,  50, 0x2c3648),
+  waterTower:    S('tank',   14,  30,  14, 0xa2a8a4),
+  dock:          S('dock',   46,   8,  20, 0x7d6a52),
+
+  /* --- rural ---------------------------------------------------------- */
+  farm:          S('farm',   40,  16,  26, 0x9c5f42),
+  barn:          S('hall',   28,  15,  19, 0x8f4a3a),
+  windmill:      S('windmill', 12, 30, 12, 0xd8d2c4),
+
+  /* --- tall ----------------------------------------------------------- */
+  skyscraper:    S('tower',  40, 190,  40, 0x8d939b),
+  glassTower:    S('glass',  38, 240,  38, 0x4a6f86, { glass: true }),
+  twinTowers:    S('twin',   86, 210,  36, 0x7f858d, { glass: true }),
+  commsTower:    S('lattice',18,  96,  18, 0x9b6f5c),
+  observatory:   S('dome',   30,  26,  30, 0xdcdcdc),
+  researchStation:S('dome',  26,  18,  26, 0xc8ccd0),
+  rescueStation: S('block',  26,  15,  20, 0xc2662f),
+  skiResort:     S('house',  44,  20,  26, 0x7d6a58),
+
+  /* --- monumental + sacred -------------------------------------------- */
+  church:        S('spire',  26,  46,  38, 0xcfc7b4),
+  statue:        S('statue', 14,  34,  14, 0x8a8f86),
+  monument:      S('statue', 18,  54,  18, 0xb9b4a6),
+};
+
+/** Fallback so a typo in a location's `styles` list degrades to a building. */
+const DEFAULT_SPEC = STRUCTURE_SPECS.house;
+
+/**
+ * Build one structure archetype as a merged geometry, normalised to a 1×1×1 box
+ * centred in XZ with its base on y = 0. Placement then scales by the spec's
+ * w/h/d, so every archetype shares one instanced draw call per (kind, material)
+ * pair and a collider can be derived from the spec alone.
+ */
+function makeStructureGeometry(arch) {
+  const parts = [];
+  const box = (w, h, d, x, y, z) => {
+    const g = new THREE.BoxGeometry(w, h, d);
+    g.translate(x, y + h / 2, z);
+    parts.push(g);
+    return g;
+  };
+  switch (arch) {
+    case 'house': {
+      box(1, 0.62, 1, 0, 0, 0);
+      // Pitched roof: a 4-sided cone reads as a hip roof and costs 6 triangles.
+      const roof = new THREE.ConeGeometry(0.78, 0.42, 4);
+      roof.rotateY(Math.PI / 4);
+      roof.translate(0, 0.83, 0);
+      parts.push(roof);
+      break;
+    }
+    case 'row': {
+      // A terrace: four narrow houses sharing party walls.
+      for (let i = 0; i < 4; i++) {
+        const x = -0.375 + i * 0.25;
+        box(0.24, 0.55 + (i % 2) * 0.12, 1, x, 0, 0);
+        const roof = new THREE.ConeGeometry(0.19, 0.3, 4);
+        roof.rotateY(Math.PI / 4);
+        roof.translate(x, 0.55 + (i % 2) * 0.12 + 0.15, 0);
+        parts.push(roof);
+      }
+      break;
+    }
+    case 'stilt': {
+      // Raised deck on piles — the delta and floodplain vernacular.
+      for (const [sx, sz] of [[-0.36, -0.36], [0.36, -0.36], [-0.36, 0.36], [0.36, 0.36]]) {
+        box(0.08, 0.4, 0.08, sx, 0, sz);
+      }
+      box(1, 0.42, 1, 0, 0.4, 0);
+      const roof = new THREE.ConeGeometry(0.8, 0.3, 4);
+      roof.rotateY(Math.PI / 4);
+      roof.translate(0, 0.97, 0);
+      parts.push(roof);
+      break;
+    }
+    case 'block': {
+      // Slab with a plinth and a set-back crown — the generic mid-rise.
+      box(1, 0.06, 1, 0, 0, 0);
+      box(0.92, 0.82, 0.92, 0, 0.06, 0);
+      box(0.6, 0.12, 0.6, 0, 0.88, 0);
+      break;
+    }
+    case 'hall': {
+      // Wide shed with a shallow barrel roof and a service block on the end.
+      box(1, 0.72, 1, 0, 0, 0);
+      const roof = new THREE.CylinderGeometry(0.52, 0.52, 1, 9, 1, false, 0, Math.PI);
+      roof.rotateZ(Math.PI / 2);
+      roof.rotateY(Math.PI / 2);
+      roof.scale(1, 1, 0.5);
+      roof.translate(0, 0.72, 0);
+      parts.push(roof);
+      box(0.22, 0.34, 0.3, 0.5, 0.72, -0.28);
+      break;
+    }
+    case 'tower': {
+      // Stepped shaft: three set-backs so a skyline has silhouette variety.
+      box(1, 0.5, 1, 0, 0, 0);
+      box(0.78, 0.32, 0.78, 0, 0.5, 0);
+      box(0.54, 0.16, 0.54, 0, 0.82, 0);
+      box(0.1, 0.08, 0.1, 0, 0.98, 0);
+      break;
+    }
+    case 'glass': {
+      // Single clean prism, slightly tapered — reads as curtain wall.
+      const g = new THREE.CylinderGeometry(0.62, 0.72, 1, 4, 1);
+      g.rotateY(Math.PI / 4);
+      g.translate(0, 0.5, 0);
+      parts.push(g);
+      box(0.1, 0.1, 0.1, 0, 1, 0);
+      break;
+    }
+    case 'twin': {
+      // Two shafts on a shared podium, joined by a sky bridge.
+      box(1, 0.08, 0.9, 0, 0, 0);
+      box(0.36, 0.92, 0.9, -0.32, 0.08, 0);
+      box(0.36, 0.92, 0.9, 0.32, 0.08, 0);
+      box(0.28, 0.05, 0.4, 0, 0.62, 0);
+      break;
+    }
+    case 'spire': {
+      // Nave, transept and steeple.
+      box(0.5, 0.42, 1, 0, 0, 0);
+      box(1, 0.34, 0.42, 0, 0, 0);
+      box(0.3, 0.7, 0.3, 0, 0, -0.36);
+      const steeple = new THREE.ConeGeometry(0.22, 0.34, 4);
+      steeple.rotateY(Math.PI / 4);
+      steeple.translate(0, 0.85, -0.36);
+      parts.push(steeple);
+      break;
+    }
+    case 'dome': {
+      box(1, 0.42, 1, 0, 0, 0);
+      const d = new THREE.SphereGeometry(0.44, 12, 7, 0, TAU, 0, Math.PI / 2);
+      d.translate(0, 0.42, 0);
+      parts.push(d);
+      break;
+    }
+    case 'tank': {
+      // Cylinder on legs — silo, water tower, digester, wellhead.
+      for (const [sx, sz] of [[-0.3, -0.3], [0.3, -0.3], [-0.3, 0.3], [0.3, 0.3]]) {
+        box(0.07, 0.62, 0.07, sx, 0, sz);
+      }
+      const t = new THREE.CylinderGeometry(0.5, 0.5, 0.34, 10);
+      t.translate(0, 0.79, 0);
+      parts.push(t);
+      const cap = new THREE.ConeGeometry(0.5, 0.16, 10);
+      cap.translate(0, 1.04, 0);
+      parts.push(cap);
+      break;
+    }
+    case 'frame': {
+      // Open steelwork: crane mast, rig derrick, half-built floorplate.
+      box(0.9, 0.05, 0.9, 0, 0, 0);
+      for (const [sx, sz] of [[-0.4, -0.4], [0.4, -0.4], [-0.4, 0.4], [0.4, 0.4]]) {
+        box(0.07, 1, 0.07, sx, 0, sz);
+      }
+      for (let i = 1; i <= 4; i++) box(0.9, 0.03, 0.9, 0, i * 0.2, 0);
+      box(0.06, 0.4, 0.06, 0.4, 1, 0.4);   // crane mast
+      box(0.7, 0.05, 0.06, 0.1, 1.36, 0.4); // jib
+      break;
+    }
+    case 'lattice': {
+      // Guyed comms mast: tapered lattice with dish arms.
+      const shaft = new THREE.CylinderGeometry(0.06, 0.18, 1, 5);
+      shaft.translate(0, 0.5, 0);
+      parts.push(shaft);
+      for (const y of [0.5, 0.7, 0.86]) box(0.7, 0.03, 0.03, 0, y, 0);
+      for (const y of [0.5, 0.7, 0.86]) box(0.03, 0.03, 0.7, 0, y, 0);
+      const dish = new THREE.SphereGeometry(0.12, 8, 5, 0, TAU, 0, Math.PI / 2);
+      dish.rotateX(-Math.PI / 2.4);
+      dish.translate(0.2, 0.76, 0);
+      parts.push(dish);
+      const cap = new THREE.ConeGeometry(0.05, 0.14, 5);
+      cap.translate(0, 1.05, 0);
+      parts.push(cap);
+      break;
+    }
+    case 'panels': {
+      // Solar array: rows of tilted planes over a low frame.
+      for (let r = 0; r < 5; r++) {
+        const p = new THREE.BoxGeometry(0.94, 0.02, 0.13);
+        p.rotateX(-0.5);
+        p.translate(0, 0.16, -0.4 + r * 0.2);
+        parts.push(p);
+        box(0.9, 0.09, 0.02, 0, 0, -0.4 + r * 0.2);
+      }
+      break;
+    }
+    case 'dock': {
+      // Jetty and a shed — placed at the waterline.
+      box(1, 0.14, 0.5, 0, 0, 0.2);
+      for (let i = 0; i < 5; i++) box(0.05, 0.4, 0.05, -0.4 + i * 0.2, -0.3, 0.2);
+      box(0.36, 0.6, 0.34, -0.26, 0.14, -0.2);
+      const roof = new THREE.ConeGeometry(0.3, 0.26, 4);
+      roof.rotateY(Math.PI / 4);
+      roof.translate(-0.26, 0.83, -0.2);
+      parts.push(roof);
+      break;
+    }
+    case 'farm': {
+      // Farmhouse plus a long open barn — the rural pair, one placement.
+      box(0.42, 0.55, 0.6, -0.28, 0, 0);
+      const roof = new THREE.ConeGeometry(0.36, 0.3, 4);
+      roof.rotateY(Math.PI / 4);
+      roof.translate(-0.28, 0.55, 0);
+      parts.push(roof);
+      box(0.46, 0.4, 0.9, 0.27, 0, 0);
+      const barnRoof = new THREE.CylinderGeometry(0.26, 0.26, 0.9, 7, 1, false, 0, Math.PI);
+      barnRoof.rotateZ(Math.PI / 2);
+      barnRoof.rotateY(Math.PI / 2);
+      barnRoof.translate(0.27, 0.4, 0);
+      parts.push(barnRoof);
+      break;
+    }
+    case 'windmill': {
+      const body = new THREE.CylinderGeometry(0.28, 0.42, 0.82, 8);
+      body.translate(0, 0.41, 0);
+      parts.push(body);
+      const cap = new THREE.ConeGeometry(0.3, 0.2, 8);
+      cap.translate(0, 0.92, 0);
+      parts.push(cap);
+      // Sails are baked in rather than animated: this is an instanced kind, and
+      // per-instance rotation would cost a draw call each. `windmillRidge` in the
+      // landmark builder is the one that actually turns.
+      for (let i = 0; i < 4; i++) {
+        const s = new THREE.BoxGeometry(0.7, 0.11, 0.03);
+        s.translate(0.35, 0, 0);
+        s.rotateZ((i / 4) * TAU);
+        s.translate(0, 0.78, 0.34);
+        parts.push(s);
+      }
+      break;
+    }
+    case 'statue': {
+      box(0.9, 0.16, 0.9, 0, 0, 0);
+      box(0.6, 0.3, 0.6, 0, 0.16, 0);
+      const figure = new THREE.CylinderGeometry(0.14, 0.22, 0.4, 7);
+      figure.translate(0, 0.66, 0);
+      parts.push(figure);
+      const head = new THREE.SphereGeometry(0.12, 8, 6);
+      head.translate(0, 0.92, 0);
+      parts.push(head);
+      box(0.5, 0.07, 0.07, 0, 0.78, 0);
+      break;
+    }
+    default:
+      box(1, 1, 1, 0, 0, 0);
+  }
+  return mergeGeometriesSafe(parts);
+}
+
+/**
+ * Ground vehicle silhouettes. Tiny geometry — traffic is only ever read from the
+ * air — but the proportions differ enough that a bus is not a car and a fuel
+ * truck is not a van. Built 1 unit long, base on y = 0, nose toward +Z.
+ */
+function makeVehicleGeometry(kind) {
+  const parts = [];
+  const box = (w, h, d, x, y, z) => {
+    const g = new THREE.BoxGeometry(w, h, d);
+    g.translate(x, y + h / 2, z);
+    parts.push(g);
+  };
+  switch (kind) {
+    case 'bus':
+      box(2.5, 3.0, 12, 0, 0.5, 0);
+      box(2.4, 0.4, 11, 0, 3.4, 0);
+      break;
+    case 'truck':
+    case 'construction':
+      box(2.6, 2.6, 4, 0, 0.6, 3.4);
+      box(2.8, 3.2, 8, 0, 0.6, -2.2);
+      break;
+    case 'fuelTruck':
+      box(2.6, 2.6, 4, 0, 0.6, 3.4);
+      {
+        const tank = new THREE.CylinderGeometry(1.5, 1.5, 8, 8);
+        tank.rotateX(Math.PI / 2);
+        tank.translate(0, 2.2, -2.2);
+        parts.push(tank);
+      }
+      break;
+    case 'fireTruck':
+      box(2.6, 2.8, 4, 0, 0.6, 3.2);
+      box(2.6, 2.2, 8, 0, 0.6, -2.4);
+      box(0.5, 0.5, 9, 0, 2.9, -2);
+      break;
+    case 'ambulance':
+    case 'van':
+      box(2.3, 1.9, 2.6, 0, 0.5, 2.4);
+      box(2.4, 2.8, 5, 0, 0.5, -1.2);
+      break;
+    case 'tractor':
+      box(2.0, 2.2, 3.2, 0, 1.0, 0.4);
+      {
+        const w1 = new THREE.CylinderGeometry(1.5, 1.5, 0.6, 8);
+        w1.rotateZ(Math.PI / 2);
+        w1.translate(0, 1.5, -1.4);
+        parts.push(w1);
+      }
+      break;
+    default: // car / taxi / police — a saloon
+      box(2.1, 1.1, 5.2, 0, 0.4, 0);
+      box(1.9, 1.0, 2.6, 0, 1.5, -0.2);
+      break;
+  }
+  // Wheels: one merged band per side rather than four cylinders.
+  box(2.4, 0.7, kind === 'bus' ? 11 : 6, 0, 0, kind === 'bus' ? 0 : 0);
+  return mergeGeometriesSafe(parts);
+}
+
+/**
+ * A flower bed. Deliberately not individual flowers — a bed is one small patch
+ * of crossed coloured quads over a darker base, scattered in the hundreds so the
+ * grassland has colour breaking it up when you are down low.
+ */
+function makeFlowerGeometry() {
+  const parts = [];
+  for (let i = 0; i < 4; i++) {
+    const p = new THREE.PlaneGeometry(1.6, 0.9);
+    p.translate(0, 0.45, 0);
+    p.rotateY((i / 4) * Math.PI);
+    parts.push(p);
+  }
+  const cap = new THREE.PlaneGeometry(1.7, 1.7);
+  cap.rotateX(-Math.PI / 2);
+  cap.translate(0, 0.86, 0);
   parts.push(cap);
   return mergeGeometriesSafe(parts);
 }
@@ -722,6 +1157,12 @@ class WorldChunk {
     this.rings.length = 0;
     this.animated.length = 0;
     this.disposables.length = 0;
+    // Road, river and lake sample lists are rebuilt from scratch on every build,
+    // so a recycled chunk must not inherit the previous one's geography — the
+    // traffic pass would otherwise drive along roads that are no longer here.
+    this.roadPaths = null;
+    this.riverPaths = null;
+    this.lakes = null;
     this.built = false;
   }
 }
@@ -807,6 +1248,129 @@ export class World {
       building: this.materials.building(night),
     };
     this.isNight = night;
+    this._initStructureGeometries();
+    this._initFloraGeometries();
+  }
+
+  /* ---------------------------------------------------------------------
+   * SHARED LIBRARIES
+   * ------------------------------------------------------------------
+   * Structures, vehicles and flora are all instanced, so their geometry and
+   * materials are built once per world and reused by every chunk. They are
+   * marked `shared` on the instanced meshes so chunk disposal never frees them.
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Resolve this location's `civil.styles` list to the archetypes it actually
+   * needs. Building all 17 archetypes for a village that only has houses and a
+   * church would be 15 wasted geometries per race.
+   */
+  _initStructureGeometries() {
+    const civil = this.biome.civil || {};
+    const styles = civil.styles && civil.styles.length ? civil.styles : ['house', 'barn'];
+    const night = this.isNight;
+    const neon = (civil.neon || 0) > 0;
+
+    this._structGeos = new Map();   // archetype -> geometry
+    this._structMats = new Map();   // colour key -> material
+    this._structKinds = [];         // resolved, de-duplicated build list
+
+    for (const kind of styles) {
+      const spec = STRUCTURE_SPECS[kind] || DEFAULT_SPEC;
+      if (!this._structGeos.has(spec.arch)) {
+        this._structGeos.set(spec.arch, makeStructureGeometry(spec.arch));
+      }
+      this._structKinds.push({ kind, spec });
+    }
+
+    // Materials. Facade-mapped for anything with occupied floors so windows light
+    // up at night; flat structural for infrastructure that has no windows to lose.
+    this._matFacade = this.materials.building(night);
+    this._matGlass = this.materials.structure(neon ? 0x123044 : 0x2c4a5e, 0.9, 0.14);
+    this._matConcrete = this.materials.structure(0x9a968e, 0.15, 0.78);
+    this._matSteel = this.materials.structure(0x767b82, 0.72, 0.42);
+    this._matNeon = this.materials.emissiveBasic(this.biome.accent);
+    this._matRoad = this.materials.structure(
+      { ice: 0xdfe9ef, wet: 0x2b2f33, flooded: 0x33383a, country: 0x6f6350,
+        stone: 0x736c62, mountain: 0x4a4a4c, urban: 0x33363b, neon: 0x1b1f2a,
+      }[this.biome.roads?.style] || 0x3a3d41, 0.05, 0.92);
+    this._matDirt = this.materials.structure(
+      new THREE.Color(this.biome.ground.low).offsetHSL(0.01, -0.14, 0.16).getHex(), 0.02, 0.95);
+    this._matMarking = this.materials.emissiveBasic(neon ? this.biome.accent : 0xd8d2be);
+  }
+
+  /**
+   * Species-resolved flora. `flora.trees` names between two and five species per
+   * location; each gets its own geometry and its own tint, which is what stops
+   * two green locations reading as the same forest.
+   */
+  _initFloraGeometries() {
+    const flora = this.biome.flora || {};
+    const species = flora.trees && flora.trees.length ? flora.trees : ['broadleaf'];
+    const base = new THREE.Color(this.biome.ground.base);
+
+    this._floraGeos = new Map();
+    this._floraMats = new Map();
+    this._floraSpecies = [];
+    for (const sp of species) {
+      if (!this._floraGeos.has(sp)) this._floraGeos.set(sp, makeTreeGeometry(sp));
+      if (!this._floraMats.has(sp)) {
+        const t = TREE_TINT[sp] || TREE_TINT.broadleaf;
+        this._floraMats.set(sp, this.materials.foliage(
+          base.clone().offsetHSL(t.h, t.s, t.l).getHex()));
+      }
+      this._floraSpecies.push(sp);
+    }
+
+    const flowers = flora.flowers || [];
+    this._flowerGeo = flowers.length ? makeFlowerGeometry() : null;
+    this._flowerMats = flowers.map((f) => this.materials.foliage(FLOWER_TINT[f] || 0xd0c060));
+
+    this._vehicleGeos = new Map();
+    this._vehicleMats = new Map();
+  }
+
+  /** Lazily build a vehicle silhouette + livery. Traffic mixes ~5 kinds a race. */
+  _vehicle(kind) {
+    if (!this._vehicleGeos.has(kind)) {
+      this._vehicleGeos.set(kind, makeVehicleGeometry(kind));
+    }
+    if (!this._vehicleMats.has(kind)) {
+      const colours = {
+        car: 0xb8bcc2, taxi: 0xe0b32a, bus: 0x3f6fb0, truck: 0x8d9299, van: 0xd8d8d4,
+        ambulance: 0xf0f0ee, police: 0x2b3a52, fireTruck: 0xa8302a,
+        construction: 0xd39a2c, fuelTruck: 0x9aa2a8, tractor: 0x4e7a3a,
+      };
+      this._vehicleMats.set(kind, this.materials.structure(colours[kind] || 0xa0a4a8, 0.5, 0.5));
+    }
+    return { geo: this._vehicleGeos.get(kind), mat: this._vehicleMats.get(kind) };
+  }
+
+  /**
+   * Shared instancing helper. Chunk content is placed in chunk-local space and
+   * the mesh is offset to (centerX, centerZ), so `place` works in small numbers
+   * and float precision holds out at the far end of a long route.
+   *
+   * `place(i, matrix)` returns false to reject a candidate — every generator
+   * rejects against water, slope and altitude, so the requested count is an
+   * upper bound and the surviving count is what actually gets drawn.
+   */
+  _addInstanced(chunk, centerX, centerZ, geo, mat, count, place) {
+    if (!geo || !mat || count <= 0) return null;
+    const mesh = new THREE.InstancedMesh(geo, mat, count);
+    mesh.userData.shared = true;
+    mesh.frustumCulled = true;
+    mesh.castShadow = false;
+    let n = 0;
+    for (let i = 0; i < count; i++) {
+      if (place(i, _m1)) mesh.setMatrixAt(n++, _m1);
+    }
+    mesh.count = n;
+    mesh.instanceMatrix.needsUpdate = true;
+    if (n <= 0) { mesh.dispose(); return null; }
+    mesh.position.set(centerX, 0, centerZ);
+    chunk.group.add(mesh);
+    return mesh;
   }
 
   /* ---------------------------------------------------------------------
@@ -1180,7 +1744,51 @@ export class World {
     const accent = this.materials.emissiveBasic(this.biome.accent);
     const ground = this.terrain.surface(pos.x, pos.z);
 
-    if (kind === 'megaSpire' || kind === 'ridgeTower' || kind === 'beaconTower') {
+    // Resolve the new per-location landmark ids to the original branches.
+    const resolve = {
+      /* Emerald Basin */ giantRiverBridge: 'archBridge', mountainWaterfall: 'mesaArch',
+      riversideStadium: 'generic', botanicalGarden: 'generic', hilltopMonument: 'generic',
+      /* Glacier Reach */ glacierObservatory: 'beaconTower', iceArch: 'iceArch',
+      iceTunnel: 'generic', frozenWaterfall: 'mesaArch', shelfWall: 'citadel',
+      /* Ashfall Flats */ desertStatue: 'generic', abandonedMine: 'bunkerComplex',
+      oasis: 'generic', canyonBridge: 'skyBridge', desertPark: 'generic', mesaArch: 'mesaArch',
+      /* Verdant Delta */ karstSpire: 'megaSpire', deltaWaterfall: 'mesaArch',
+      ruinTemple: 'generic', boatDocks: 'generic', archBridge: 'archBridge',
+      /* Hollow Vale */ villageWindmill: 'windmillRidge', hilltopChurch: 'generic',
+      countrysideStatue: 'generic', fairground: 'generic', ruralStadium: 'generic',
+      golfClubhouse: 'generic',
+      /* Drowned Flats */ floodBarrier: 'bunkerComplex', temporaryBridge: 'archBridge',
+      submergedTown: 'generic', pumpingStation: 'radarArray',
+      /* Meridian Sprawl */ cityStatue: 'generic', centralBankTower: 'ridgeTower',
+      twinTowerComplex: 'generic', giantStadium: 'generic', flyoverExchange: 'generic',
+      skybridgeNetwork: 'skyBridge',
+      /* Titan Range */ mountainStatue: 'generic', suspensionBridge: 'archBridge',
+      observatoryDome: 'beaconTower', valleyDam: 'bunkerComplex',
+      /* Citadel Siege */ giantCastle: 'citadel', curtainWall: 'citadel',
+      gatehouse: 'bunkerComplex', siegeTower: 'megaSpire', fortifiedBridge: 'archBridge',
+      battlements: 'generic',
+      /* Neon Megacity */ futuristicStatue: 'generic', megaAmusementPark: 'generic',
+      observationTower: 'ridgeTower', twinTowerDistrict: 'generic',
+      neonSkyway: 'skyBridge', holoArcade: 'generic',
+    };
+    const resolved = resolve[kind] || 'generic';
+
+    /* Some landmarks are venues at hero scale — a stadium landmark should be a
+     * stadium, not a box cluster. Route those straight into the venue builder
+     * and let it do the work rather than re-modelling a bowl here. */
+    const asVenue = {
+      riversideStadium: 'footballStadium', ruralStadium: 'footballStadium',
+      giantStadium: 'cricketStadium', mountainStadium: 'footballStadium',
+      fairground: 'amusementPark', megaAmusementPark: 'themePark',
+      golfClubhouse: 'golfCourse', desertPark: 'sportsGround',
+      botanicalGarden: 'golfCourse', holoArcade: 'concertGround',
+    }[kind];
+    if (asVenue) {
+      const v = this._buildVenue(asVenue, pos.x, pos.z, rng);
+      if (v) return v;
+    }
+
+    if (resolved === 'megaSpire' || resolved === 'ridgeTower' || resolved === 'beaconTower') {
       const h = rng.float(900, 2200);
       const seg = 7;
       for (let i = 0; i < seg; i++) {
@@ -1201,7 +1809,7 @@ export class World {
       tip.position.y = ground + h + 110; g.add(tip);
       const beacon = new THREE.Mesh(new THREE.SphereGeometry(16, 8, 6), this.materials.emissiveBasic(0xff3b30));
       beacon.position.y = ground + h + 230; g.add(beacon);
-    } else if (kind === 'archBridge' || kind === 'skyBridge') {
+    } else if (resolved === 'archBridge' || resolved === 'skyBridge') {
       const span = rng.float(1200, 2600);
       const y = ground + rng.float(180, 900);
       const deck = new THREE.Mesh(new THREE.BoxGeometry(span, 26, 120), mat);
@@ -1218,7 +1826,7 @@ export class World {
         l.position.set(lerp(-span / 2, span / 2, i / 9), y + 22, 0);
         g.add(l);
       }
-    } else if (kind === 'citadel' || kind === 'bunkerComplex') {
+    } else if (resolved === 'citadel' || resolved === 'bunkerComplex') {
       const R = rng.float(700, 1400);
       const wall = new THREE.Mesh(new THREE.CylinderGeometry(R, R * 1.06, 190, 12, 1, true), mat);
       wall.position.y = ground + 95; g.add(wall);
@@ -1237,12 +1845,12 @@ export class World {
       }
       const keep = new THREE.Mesh(new THREE.BoxGeometry(R * 0.55, 520, R * 0.55), mat);
       keep.position.y = ground + 260; g.add(keep);
-    } else if (kind === 'mesaArch' || kind === 'iceArch') {
+    } else if (resolved === 'mesaArch' || resolved === 'iceArch') {
       const R = rng.float(420, 900);
       const arch = new THREE.Mesh(new THREE.TorusGeometry(R, R * 0.20, 7, 18, Math.PI),
-        kind === 'iceArch' ? this.materials.rock(0xcfe3f2) : this._propMats.rock);
+        resolved === 'iceArch' ? this.materials.rock(0xcfe3f2) : this._propMats.rock);
       arch.position.y = ground; g.add(arch);
-    } else if (kind === 'windmillRidge' || kind === 'solarField') {
+    } else if (resolved === 'windmillRidge' || resolved === 'solarField') {
       for (let i = 0; i < 9; i++) {
         const x = rng.float(-900, 900), z = rng.float(-900, 900);
         const gy = this.terrain.surface(pos.x + x, pos.z + z);
@@ -1262,7 +1870,7 @@ export class World {
         g.userData.spinners = g.userData.spinners || [];
         g.userData.spinners.push(hub);
       }
-    } else if (kind === 'conduitPylon' || kind === 'stormPylon' || kind === 'radarArray') {
+    } else if (resolved === 'radarArray') {
       for (let i = 0; i < 5; i++) {
         const x = rng.float(-800, 800), z = rng.float(-800, 800);
         const gy = this.terrain.surface(pos.x + x, pos.z + z);
@@ -1278,7 +1886,7 @@ export class World {
         const glow = new THREE.Mesh(new THREE.SphereGeometry(12, 6, 5), accent);
         glow.position.set(x, gy + h, z); g.add(glow);
       }
-    } else { // generic cluster: stadium / ruins / refinery / pipeworks / karst
+    } else { // generic cluster: the fallback for any unrecognised id
       const n = rng.int(4, 9);
       for (let i = 0; i < n; i++) {
         const x = rng.float(-600, 600), z = rng.float(-600, 600);
@@ -1334,6 +1942,820 @@ export class World {
     }
   }
 
+  /* ---------------------------------------------------------------------
+   * PROCEDURAL WORLD PASSES
+   * ------------------------------------------------------------------
+   * Each pass is a generator that yields between sub-passes so the chunk
+   * scheduler can time-slice a chunk build across several frames instead of
+   * dropping one. They run in dependency order from `buildChunk`:
+   *
+   *   hydrology -> roads -> civil -> venues -> traffic -> scatter
+   *
+   * Water is placed first because roads bridge it, roads are placed before
+   * buildings because settlement follows the road, and scatter runs last so
+   * vegetation can be rejected against everything already standing.
+   *
+   * All of them are seeded from the chunk RNG, so a new race seed relays the
+   * whole thing while the location's rule block holds its identity.
+   * ------------------------------------------------------------------ */
+
+  /**
+   * The settlement mask. One low-frequency noise field per world decides where
+   * civilisation is; every civil pass reads it, so towns, roads and traffic all
+   * agree about where the town is instead of each scattering independently.
+   *
+   * ENHANCED: Multi-octave clustering for neighborhood effect.
+   * Creates dense urban clusters with gradual falloff for realistic cities.
+   * Returns 0..1. `civil.coverage` is the fraction of suitable land that ends up
+   * settled — the 50–70% figure in the brief — implemented as a threshold on
+   * this field rather than a per-object dice roll, which is what makes a town a
+   * town and not a uniform sprinkle of houses.
+   */
+  _settlement(wx, wz) {
+    // Primary settlement field - large neighborhoods
+    const n1 = fbm2(wx * 0.00028, wz * 0.00028, this.seed + 917, 4);
+    // Secondary clustering - creates district boundaries
+    const n2 = fbm2(wx * 0.00055, wz * 0.00055, this.seed + 523, 3);
+    // Tertiary detail - adds variety within neighborhoods
+    const n3 = fbm2(wx * 0.0012, wz * 0.0012, this.seed + 741, 2);
+    
+    // Blend for dense clustering effect (75% coverage target)
+    const base = n1 * 0.5 + 0.5;
+    const cluster = n2 * 0.3 + 0.5;
+    const detail = n3 * 0.2 + 0.5;
+    
+    return clamp01((base * 0.6 + cluster * 0.25 + detail * 0.15) * 1.15);
+  }
+
+  /** True where the settlement field clears this location's coverage threshold. */
+  _isSettled(wx, wz) {
+    const cov = this.biome.civil?.coverage ?? 0.4;
+    // ENHANCED: Target 75% architecture coverage for dense cities
+    // Boosted coverage threshold to make maps predominantly urban
+    const targetCoverage = Math.max(cov, 0.75);  // Minimum 75% coverage
+    // coverage 0.75 -> threshold 0.25: the top 75% of the field is architecture
+    return this._settlement(wx, wz) > (1 - targetCoverage) * 0.70;
+  }
+
+  /**
+   * Signed distance-ish field for the river network, in the range -1..1.
+   * Zero is the channel centre. Built from ridged noise so the rivers braid and
+   * fork the way a real drainage network does rather than running as one line.
+   */
+  _riverField(wx, wz) {
+    const h = this.biome.hydrology || {};
+    const s = 0.00019 / Math.max(0.3, h.rivers || 1);
+    // ridged2 peaks along ridges; inverting gives valleys to put water in.
+    return 1 - ridged2(wx * s, wz * s, this.seed + 4409, 3);
+  }
+
+  /**
+   * Rivers, lakes, basins, waterfalls, flood plane and ice.
+   *
+   * Water is drawn as flat discs and ribbons sitting slightly above the terrain
+   * surface rather than as a carved heightfield: `TerrainField` is a pure
+   * function shared with the AI and the route builder, so carving into it here
+   * would desynchronise every other system from the mesh. Placing water on top
+   * costs one transparent plane and stays consistent everywhere.
+   */
+  *_buildHydrology(chunk, cx, cz, extent, rng) {
+    const hyd = this.biome.hydrology || {};
+    const d = this.quality.propDensity;
+    const frozen = !!hyd.frozen;
+    const dry = !!hyd.dry;
+
+    const waterMat = frozen
+      ? this.materials.structure(0xcfe3ee, 0.1, 0.22)
+      : this.materials.water(this.biome.ground.water);
+    const bedMat = this.materials.rock(
+      new THREE.Color(this.biome.ground.rock).offsetHSL(0, -0.06, dry ? 0.12 : -0.10).getHex());
+
+    /* --- river ribbons ---------------------------------------------------
+     * Walk the river field looking for channel crossings and lay a quad strip
+     * along each. A dry location gets the bed material and no water, which is
+     * exactly what a wadi looks like from the air. */
+    const riverCount = Math.round(6 * (hyd.rivers || 0) * clamp01(d + 0.35));
+    for (let i = 0; i < riverCount; i++) {
+      const startX = rng.float(-extent, extent);
+      const startZ = rng.float(-extent, extent);
+      const pts = [];
+      let px = startX, pz = startZ;
+      let dir = rng.float(0, TAU);
+      const step = 140;
+      for (let k = 0; k < 26; k++) {
+        // Follow the downhill gradient, softened by the river field so the
+        // channel meanders instead of running straight down the fall line.
+        const wx = cx + px, wz = cz + pz;
+        const h0 = this.terrain.height(wx, wz);
+        if (h0 < this.terrain.waterLevel - 30) break;
+        let best = dir, bestH = Infinity;
+        for (let a = -1; a <= 1; a++) {
+          const t = dir + a * 0.55;
+          const hh = this.terrain.height(wx + Math.sin(t) * step, wz + Math.cos(t) * step)
+            + this._riverField(wx + Math.sin(t) * step, wz + Math.cos(t) * step) * 120;
+          if (hh < bestH) { bestH = hh; best = t; }
+        }
+        dir = lerp(dir, best, 0.7) + rng.gauss(0, 0.12);
+        px += Math.sin(dir) * step;
+        pz += Math.cos(dir) * step;
+        if (Math.abs(px) > extent * 1.2 || Math.abs(pz) > extent * 1.2) break;
+        pts.push({ x: px, z: pz, h: this.terrain.height(cx + px, cz + pz) });
+      }
+      if (pts.length < 4) continue;
+      const width = rng.float(34, 110) * (0.6 + (hyd.rivers || 1) * 0.5);
+      const ribbon = this._ribbonGeometry(pts, width, 4);
+      if (!ribbon) continue;
+      const mesh = new THREE.Mesh(ribbon, dry ? bedMat : waterMat);
+      mesh.position.set(cx, 0, cz);
+      mesh.renderOrder = -1;
+      chunk.group.add(mesh);
+      chunk.disposables.push(ribbon);
+      chunk.riverPaths = chunk.riverPaths || [];
+      chunk.riverPaths.push({ pts, width });
+
+      /* Waterfalls: where the channel drops hard between two samples, hang a
+       * vertical sheet down the step. Only where the location has them. */
+      if (!dry && (hyd.waterfalls || 0) > 0) {
+        for (let k = 1; k < pts.length; k++) {
+          const drop = pts[k - 1].h - pts[k].h;
+          if (drop < 90 || rng.next() > (hyd.waterfalls || 0) * 0.5) continue;
+          const fall = new THREE.PlaneGeometry(width * 0.9, drop);
+          const fm = new THREE.Mesh(fall, waterMat);
+          const ang = Math.atan2(pts[k].x - pts[k - 1].x, pts[k].z - pts[k - 1].z);
+          fm.rotation.y = ang + Math.PI / 2;
+          fm.position.set(cx + pts[k].x, pts[k].h + drop / 2, cz + pts[k].z);
+          chunk.group.add(fm);
+          chunk.disposables.push(fall);
+          break; // one hero fall per river reads better than a staircase
+        }
+      }
+      if (i % 2 === 1) yield;
+    }
+    yield;
+
+    /* --- lakes, ponds and basins ----------------------------------------
+     * ENHANCED 5X: More water bodies for varied terrain.
+     * Placed in terrain depressions found by sampling: a candidate is a lake if
+     * the ground around it is higher than the centre in every direction. */
+    const lakeCount = Math.round(25 * ((hyd.lakes || 0) + (hyd.basins || 0) * 0.6) * clamp01(d + 0.3));
+    for (let i = 0; i < lakeCount; i++) {
+      const x = rng.float(-extent, extent), z = rng.float(-extent, extent);
+      const wx = cx + x, wz = cz + z;
+      const h = this.terrain.height(wx, wz);
+      if (h < this.terrain.waterLevel) continue;
+      if (this.terrain.slope(wx, wz, 120) > 0.14) continue;
+      const r = rng.float(120, 480) * (0.7 + (hyd.lakes || 0.5));
+      // Depression test: the rim has to sit above the centre on all four sides.
+      let rim = 0;
+      for (let a = 0; a < 4; a++) {
+        const t = (a / 4) * TAU;
+        if (this.terrain.height(wx + Math.sin(t) * r, wz + Math.cos(t) * r) > h + 4) rim++;
+      }
+      if (rim < 3) continue;
+      const geo = new THREE.CircleGeometry(r, 22);
+      geo.rotateX(-Math.PI / 2);
+      const mesh = new THREE.Mesh(geo, dry ? bedMat : waterMat);
+      mesh.position.set(wx, h + 3, wz);
+      chunk.group.add(mesh);
+      chunk.disposables.push(geo);
+      chunk.lakes = chunk.lakes || [];
+      chunk.lakes.push({ x: wx, z: wz, r, y: h + 3 });
+    }
+    yield;
+
+    /* --- standing flood water -------------------------------------------
+     * Drowned Flats. One large plane a few metres above the low ground, so the
+     * landscape reads as a lowland under water rather than a lake next to it. */
+    if ((hyd.flood || 0) > 0.5) {
+      const size = extent * 2.4;
+      const geo = new THREE.PlaneGeometry(size, size, 1, 1);
+      geo.rotateX(-Math.PI / 2);
+      const mesh = new THREE.Mesh(geo, waterMat);
+      mesh.position.set(cx, this.terrain.waterLevel + 34 * (hyd.flood || 1), cz);
+      mesh.renderOrder = -2;
+      chunk.group.add(mesh);
+      chunk.disposables.push(geo);
+    }
+  }
+
+  /**
+   * Build a flat quad strip through a list of {x, z, h} samples, draped `lift`
+   * metres above the terrain. Used for both rivers and roads — the only
+   * difference between them is the material and the width.
+   */
+  _ribbonGeometry(pts, width, lift = 1.5) {
+    if (!pts || pts.length < 2) return null;
+    const verts = [];
+    const idx = [];
+    const uvs = [];
+    const hw = width * 0.5;
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+      let tx = b.x - a.x, tz = b.z - a.z;
+      const len = Math.hypot(tx, tz) || 1;
+      tx /= len; tz /= len;
+      // Left normal in the ground plane.
+      const nx = -tz, nz = tx;
+      const p = pts[i];
+      verts.push(p.x + nx * hw, p.h + lift, p.z + nz * hw);
+      verts.push(p.x - nx * hw, p.h + lift, p.z - nz * hw);
+      const v = i / (pts.length - 1);
+      uvs.push(0, v, 1, v);
+      if (i < pts.length - 1) {
+        const o = i * 2;
+        idx.push(o, o + 2, o + 1, o + 1, o + 2, o + 3);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    g.setIndex(idx);
+    g.computeVertexNormals();
+    return g;
+  }
+
+  /**
+   * Road network. Main corridors, dirt service tracks, bridges over water and
+   * elevated flyovers where the location calls for them.
+   *
+   * The samples for every road built here are recorded on `chunk.roadPaths` so
+   * the traffic pass can drive along the roads that actually exist rather than
+   * inventing its own routes and floating vehicles over open ground.
+   */
+  *_buildRoads(chunk, cx, cz, extent, rng) {
+    const r = this.biome.roads || {};
+    const d = this.quality.propDensity;
+    chunk.roadPaths = [];
+
+    const layRoad = (opts) => {
+      const { width, mat, dirt, elevated } = opts;
+      // Roads run roughly straight with a slow drift; a road that meanders like
+      // a river reads as a footpath, and a perfectly straight one reads as a
+      // runway. The drift term is the difference.
+      let px = rng.float(-extent, extent), pz = -extent * 1.05;
+      let dir = rng.float(-0.5, 0.5);
+      const step = 190;
+      const pts = [];
+      const n = Math.ceil((extent * 2.2) / step);
+      for (let k = 0; k <= n; k++) {
+        const wx = cx + px, wz = cz + pz;
+        const h = this.terrain.height(wx, wz);
+        pts.push({ x: px, z: pz, h, wx, wz });
+        dir += rng.gauss(0, 0.09);
+        dir = clamp(dir, -0.9, 0.9);
+        px += Math.sin(dir) * step;
+        pz += Math.cos(dir) * step;
+      }
+      if (pts.length < 3) return;
+
+      /* Grade the road. Real roads cut and fill; letting the ribbon follow the
+       * raw heightfield produces a rollercoaster. A three-tap smoothing pass
+       * over the sample heights is enough to read as engineered. */
+      for (let pass = 0; pass < 3; pass++) {
+        for (let k = 1; k < pts.length - 1; k++) {
+          pts[k].h = pts[k].h * 0.4 + (pts[k - 1].h + pts[k + 1].h) * 0.3;
+        }
+      }
+
+      // Deck height: elevated sections and water crossings ride above grade.
+      let bridged = 0;
+      for (const p of pts) {
+        const ground = this.terrain.height(p.wx, p.wz);
+        const overWater = ground < this.terrain.waterLevel + 6;
+        if (overWater) { p.h = Math.max(p.h, this.terrain.waterLevel + 28); bridged++; }
+        if (elevated) p.h = Math.max(p.h, ground + 42);
+      }
+
+      const geo = this._ribbonGeometry(pts, width, dirt ? 1.2 : 2.2);
+      if (!geo) return;
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(cx, 0, cz);
+      mesh.receiveShadow = false;
+      chunk.group.add(mesh);
+      chunk.disposables.push(geo);
+
+      /* Centre line. Skipped on dirt, which has no markings, and emissive in a
+       * neon location so the road grid glows from altitude at night. */
+      if (!dirt && width > 16) {
+        const line = this._ribbonGeometry(pts, 1.6, (dirt ? 1.2 : 2.2) + 0.4);
+        if (line) {
+          const lm = new THREE.Mesh(line, this._matMarking);
+          lm.position.set(cx, 0, cz);
+          chunk.group.add(lm);
+          chunk.disposables.push(line);
+        }
+      }
+
+      /* Piers under any raised deck, so a bridge or a flyover has something
+       * holding it up and a solid column to fly into. */
+      if (bridged > 0 || elevated) {
+        for (let k = 2; k < pts.length - 2; k += 3) {
+          const p = pts[k];
+          const ground = this.terrain.height(p.wx, p.wz);
+          const clearance = p.h - ground;
+          if (clearance < 16) continue;
+          const pier = new THREE.CylinderGeometry(width * 0.14, width * 0.2, clearance, 7);
+          const pm = new THREE.Mesh(pier, this._matConcrete);
+          pm.position.set(p.wx, ground + clearance / 2, p.wz);
+          chunk.group.add(pm);
+          chunk.disposables.push(pier);
+          chunk.addCollider({
+            pos: new THREE.Vector3(p.wx, ground + clearance / 2, p.wz),
+            radius: Math.max(12, width * 0.3), damage: 48, type: 'bridge',
+            kind: 'structure', soft: false, object: null, spin: 0, hub: null,
+          });
+        }
+      }
+
+      chunk.roadPaths.push({ pts, width, dirt, cx, cz });
+    };
+
+    const mainCount = Math.round(3 * (r.main || 0) * clamp01(d + 0.4));
+    for (let i = 0; i < mainCount; i++) {
+      layRoad({
+        width: rng.float(26, 44) * (0.8 + (r.main || 0.5) * 0.5),
+        mat: this._matRoad, dirt: false,
+        elevated: rng.next() < (r.elevated || 0) * 0.6,
+      });
+    }
+    yield;
+
+    const dirtCount = Math.round(4 * (r.dirt || 0) * clamp01(d + 0.3));
+    for (let i = 0; i < dirtCount; i++) {
+      layRoad({ width: rng.float(9, 16), mat: this._matDirt, dirt: true, elevated: false });
+    }
+  }
+
+  /**
+   * Civilisation. Towns, districts and skylines, placed against the settlement
+   * mask so buildings cluster into places rather than dusting the map.
+   *
+   * The per-kind instanced meshes are the reason this is affordable: a town of
+   * 900 buildings drawn from twelve kinds is twelve draw calls, not 900.
+   */
+  *_buildCivilDistrict(chunk, cx, cz, extent, rng) {
+    const civil = this.biome.civil;
+    if (!civil || !this._structKinds.length) return;
+    const d = this.quality.propDensity;
+
+    /* INCREASED DENSITY 5X: Base population for the location's settlement scale.
+     * Buildings are now 5x more dense with clustering in neighborhoods.
+     * Maps are now 75% architecture / 25% free land for denser cities. */
+    const scaleCount = {
+      village: 650,      // 5x from 130
+      town: 1500,        // 5x from 300
+      city: 3100,        // 5x from 620
+      metropolis: 4500,  // 5x from 900
+      megacity: 5500,    // 5x from 1100
+    }[civil.scale] || 1300;  // 5x from 260
+    
+    // Enhanced density multiplier for clustering effect
+    const densityMult = (civil.density || 0.5) * 1.3;  // Extra boost for clustering
+    const total = Math.round(scaleCount * densityMult * clamp01(d + 0.35));
+    if (total <= 0) return;
+
+    const skyline = civil.skyline || 0;
+    const night = this.isNight;
+    const neon = (civil.neon || 0) > 0;
+
+    // Split the population across the location's kinds. Common kinds get more:
+    // ENHANCED: More variety - stadiums, sports complexes, amusement parks
+    // a town is mostly houses with one hospital, not equal parts of each.
+    const weightFor = (kind) => {
+      if (kind === 'house' || kind === 'neighbourhood' || kind === 'stiltHouse') return 6;
+      if (kind === 'apartment' || kind === 'office' || kind === 'warehouse') return 3.5;
+      // MASSIVE BOOST for skyscrapers and towers (dense urban skylines)
+      if (kind === 'skyscraper' || kind === 'glassTower') return 3.5 + skyline * 6;
+      if (kind === 'twinTowers' || kind === 'monument' || kind === 'observatory') return 0.8;
+      // BOOST for stadiums, malls, and large complexes (amusement parks effect)
+      if (kind === 'stadium' || kind === 'mall' || kind === 'powerStation') return 1.5;
+      if (kind === 'hospital' || kind === 'government' || kind === 'church') return 0.9;
+      return 1.8;
+    };
+    const weights = this._structKinds.map((k) => weightFor(k.kind));
+    const wSum = weights.reduce((a, b) => a + b, 0);
+
+    for (let ki = 0; ki < this._structKinds.length; ki++) {
+      const { kind, spec } = this._structKinds[ki];
+      const count = Math.max(1, Math.round(total * (weights[ki] / wSum)));
+      const geo = this._structGeos.get(spec.arch);
+
+      /* Material choice reads the spec and the location: glass towers get the
+       * glass material, infrastructure gets concrete or steel, and anything with
+       * floors gets the window-mapped facade so a city lights up after dark. */
+      let mat;
+      if (spec.glass) mat = this._matGlass;
+      else if (['tank', 'frame', 'lattice', 'panels', 'dock'].includes(spec.arch)) mat = this._matSteel;
+      else if (['statue', 'spire', 'dome'].includes(spec.arch)) mat = this._matConcrete;
+      else mat = this._matFacade;
+
+      const tall = ['tower', 'glass', 'twin'].includes(spec.arch);
+      // Water-edge kinds want the shoreline; everything else wants dry, flat land.
+      const wantsWater = kind === 'dock' || kind === 'stiltHouse';
+
+      this._addInstanced(chunk, cx, cz, geo, mat, count, (i, m) => {
+        const x = rng.float(-extent, extent), z = rng.float(-extent, extent);
+        const wx = cx + x, wz = cz + z;
+        const h = this.terrain.height(wx, wz);
+
+        if (wantsWater) {
+          // Within a few metres of the waterline, either side of it.
+          if (Math.abs(h - this.terrain.waterLevel) > 26) return false;
+        } else {
+          if (h < this.terrain.waterLevel + 5) return false;
+          if (h > this.terrain.snowLine * 1.05) return false;
+        }
+        // Buildings need buildable ground. Tall ones need flatter ground still.
+        if (this.terrain.slope(wx, wz, 90) > (tall ? 0.16 : 0.30)) return false;
+        if (!wantsWater && !this._isSettled(wx, wz)) return false;
+
+        /* Height. The settlement field doubles as a downtown gradient: the
+         * denser the mask, the taller the building, so a skyline peaks at the
+         * centre of a district and falls away at the edges the way a real one
+         * does. Without this every tower is the same height and the city reads
+         * as a barcode. */
+        const core = clamp01((this._settlement(wx, wz) - 0.45) * 2.4);
+        const hScale = tall
+          ? rng.float(0.55, 1.0) * (0.35 + core * 1.5) * (0.5 + skyline)
+          : rng.float(0.72, 1.35);
+        const wScale = rng.float(0.82, 1.25);
+
+        const bw = spec.w * wScale;
+        const bh = Math.max(6, spec.h * hScale);
+        const bd = spec.d * wScale * rng.float(0.9, 1.12);
+
+        m.makeRotationY(Math.round(rng.float(0, 8)) * (Math.PI / 4));
+        m.scale(_v1.set(bw, bh, bd));
+        m.setPosition(x, h - 1, z);
+
+        /* Colliders. Derived from the spec, not from the mesh, because these are
+         * instances — there is no per-instance object to walk. Tall shafts get a
+         * stack up the height so the whole building is solid rather than one
+         * ball of air near the roof. */
+        const cr = Math.max(bw, bd) * 0.52;
+        const spans = clamp(Math.round(bh / (cr * 1.8)), 1, 5);
+        for (let k = 0; k < spans; k++) {
+          chunk.addCollider({
+            pos: new THREE.Vector3(wx, h + bh * ((k + 0.5) / spans), wz),
+            radius: cr, damage: 48, type: 'building', kind: 'structure',
+            soft: false, object: null, spin: 0, hub: null,
+          });
+        }
+        return true;
+      });
+
+      /* Neon crowns. A megacity at night needs light coming off the buildings,
+       * not just window maps: one emissive cap per tall tower, instanced, so the
+       * skyline glows for one extra draw call. */
+      if (neon && tall && night) {
+        const capGeo = this._structGeos.get('glass');
+        this._addInstanced(chunk, cx, cz, capGeo, this._matNeon, Math.round(count * 0.5), (i, m) => {
+          const x = rng.float(-extent, extent), z = rng.float(-extent, extent);
+          const wx = cx + x, wz = cz + z;
+          const h = this.terrain.height(wx, wz);
+          if (h < this.terrain.waterLevel + 5) return false;
+          if (this.terrain.slope(wx, wz, 90) > 0.16) return false;
+          if (!this._isSettled(wx, wz)) return false;
+          const core = clamp01((this._settlement(wx, wz) - 0.45) * 2.4);
+          const bh = Math.max(6, spec.h * rng.float(0.55, 1.0) * (0.35 + core * 1.5) * (0.5 + skyline));
+          const s = spec.w * 0.3;
+          m.makeRotationY(rng.float(0, TAU));
+          m.scale(_v1.set(s, s * 0.5, s));
+          m.setPosition(x, h - 1 + bh, z);
+          return true;
+        });
+      }
+      if (ki % 3 === 2) yield;
+    }
+  }
+
+  /**
+   * Sports and entertainment venues. One or two per chunk, built as real groups
+   * rather than instances: there are only a handful, they are large, and a
+   * stadium needs a bowl and a ferris wheel needs to turn.
+   * ENHANCED 5X: More venues including stadiums, sports complexes, amusement parks.
+   */
+  *_buildVenues(chunk, cx, cz, extent, rng) {
+    const list = this.biome.venues;
+    if (!list || !list.length) return;
+    const d = this.quality.propDensity;
+    // ENHANCED: 5x more venues for sports complexes and amusement parks
+    const count = Math.round(rng.float(3, 12) * clamp01(d + 0.4));
+
+    for (let i = 0; i < count; i++) {
+      const kind = rng.pick(list);
+      // Venues need a lot of flat ground, so search a few candidates rather
+      // than taking the first point and building a stadium on a cliff.
+      let px = 0, pz = 0, ok = false;
+      for (let t = 0; t < 8; t++) {
+        const x = rng.float(-extent * 0.85, extent * 0.85);
+        const z = rng.float(-extent * 0.85, extent * 0.85);
+        const wx = cx + x, wz = cz + z;
+        const h = this.terrain.height(wx, wz);
+        if (h < this.terrain.waterLevel + 8) continue;
+        if (this.terrain.slope(wx, wz, 200) > 0.12) continue;
+        px = x; pz = z; ok = true; break;
+      }
+      if (!ok) continue;
+
+      const g = this._buildVenue(kind, cx + px, cz + pz, rng);
+      if (!g) continue;
+      chunk.group.add(g);
+      this._registerStructureColliders(chunk, g, 22, 40, 'venue');
+      if (g.userData.spinners) chunk.animated.push({ spinners: g.userData.spinners });
+      for (const geo of g.userData.geos || []) chunk.disposables.push(geo);
+      yield;
+    }
+  }
+
+  /** One venue as a group at world (wx, wz). */
+  _buildVenue(kind, wx, wz, rng) {
+    const g = new THREE.Group();
+    const geos = [];
+    const ground = this.terrain.surface(wx, wz);
+    const concrete = this._matConcrete;
+    const steel = this._matSteel;
+    const accent = this._matNeon;
+    const turf = this.materials.foliage(0x2f6b2c);
+
+    const add = (geo, mat, x, y, z, ry = 0) => {
+      geos.push(geo);
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      m.rotation.y = ry;
+      g.add(m);
+      return m;
+    };
+
+    /** Stadium bowl: an elliptical ring of raked stand plus a pitch. */
+    const bowl = (rx, rz, height, pitchMat) => {
+      const ring = new THREE.CylinderGeometry(1, 1, height, 30, 1, true);
+      ring.scale(rx, 1, rz);
+      add(ring, concrete, 0, height / 2, 0);
+      const outer = new THREE.CylinderGeometry(1.22, 1.28, height * 0.72, 30, 1, true);
+      outer.scale(rx, 1, rz);
+      add(outer, concrete, 0, height * 0.36, 0);
+      const roof = new THREE.RingGeometry(1, 1.3, 30);
+      roof.rotateX(-Math.PI / 2);
+      roof.scale(rx, 1, rz);
+      add(roof, steel, 0, height, 0);
+      const pitch = new THREE.CircleGeometry(1, 26);
+      pitch.rotateX(-Math.PI / 2);
+      pitch.scale(rx * 0.82, 1, rz * 0.82);
+      add(pitch, pitchMat, 0, 2, 0);
+      // Floodlight pylons.
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * TAU + Math.PI / 4;
+        const mast = new THREE.CylinderGeometry(1.4, 2.4, height * 1.7, 6);
+        add(mast, steel, Math.sin(a) * rx * 1.15, height * 0.85, Math.cos(a) * rz * 1.15);
+        const lamp = new THREE.BoxGeometry(14, 5, 3);
+        add(lamp, accent, Math.sin(a) * rx * 1.15, height * 1.7, Math.cos(a) * rz * 1.15,
+          a + Math.PI);
+      }
+    };
+
+    switch (kind) {
+      case 'footballStadium':
+        bowl(rng.float(130, 175), rng.float(105, 140), rng.float(38, 56), turf);
+        break;
+      case 'cricketStadium': {
+        const r = rng.float(150, 195);
+        bowl(r, r, rng.float(34, 48), turf);
+        const strip = new THREE.BoxGeometry(9, 0.6, 44);
+        add(strip, this.materials.rock(0xb8a882), 0, 2.4, 0);
+        break;
+      }
+      case 'racingArena': {
+        bowl(rng.float(170, 220), rng.float(120, 160), rng.float(26, 38),
+          this.materials.structure(0x3a3d41, 0.05, 0.9));
+        // Track oval inside the bowl.
+        const track = new THREE.RingGeometry(0.6, 0.92, 28);
+        track.rotateX(-Math.PI / 2);
+        track.scale(150, 1, 110);
+        add(track, this._matRoad, 0, 3, 0);
+        break;
+      }
+      case 'sportsComplex': {
+        for (let i = 0; i < 3; i++) {
+          const hall = new THREE.CylinderGeometry(30, 30, 90, 10, 1, false, 0, Math.PI);
+          hall.rotateZ(Math.PI / 2);
+          hall.rotateY(Math.PI / 2);
+          add(hall, steel, (i - 1) * 78, 0, rng.float(-20, 20));
+        }
+        const pad = new THREE.BoxGeometry(280, 2, 150);
+        add(pad, concrete, 0, 1, 0);
+        break;
+      }
+      case 'sportsGround': {
+        const pad = new THREE.CircleGeometry(rng.float(90, 140), 20);
+        pad.rotateX(-Math.PI / 2);
+        add(pad, turf, 0, 1.5, 0);
+        for (let i = 0; i < 2; i++) {
+          const stand = new THREE.BoxGeometry(120, 14, 22);
+          add(stand, concrete, 0, 7, (i ? 1 : -1) * 95);
+        }
+        break;
+      }
+      case 'golfCourse': {
+        // Greens and bunkers rather than buildings — the read from the air is
+        // the mown shapes, not a clubhouse.
+        for (let i = 0; i < 7; i++) {
+          const green = new THREE.CircleGeometry(rng.float(38, 78), 14);
+          green.rotateX(-Math.PI / 2);
+          const gx = rng.float(-420, 420), gz = rng.float(-420, 420);
+          add(green, turf, gx, this.terrain.height(wx + gx, wz + gz) - ground + 1.5, gz);
+          if (rng.bool(0.6)) {
+            const sand = new THREE.CircleGeometry(rng.float(12, 26), 10);
+            sand.rotateX(-Math.PI / 2);
+            add(sand, this.materials.rock(0xd8caa2),
+              gx + rng.float(-60, 60),
+              this.terrain.height(wx + gx, wz + gz) - ground + 1.8, gz + rng.float(-60, 60));
+          }
+        }
+        const club = new THREE.BoxGeometry(46, 12, 28);
+        add(club, this._matFacade, 0, 6, -300);
+        break;
+      }
+      case 'concertGround': {
+        // A shell stage facing an open field.
+        const shell = new THREE.SphereGeometry(52, 14, 8, 0, Math.PI, 0, Math.PI / 2);
+        shell.rotateY(Math.PI / 2);
+        add(shell, concrete, 0, 0, -110);
+        const stage = new THREE.BoxGeometry(96, 6, 44);
+        add(stage, steel, 0, 4, -110);
+        const field = new THREE.CircleGeometry(190, 20);
+        field.rotateX(-Math.PI / 2);
+        add(field, turf, 0, 1.2, 60);
+        for (let i = 0; i < 6; i++) {
+          const tower = new THREE.BoxGeometry(5, 40, 5);
+          add(tower, steel, rng.float(-170, 170), 20, rng.float(-40, 160));
+        }
+        break;
+      }
+      case 'ferrisWheel':
+      case 'amusementPark':
+      case 'themePark':
+      case 'circus': {
+        const spinners = [];
+        if (kind !== 'circus') {
+          // Ferris wheel: a rim, spokes and a hub on an A-frame. This is the one
+          // piece of venue geometry that has to turn, so the wheel group goes
+          // into userData.spinners and the world update rotates it.
+          const R = rng.float(60, 100);
+          const wheel = new THREE.Group();
+          const rim = new THREE.TorusGeometry(R, 2.4, 6, 30);
+          geos.push(rim);
+          wheel.add(new THREE.Mesh(rim, steel));
+          for (let i = 0; i < 12; i++) {
+            const spoke = new THREE.BoxGeometry(1.6, R * 2, 1.6);
+            spoke.rotateZ((i / 12) * Math.PI);
+            geos.push(spoke);
+            wheel.add(new THREE.Mesh(spoke, steel));
+            const carA = (i / 12) * TAU;
+            const car = new THREE.BoxGeometry(9, 9, 9);
+            car.translate(Math.cos(carA) * R, Math.sin(carA) * R, 0);
+            geos.push(car);
+            wheel.add(new THREE.Mesh(car, accent));
+          }
+          wheel.position.set(0, R + 14, 0);
+          wheel.userData.spin = rng.float(0.10, 0.24) * rng.sign();
+          g.add(wheel);
+          spinners.push(wheel);
+          for (const s of [-1, 1]) {
+            const leg = new THREE.CylinderGeometry(2, 4, R + 16, 6);
+            add(leg, steel, s * R * 0.42, (R + 16) / 2, 0);
+          }
+        }
+        if (kind !== 'ferrisWheel') {
+          // Big top and side stalls.
+          const tent = new THREE.ConeGeometry(46, 40, 12);
+          add(tent, accent, rng.float(-190, -120), 20, rng.float(-60, 60));
+          for (let i = 0; i < 9; i++) {
+            const stall = new THREE.BoxGeometry(14, 7, 14);
+            add(stall, this._matFacade, rng.float(-220, 220), 3.5, rng.float(-220, 220));
+          }
+          if (kind === 'themePark' || kind === 'amusementPark') {
+            // A coaster read as a looping ribbon of track.
+            const pts = [];
+            for (let i = 0; i <= 30; i++) {
+              const t = (i / 30) * TAU;
+              pts.push({ x: Math.sin(t) * 140, z: Math.cos(t * 2) * 90,
+                h: 22 + Math.sin(t * 3) * 20 });
+            }
+            const track = this._ribbonGeometry(pts, 6, 0);
+            if (track) add(track, steel, 0, 0, 0);
+          }
+        }
+        if (spinners.length) g.userData.spinners = spinners;
+        break;
+      }
+      default:
+        return null;
+    }
+
+    g.position.set(wx, ground, wz);
+    g.userData.geos = geos;
+    return g;
+  }
+
+  /**
+   * Ground traffic. Vehicles are instanced per kind and advanced along the road
+   * samples recorded by `_buildRoads`, so they stay on the tarmac and disappear
+   * with the chunk that owns their road.
+   *
+   * The whole fleet for one kind is one instanced mesh whose matrices are
+   * rewritten each frame from `chunk.animated`. That keeps a city's worth of
+   * moving traffic at one draw call per vehicle type.
+   */
+  *_buildTraffic(chunk, cx, cz, extent, rng) {
+    const roads = chunk.roadPaths;
+    const volume = this.biome.roads?.traffic || 0;
+    if (!roads || !roads.length || volume <= 0) return;
+    const d = this.quality.propDensity;
+
+    // Thin the fleet hard on low presets: traffic is the most per-frame-expensive
+    // thing in the world build, because unlike everything else it moves.
+    const perRoad = Math.round(rng.float(4, 11) * volume * clamp01(d + 0.15));
+    if (perRoad <= 0) return;
+
+    const pool = ['car', 'car', 'taxi', 'van', 'truck', 'bus'];
+    if (volume > 1.0) pool.push('taxi', 'car', 'police');
+    if (this.biome.civil?.scale === 'village') pool.push('tractor', 'truck');
+    if ((this.biome.props?.buildings || 0) > 0.6) pool.push('construction', 'fuelTruck');
+    pool.push('ambulance', 'fireTruck');
+
+    // Group the fleet by kind so each kind is a single instanced mesh.
+    const byKind = new Map();
+    for (const road of roads) {
+      if (road.pts.length < 4) continue;
+      for (let i = 0; i < perRoad; i++) {
+        const kind = rng.pick(pool);
+        if (!byKind.has(kind)) byKind.set(kind, []);
+        byKind.get(kind).push({
+          road,
+          t: rng.next(),                                   // 0..1 along the road
+          speed: rng.float(0.006, 0.020) / (road.dirt ? 2.2 : 1),
+          dir: rng.bool(0.5) ? 1 : -1,
+          lane: rng.float(0.18, 0.38) * (rng.bool(0.5) ? 1 : -1),
+          scale: rng.float(0.9, 1.15),
+        });
+      }
+    }
+
+    for (const [kind, agents] of byKind) {
+      const { geo, mat } = this._vehicle(kind);
+      const mesh = new THREE.InstancedMesh(geo, mat, agents.length);
+      mesh.userData.shared = true;
+      mesh.frustumCulled = false;   // matrices move every frame; the bound is stale
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      mesh.position.set(cx, 0, cz);
+      chunk.group.add(mesh);
+      chunk.animated.push({ traffic: { mesh, agents } });
+      // Seed the first frame so nothing pops in at the origin.
+      this._advanceTraffic({ mesh, agents }, 0);
+      yield;
+    }
+  }
+
+  /**
+   * Step one traffic fleet. Called from `World.update` every frame for every
+   * live chunk, so it is deliberately allocation-free — the scratch matrix and
+   * vectors are module-level and reused.
+   */
+  _advanceTraffic(fleet, dt) {
+    const { mesh, agents } = fleet;
+    for (let i = 0; i < agents.length; i++) {
+      const a = agents[i];
+      a.t += a.speed * a.dir * dt;
+      // Wrap rather than turn around: a vehicle that reverses on the spot at the
+      // end of the road is far more noticeable than one that reappears.
+      if (a.t > 1) a.t -= 1;
+      if (a.t < 0) a.t += 1;
+
+      const pts = a.road.pts;
+      const f = a.t * (pts.length - 1);
+      const i0 = Math.min(pts.length - 2, Math.floor(f));
+      const frac = f - i0;
+      const p0 = pts[i0], p1 = pts[i0 + 1];
+
+      const x = lerp(p0.x, p1.x, frac);
+      const z = lerp(p0.z, p1.z, frac);
+      const y = lerp(p0.h, p1.h, frac);
+
+      let tx = p1.x - p0.x, tz = p1.z - p0.z;
+      const len = Math.hypot(tx, tz) || 1;
+      tx /= len; tz /= len;
+      const nx = -tz * a.road.width * a.lane;
+      const nz = tx * a.road.width * a.lane;
+
+      _m1.makeRotationY(Math.atan2(tx * a.dir, tz * a.dir));
+      _m1.scale(_v1.set(a.scale, a.scale, a.scale));
+      _m1.setPosition(x + nx, y + 2.4, z + nz);
+      mesh.setMatrixAt(i, _m1);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+
   /** Ground scatter for one chunk footprint (trees / buildings / rocks). */
   *_buildScatter(chunk, centerX, centerZ, extent, rng) {
     const d = this.quality.propDensity;
@@ -1356,49 +2778,87 @@ export class World {
       });
     };
 
-    const addInstanced = (geo, mat, count, place) => {
-      if (count <= 0) return;
-      const mesh = new THREE.InstancedMesh(geo, mat, count);
-      mesh.userData.shared = true;
-      mesh.frustumCulled = true;
-      mesh.castShadow = false;
-      let n = 0;
-      for (let i = 0; i < count; i++) {
-        if (place(i, _m1)) { mesh.setMatrixAt(n++, _m1); }
-      }
-      mesh.count = n;
-      mesh.instanceMatrix.needsUpdate = true;
-      if (n > 0) { mesh.position.set(centerX, 0, centerZ); chunk.group.add(mesh); }
-      return mesh;
-    };
+    const addInstanced = (geo, mat, count, place) =>
+      this._addInstanced(chunk, centerX, centerZ, geo, mat, count, place);
 
     const rand = () => rng.float(-extent, extent);
 
     /* --- forest -----------------------------------------------------------
-     * Two species, placed against a low-frequency stand mask rather than
-     * uniformly: real woodland is dense in patches and open in between, and
-     * that contrast is what makes it read as terrain instead of noise. */
-    const placeTree = (scaleLo, scaleHi) => (i, m) => {
+     * One instanced mesh per species the location actually grows, placed against
+     * a low-frequency stand mask rather than uniformly: real woodland is dense in
+     * patches and open in between, and that contrast is what makes it read as
+     * terrain instead of noise.
+     *
+     * Species share the mask but not the phase, so a mixed forest sorts itself
+     * into stands — pine on the high ground, broadleaf in the valley — instead of
+     * being every species evenly shuffled everywhere. */
+    const flora = this.biome.flora || {};
+    const treeLine = flora.treeLine ?? this.terrain.snowLine * 0.95;
+    const species = this._floraSpecies;
+    const floraDensity = flora.density ?? 1;
+
+    const placeTree = (sp, si, scaleLo, scaleHi) => (i, m) => {
       const x = rand(), z = rand();
       const wx = centerX + x, wz = centerZ + z;
       const h = this.terrain.height(wx, wz);
       if (h < this.terrain.waterLevel + 8) return false;
-      if (h > this.terrain.snowLine * 0.95) return false;
+      if (h > treeLine) return false;
       if (this.terrain.slope(wx, wz, 60) > 0.55) return false;
       // Stand mask: thin the canopy where the mask is low so clearings appear.
       if (fbm2(wx * 0.00055, wz * 0.00055, this.seed + 211, 3) + 0.35 < rng.next() * 0.9) return false;
+      // Per-species mask, offset by index, so species segregate into stands.
+      if (species.length > 1) {
+        const own = fbm2(wx * 0.00042, wz * 0.00042, this.seed + 3300 + si * 700, 2);
+        if (own + 0.55 < rng.next()) return false;
+      }
+      // Palms want the waterline; dead wood wants the marginal ground nothing
+      // else will grow on. Both look wrong scattered evenly through a forest.
+      if (sp === 'palm' && h > this.terrain.waterLevel + 220) return false;
+      if (sp === 'dead' && h < this.terrain.waterLevel + 40 && rng.bool(0.7)) return false;
       const s = rng.float(scaleLo, scaleHi);
       m.makeRotationY(rng.float(0, TAU));
       m.scale(_v1.set(s, s * rng.float(0.8, 1.4), s));
       m.setPosition(x, h, z);
       return true;
     };
-    const treeCount = Math.round(1150 * p.trees * d);
-    addInstanced(this._propGeos.tree, this._propMats.tree, treeCount, placeTree(1.5, 4.2));
-    yield;
-    addInstanced(this._propGeos.tree2, this._propMats.tree2,
-      Math.round(treeCount * 0.45), placeTree(1.1, 3.0));
-    yield;
+
+    const treeBudget = Math.round(1650 * p.trees * floraDensity * d);
+    const perSpecies = Math.max(1, Math.round(treeBudget / Math.max(1, species.length)));
+    for (let si = 0; si < species.length; si++) {
+      const sp = species[si];
+      // Pines and rosewoods are big trees; palms and dead wood are not.
+      const big = sp === 'pine' || sp === 'rosewood' || sp === 'conifer';
+      addInstanced(this._floraGeos.get(sp), this._floraMats.get(sp), perSpecies,
+        placeTree(sp, si, big ? 1.6 : 1.1, big ? 4.2 : 3.0));
+      yield;
+    }
+
+    /* --- flower beds -----------------------------------------------------
+     * Daffodils, white lilies and wildflower. Low, dense and colourful — the
+     * thing that stops a green location being a single flat green. Placed only
+     * on gentle, low, unforested ground, which is where meadow actually is. */
+    if (this._flowerGeo && this._flowerMats.length) {
+      const bedCount = Math.round(700 * clamp01(flora.grass ?? 1) * floraDensity * d
+        / this._flowerMats.length);
+      for (let fi = 0; fi < this._flowerMats.length; fi++) {
+        addInstanced(this._flowerGeo, this._flowerMats[fi], bedCount, (i, m) => {
+          const x = rand(), z = rand();
+          const wx = centerX + x, wz = centerZ + z;
+          const h = this.terrain.height(wx, wz);
+          if (h < this.terrain.waterLevel + 4) return false;
+          if (h > treeLine * 0.8) return false;
+          if (this.terrain.slope(wx, wz, 40) > 0.30) return false;
+          // Beds clump: flowers grow where flowers already are.
+          if (fbm2(wx * 0.0016, wz * 0.0016, this.seed + 5100 + fi * 311, 2) + 0.18 < rng.next()) return false;
+          const s = rng.float(2.4, 7.0);
+          m.makeRotationY(rng.float(0, TAU));
+          m.scale(_v1.set(s, s * rng.float(0.6, 1.1), s));
+          m.setPosition(x, h, z);
+          return true;
+        });
+      }
+      yield;
+    }
 
     /* --- ground cover ---------------------------------------------------
      * Scrub between the trees. Very cheap geometry, very high count — this is
@@ -1419,14 +2879,20 @@ export class World {
     });
     yield;
 
-    // Buildings
-    const bCount = Math.round(620 * p.buildings * d);
+    /* --- outskirts --------------------------------------------------------
+     * Generic massing *outside* the settled areas. `_buildCivilDistrict` owns
+     * everything inside the settlement mask and builds it from real structure
+     * kinds; this pass only fills the fringe — the isolated blocks and sheds on
+     * the edge of town — so the two never stack on the same ground. */
+    const bCount = Math.round(240 * p.buildings * d);
     addInstanced(this._propGeos.building, this._propMats.building, bCount, (i, m) => {
       const x = rand(), z = rand();
       const wx = centerX + x, wz = centerZ + z;
       const h = this.terrain.height(wx, wz);
       if (h < this.terrain.waterLevel + 4) return false;
       if (this.terrain.slope(wx, wz, 80) > 0.34) return false;
+      // Leave the town centre to the civil pass.
+      if (this._isSettled(wx, wz)) return false;
       // Cluster into districts so cities do not look like uniform noise.
       const cluster = fbm2(wx * 0.00035, wz * 0.00035, this.seed + 61, 3);
       if (cluster < 0.02) return false;
@@ -1653,11 +3119,31 @@ export class World {
       chunk.group.add(lm);
       this._registerStructureColliders(chunk, lm, 26, 52, 'landmark');
       if (lm.userData.spinners) chunk.animated.push({ spinners: lm.userData.spinners });
+      // A landmark that resolved to a venue owns per-instance geometry that
+      // nothing else will free, because it is not flagged `shared`.
+      for (const geo of lm.userData.geos || []) chunk.disposables.push(geo);
     }
     yield;
 
     const mid = this.path.nodes[Math.min(chunk.startNode + this.nodesPerChunk / 2 | 0, this.path.nodes.length - 1)];
-    yield* this._buildScatter(chunk, mid.pos.x, mid.pos.z, this.nodesPerChunk * this.path.spacing * 0.55, rng);
+    const extent = this.nodesPerChunk * this.path.spacing * 0.55;
+
+    /* --- the procedural world ----------------------------------------
+     * Order matters: water first, then the roads that bridge it, then the
+     * settlement that follows the roads, then the venues and the traffic that
+     * belong to that settlement, and finally the vegetation, which fills
+     * whatever is left. Each pass yields internally. */
+    yield* this._buildHydrology(chunk, mid.pos.x, mid.pos.z, extent, rng);
+    yield;
+    yield* this._buildRoads(chunk, mid.pos.x, mid.pos.z, extent, rng);
+    yield;
+    yield* this._buildCivilDistrict(chunk, mid.pos.x, mid.pos.z, extent, rng);
+    yield;
+    yield* this._buildVenues(chunk, mid.pos.x, mid.pos.z, extent, rng);
+    yield;
+    yield* this._buildTraffic(chunk, mid.pos.x, mid.pos.z, extent, rng);
+    yield;
+    yield* this._buildScatter(chunk, mid.pos.x, mid.pos.z, extent, rng);
 
     chunk.built = true;
     this.chunks.set(index, chunk);
@@ -1737,6 +3223,7 @@ export class World {
     for (const chunk of this.chunks.values()) {
       colliderCount += chunk.colliders.length;
       for (const a of chunk.animated) {
+        if (a.traffic) { this._advanceTraffic(a.traffic, dt); continue; }
         if (a.spinners) { for (const s of a.spinners) s.rotation.z += dt * (s.userData.spin || 1); continue; }
         if (a.hub) { a.hub.rotation.z += dt * (a.hub.userData.spin || 1); continue; }
         if (a.isRing) { a.object.rotateZ(dt * a.spin); continue; }
@@ -1895,6 +3382,13 @@ export class World {
     this.chunks.clear(); this.chunkPool.length = 0;
     this.terrainMesh.dispose();
     for (const g of Object.values(this._propGeos || {})) g?.dispose?.();
+    // The shared libraries are per-world, not per-chunk, so nothing else frees
+    // them: chunk disposal deliberately skips anything flagged `shared`.
+    for (const g of (this._structGeos?.values() || [])) g?.dispose?.();
+    for (const g of (this._floraGeos?.values() || [])) g?.dispose?.();
+    for (const g of (this._vehicleGeos?.values() || [])) g?.dispose?.();
+    this._flowerGeo?.dispose?.();
+    this._structGeos?.clear(); this._floraGeos?.clear(); this._vehicleGeos?.clear();
     this._cloudMat?.dispose();
     this.checkpointList.length = 0;
     this.dynamicColliders = [];

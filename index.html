@@ -136,6 +136,12 @@
 
   <!-- top right: timers -->
   <div class="hud-tr">
+    <!-- One click strips every control overlay off the screen. Lives outside
+         the hidden set itself, or there would be no way back. -->
+    <button class="hud-hide-btn" id="btn-hud-hide" type="button" aria-pressed="false" aria-label="Hide controls">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true"><path d="M2 12s3.6-6.4 10-6.4S22 12 22 12s-3.6 6.4-10 6.4S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>
+      <span id="btn-hud-hide-text">HIDE UI</span>
+    </button>
     <div class="hud-laptime">
       <div class="hud-label" id="hud-timer-label">LAP TIME</div>
       <div class="hud-timer-value" id="hud-timer">00:00.000</div>
@@ -296,15 +302,29 @@
   </div>
   <div class="touch-right">
     <div class="touch-powers" id="touch-powers"></div>
-    <div class="touch-lean">
-      <button class="tbtn tbtn-lean" data-touch="leanLeft" type="button" aria-label="Lean left">◄</button>
-      <button class="tbtn tbtn-lean" data-touch="leanRight" type="button" aria-label="Lean right">►</button>
-    </div>
-    <!-- weapons, shown only in the combat modes -->
+    <!-- Weapons, shown only in the combat modes.
+         Two toggles pick what is armed, two round fire buttons shoot it. The
+         toggles cycle within their family, so one thumb selects and the other
+         fires without ever leaving the right-hand cluster. -->
     <div class="touch-weapons" id="touch-weapons">
-      <button class="tbtn tbtn-wpn" data-touch="cycleWeapon" type="button" aria-label="Select weapon">WPN</button>
-      <button class="tbtn tbtn-wpn" data-touch="heavy" type="button" aria-label="Launch weapon">LNCH</button>
-      <button class="tbtn tbtn-gun" data-touch="gun" type="button" aria-label="Fire guns">GUN</button>
+      <div class="touch-arm">
+        <button class="tbtn tbtn-arm" data-touch="cycleGun" id="touch-arm-gun" type="button" aria-label="Toggle guns">
+          <span class="arm-label">GUNS</span>
+          <span class="arm-name" id="touch-gun-name">—</span>
+        </button>
+        <button class="tbtn tbtn-arm" data-touch="cycleWeapon" id="touch-arm-msl" type="button" aria-label="Toggle missiles">
+          <span class="arm-label">MSL</span>
+          <span class="arm-name" id="touch-msl-name">—</span>
+        </button>
+      </div>
+      <div class="touch-fire">
+        <button class="tbtn tbtn-fire tbtn-fire-gun" data-touch="gun" type="button" aria-label="Fire guns">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="7.5"/><path d="M12 1.5v5M12 17.5v5M1.5 12h5M17.5 12h5"/></svg>
+        </button>
+        <button class="tbtn tbtn-fire tbtn-fire-msl" data-touch="heavy" type="button" aria-label="Launch missile">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2.2c2.6 2.7 3.9 6 3.9 9.6L12 21l-3.9-9.2c0-3.6 1.3-6.9 3.9-9.6z"/><path d="M8.1 13.4 5 16.6l1.4 3.1M15.9 13.4 19 16.6l-1.4 3.1"/></svg>
+        </button>
+      </div>
     </div>
     <div class="touch-primary">
       <button class="tbtn tbtn-brake" data-touch="brake" type="button">BRK</button>

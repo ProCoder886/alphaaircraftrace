@@ -5,10 +5,13 @@
  * weather, track segments, powers, difficulty, achievements) plus the seeded
  * deterministic RNG / noise utilities every procedural system is built on.
  *
- * Nothing in this module imports anything else — it is the root of the graph.
+ * The only import is the venue roster in ./locations.js, which imports nothing
+ * itself and is therefore the true root of the graph.
  */
 
-export const VERSION = '1.0.0';
+import { LOCATIONS, LOCATIONS_BY_ID } from './locations.js';
+
+export const VERSION = '1.1.0';
 export const GAME_NAME = 'ALPHA AIRCRAFT RACE 3D';
 
 /* ===========================================================================
@@ -183,18 +186,31 @@ export const WORLD = {
  * The airframe is simulated in game units per second — a scale the terrain,
  * corridor and streaming budget are all built around. True airspeed is
  * reported from that through one constant: `msPerMach` units of simulated
- * speed is one Mach, and one Mach is 1234.8 km/h. Both the HUD and every
+ * speed is one Mach, and one Mach is `kmh` km/h. Both the HUD and every
  * threshold in the game read Mach, so the whole envelope moves together if
  * this number is ever retuned.
  *
  *   stall  ~Mach 2.1   cruise ~Mach 9   dry max ~Mach 14
  *   reheat ~Mach 18    turbo overdrive  Mach 20 (hard ceiling)
+ *
+ * The readout scale is deliberately NOT real-world Mach. At the true 1234.8
+ * km/h per Mach the speed tape spent the whole race in five and six figures,
+ * which is unreadable at a glance and drowns the digit that actually changes.
+ * One Mach reads as 100 km/h instead, so the ceiling lands on a round Mach 20
+ * / 2000 km/h and the number moves in hundreds. This is a DISPLAY scale only:
+ * `msPerMach` is untouched, so the flight model, the terrain scale and every
+ * threshold in the game fly exactly as they did before.
  * ======================================================================== */
 export const MACH = {
-  kmh: 1234.8,                 // km/h in one Mach
+  kmh: 100,                    // km/h shown per Mach — display scale, see above
   msPerMach: 35,               // simulated m/s per Mach
   max: 20,                     // absolute ceiling for player and enemies
   blurMach: 15,                // Mach at which motion blur and trails saturate
+  /* Airframe buffet. Past this the whole picture starts trembling — a purely
+   * presentational cue that you are into the part of the envelope the airframe
+   * was not really built for, and it lands just under the Mach 18 redline. */
+  shakeMach: 17,               // Mach above which the screen shakes
+  shakeAmount: 0.42,           // shake magnitude at the Mach 20 ceiling
   /* ---- thermal limit ----------------------------------------------------
    * The airframe is cleared to Mach 18. Above it the intakes and the leading
    * edges start soaking heat faster than the fuel can carry it away, and the
@@ -578,232 +594,96 @@ export const AIRCRAFT_BY_ID = Object.fromEntries(AIRCRAFT.map((a) => [a.id, a]))
 /* ===========================================================================
  * BIOMES / LOCATIONS
  * ------------------------------------------------------------------------
- * Every entry is an *aerial* interpretation: the aircraft always races through
- * open sky, the biome decides what is underneath and what the air looks like.
+ * The roster lives in ./locations.js, which is the root of the graph. A
+ * location is an *aerial* interpretation: the aircraft always races through
+ * open sky, and the location decides what is underneath it, what is built on
+ * it and what the air looks like.
+ *
+ * A LOCATION IS A WORLD TYPE, NOT A FIXED MAP — every field over there is a
+ * constraint the seeded generators in world.js grow a fresh world inside.
+ *
+ * `BIOMES` is the historical name and stays as the alias every other module
+ * already imports; here a biome and a location are the same record, so the
+ * alias is honest rather than a shim.
  * ======================================================================== */
 
-const B = (o) => o;
-export const BIOMES = [
-  B({
-    id: 'forest', name: 'EMERALD BASIN', short: 'Forest',
-    desc: 'Deep conifer valleys and river basins under fast-moving weather. Wide corridors, soft terrain, generous racing lines.',
-    difficulty: 0.75, order: 0,
-    ground: { base: 0x2f4a2a, high: 0x6f7f5a, low: 0x1e3320, rock: 0x5a5b52, snowLine: 2600, water: 0x1d3b4a },
-    relief: { scale: 0.00042, height: 900, ridge: 0.45, roughness: 0.55, plateau: 0.2, water: 0.22 },
-    props: { trees: 1.0, buildings: 0.12, rocks: 0.4, towers: 0.1, farms: 0.25 },
-    weather: ['clear', 'cloudy', 'lightRain', 'heavyRain', 'fog', 'sunset'],
-    times: ['morning', 'noon', 'afternoon', 'sunset'],
-    accent: 0x7fdc6a, fogTint: 0xa9c4b4, landmark: ['ridgeTower', 'archBridge', 'dam'],
-  }),
-  B({
-    id: 'ice', name: 'GLACIER REACH', short: 'Ice',
-    desc: 'Frozen ranges and calving shelves. Whiteout squalls, brutal crosswinds and ice pillars that appear with almost no warning.',
-    difficulty: 1.15, order: 1,
-    ground: { base: 0xd8e6ef, high: 0xffffff, low: 0x9fb9cc, rock: 0x6d7c8a, snowLine: 200, water: 0x2b5c78 },
-    relief: { scale: 0.00036, height: 1500, ridge: 0.75, roughness: 0.6, plateau: 0.28, water: 0.3 },
-    props: { trees: 0.05, buildings: 0.06, rocks: 0.9, towers: 0.12, farms: 0 },
-    weather: ['snow', 'heavySnow', 'fog', 'storm', 'clear', 'cloudy'],
-    times: ['morning', 'noon', 'dusk'],
-    accent: 0x9fe8ff, fogTint: 0xcfe3f2, landmark: ['iceArch', 'ridgeTower', 'shelfWall'],
-  }),
-  B({
-    id: 'night', name: 'MIDNIGHT CORRIDOR', short: 'Night',
-    desc: 'A dark-sky circuit lit only by gate energy, aircraft trails and the settlements far below. Depth perception is the whole challenge.',
-    difficulty: 1.25, order: 2,
-    ground: { base: 0x121820, high: 0x1c2530, low: 0x0a0e14, rock: 0x1a1f27, snowLine: 3200, water: 0x060b12 },
-    relief: { scale: 0.0004, height: 1100, ridge: 0.55, roughness: 0.5, plateau: 0.22, water: 0.25 },
-    props: { trees: 0.4, buildings: 0.55, rocks: 0.4, towers: 0.5, farms: 0.1 },
-    weather: ['night', 'neonNight', 'lightRain', 'fog', 'storm'],
-    times: ['night'],
-    accent: 0x63a8ff, fogTint: 0x121a26, landmark: ['beaconTower', 'archBridge', 'ringGateArray'],
-  }),
-  B({
-    id: 'desert', name: 'ASHFALL FLATS', short: 'Desert',
-    desc: 'Endless dunes broken by mesa fields and dry riverbeds. Thermals throw the aircraft around; dust storms erase the horizon.',
-    difficulty: 0.95, order: 3,
-    ground: { base: 0xc9a06a, high: 0xe6cfa2, low: 0x8f6b42, rock: 0xa5703f, snowLine: 9999, water: 0x3c6b6b },
-    relief: { scale: 0.00030, height: 700, ridge: 0.35, roughness: 0.4, plateau: 0.55, water: 0.06 },
-    props: { trees: 0.05, buildings: 0.1, rocks: 0.7, towers: 0.2, farms: 0.05 },
-    weather: ['clear', 'dustStorm', 'sunset', 'sunrise', 'cloudy'],
-    times: ['noon', 'afternoon', 'sunset', 'sunrise'],
-    accent: 0xffb35c, fogTint: 0xd9b183, landmark: ['mesaArch', 'solarField', 'ridgeTower'],
-  }),
-  B({
-    id: 'jungle', name: 'VERDANT DELTA', short: 'Jungle',
-    desc: 'Steaming canopy, karst spires and braided waterways. Low visibility, high humidity and gates hidden inside the cloud layer.',
-    difficulty: 1.05, order: 4,
-    ground: { base: 0x1f4a26, high: 0x3f6b32, low: 0x123219, rock: 0x4c5340, snowLine: 9999, water: 0x14494a },
-    relief: { scale: 0.00050, height: 820, ridge: 0.68, roughness: 0.7, plateau: 0.14, water: 0.34 },
-    props: { trees: 1.35, buildings: 0.08, rocks: 0.55, towers: 0.12, farms: 0.08 },
-    weather: ['heavyRain', 'fog', 'cloudy', 'sunrise', 'storm', 'lightRain'],
-    times: ['sunrise', 'morning', 'noon'],
-    accent: 0x54e08a, fogTint: 0xa8c7ae, landmark: ['ruinTemple', 'archBridge', 'karstSpire'],
-  }),
-  B({
-    id: 'bunker', name: 'IRON BASTION', short: 'Bunker',
-    desc: 'A hardened military plateau of concrete revetments, blast doors and searchlight towers. Tight, overcast, unfriendly airspace.',
-    difficulty: 1.2, order: 5,
-    ground: { base: 0x4a4d4a, high: 0x6a6d68, low: 0x2c2f2e, rock: 0x585b57, snowLine: 9999, water: 0x223034 },
-    relief: { scale: 0.00034, height: 520, ridge: 0.3, roughness: 0.45, plateau: 0.7, water: 0.1 },
-    props: { trees: 0.1, buildings: 0.85, rocks: 0.35, towers: 0.75, farms: 0 },
-    weather: ['cloudy', 'fog', 'storm', 'lightRain', 'night'],
-    times: ['morning', 'afternoon', 'dusk'],
-    accent: 0xffa63d, fogTint: 0x8a8f92, landmark: ['bunkerComplex', 'radarArray', 'beaconTower'],
-  }),
-  B({
-    id: 'basement', name: 'THE UNDERVAULT', short: 'Basement',
-    desc: 'A collapsed sub-surface reservoir the size of a city. You fly beneath a rock ceiling on industrial lighting alone — the tightest corridor on the circuit.',
-    difficulty: 1.45, order: 6,
-    ground: { base: 0x33302c, high: 0x4a453e, low: 0x1a1815, rock: 0x3d3831, snowLine: 9999, water: 0x152026 },
-    relief: { scale: 0.00058, height: 640, ridge: 0.8, roughness: 0.8, plateau: 0.15, water: 0.3 },
-    props: { trees: 0, buildings: 0.5, rocks: 1.2, towers: 0.5, farms: 0 },
-    weather: ['fog', 'night', 'cloudy'],
-    times: ['night'],
-    accent: 0xffc24d, fogTint: 0x2a2622, ceiling: true, landmark: ['pillarField', 'bunkerComplex', 'pipeworks'],
-  }),
-  B({
-    id: 'mudwater', name: 'DROWNED FLATS', short: 'Mud & Water',
-    desc: 'A flooded delta of silt banks and standing water. Mirror-flat reflections, permanent rain and almost no altitude to play with.',
-    difficulty: 1.0, order: 7,
-    ground: { base: 0x4a4030, high: 0x6b5c44, low: 0x2a2620, rock: 0x54503f, snowLine: 9999, water: 0x2c3f3a },
-    relief: { scale: 0.00028, height: 260, ridge: 0.2, roughness: 0.35, plateau: 0.5, water: 0.62 },
-    props: { trees: 0.45, buildings: 0.2, rocks: 0.3, towers: 0.25, farms: 0.3 },
-    weather: ['heavyRain', 'lightRain', 'fog', 'storm', 'cloudy', 'sunset'],
-    times: ['morning', 'afternoon', 'sunset', 'dusk'],
-    accent: 0x8fd8c0, fogTint: 0x9aa79c, landmark: ['dam', 'archBridge', 'stiltVillage'],
-  }),
-  B({
-    id: 'fortress', name: 'CITADEL SIEGE', short: 'Fortress',
-    desc: 'A walled highland citadel of curtain walls, keeps and siege towers, ringed by storm cells. Low passes between the bastions are worth the risk.',
-    difficulty: 1.3, order: 8,
-    ground: { base: 0x4f4a41, high: 0x736c5e, low: 0x2b2a27, rock: 0x605a4f, snowLine: 3000, water: 0x2b4450 },
-    relief: { scale: 0.00040, height: 1050, ridge: 0.62, roughness: 0.58, plateau: 0.42, water: 0.28 },
-    props: { trees: 0.3, buildings: 0.95, rocks: 0.6, towers: 0.9, farms: 0.15 },
-    weather: ['storm', 'thunderstorm', 'cloudy', 'fog', 'sunset', 'heavyRain'],
-    times: ['afternoon', 'dusk', 'sunset'],
-    accent: 0xffb648, fogTint: 0x8e9299, landmark: ['citadel', 'archBridge', 'beaconTower'],
-  }),
-  B({
-    id: 'redstone', name: 'CRIMSON CONDUIT', short: 'Redstone',
-    desc: 'Iron-red mesa country threaded with glowing power conduits and pylon lines. Every shortcut runs between live energy fields.',
-    difficulty: 1.2, order: 9,
-    ground: { base: 0x8c3a24, high: 0xc2653a, low: 0x4a1c14, rock: 0x9c4a2a, snowLine: 9999, water: 0x3a2a26 },
-    relief: { scale: 0.00033, height: 880, ridge: 0.5, roughness: 0.5, plateau: 0.62, water: 0.08 },
-    props: { trees: 0.05, buildings: 0.25, rocks: 0.85, towers: 0.8, farms: 0 },
-    weather: ['clear', 'dustStorm', 'sunset', 'thunderstorm', 'night'],
-    times: ['afternoon', 'sunset', 'dusk'],
-    accent: 0xff4a2a, fogTint: 0xb47458, landmark: ['conduitPylon', 'mesaArch', 'refinery'],
-  }),
-  B({
-    id: 'tower', name: 'SPIRE ASCENT', short: 'Tower',
-    desc: 'A cluster of kilometre-scale spires rising out of the cloud deck. Vertical racing: the route climbs and dives around the structures themselves.',
-    difficulty: 1.35, order: 10,
-    ground: { base: 0x3a4048, high: 0x545c66, low: 0x22262c, rock: 0x424852, snowLine: 4200, water: 0x1d2a34 },
-    relief: { scale: 0.00038, height: 760, ridge: 0.42, roughness: 0.45, plateau: 0.45, water: 0.2 },
-    props: { trees: 0.15, buildings: 0.6, rocks: 0.35, towers: 1.6, farms: 0 },
-    weather: ['cloudy', 'clear', 'storm', 'fog', 'sunset', 'neonNight'],
-    times: ['morning', 'afternoon', 'sunset', 'night'],
-    accent: 0x6fd0ff, fogTint: 0xa8b6c4, landmark: ['megaSpire', 'skyBridge', 'ringGateArray'],
-  }),
-  B({
-    id: 'village', name: 'HOLLOW VALE', short: 'Village',
-    desc: 'Patchwork farmland, hamlets and windmill ridges at first light. The gentlest terrain on the circuit — and the fastest lap times.',
-    difficulty: 0.65, order: 11,
-    ground: { base: 0x5c7a3e, high: 0x8ea45e, low: 0x3d5430, rock: 0x6a6552, snowLine: 3000, water: 0x2f5a68 },
-    relief: { scale: 0.00030, height: 480, ridge: 0.25, roughness: 0.4, plateau: 0.5, water: 0.2 },
-    props: { trees: 0.6, buildings: 0.45, rocks: 0.2, towers: 0.3, farms: 1.2 },
-    weather: ['sunrise', 'clear', 'cloudy', 'lightRain', 'fog'],
-    times: ['sunrise', 'morning', 'noon'],
-    accent: 0xffd98a, fogTint: 0xcfd6b8, landmark: ['windmillRidge', 'stiltVillage', 'archBridge'],
-  }),
-  B({
-    id: 'city', name: 'MERIDIAN SPRAWL', short: 'City',
-    desc: 'A living megacity of glass towers and elevated arterials. The line runs between the buildings, not above them.',
-    difficulty: 1.1, order: 12,
-    ground: { base: 0x3c4149, high: 0x596069, low: 0x24282e, rock: 0x454a52, snowLine: 9999, water: 0x1c3040 },
-    relief: { scale: 0.00026, height: 340, ridge: 0.2, roughness: 0.3, plateau: 0.75, water: 0.18 },
-    props: { trees: 0.3, buildings: 1.6, rocks: 0.1, towers: 1.1, farms: 0 },
-    weather: ['clear', 'cloudy', 'lightRain', 'sunset', 'night', 'neonNight', 'fog'],
-    times: ['morning', 'noon', 'afternoon', 'sunset', 'night'],
-    accent: 0x64c8ff, fogTint: 0xb9c6d2, landmark: ['megaSpire', 'skyBridge', 'stadium'],
-  }),
-  B({
-    id: 'mountain', name: 'TITAN RANGE', short: 'Mountain',
-    desc: 'Serrated high peaks and glacial saddles. The route threads passes barely wider than a wingspan at nine hundred metres a second.',
-    difficulty: 1.25, order: 13,
-    ground: { base: 0x565f5a, high: 0xe8eef2, low: 0x33403c, rock: 0x6a716d, snowLine: 1800, water: 0x24444f },
-    relief: { scale: 0.00030, height: 2100, ridge: 0.9, roughness: 0.7, plateau: 0.12, water: 0.14 },
-    props: { trees: 0.5, buildings: 0.08, rocks: 1.0, towers: 0.15, farms: 0.05 },
-    weather: ['clear', 'cloudy', 'snow', 'storm', 'fog', 'sunset'],
-    times: ['sunrise', 'morning', 'afternoon', 'sunset'],
-    accent: 0xbfe6ff, fogTint: 0xb8c8d6, landmark: ['ridgeTower', 'archBridge', 'summitGate'],
-  }),
-  B({
-    id: 'canyon', name: 'RIFT CANYONS', short: 'Canyon',
-    desc: 'A drainage network cut a kilometre deep. Almost the entire race happens below the rim, where the walls decide your line.',
-    difficulty: 1.3, order: 14,
-    ground: { base: 0xa8663c, high: 0xd39a63, low: 0x5c3421, rock: 0x8f5230, snowLine: 9999, water: 0x2f5560 },
-    relief: { scale: 0.00042, height: 1250, ridge: 0.85, roughness: 0.62, plateau: 0.55, water: 0.16 },
-    props: { trees: 0.12, buildings: 0.1, rocks: 1.1, towers: 0.25, farms: 0 },
-    weather: ['clear', 'dustStorm', 'sunset', 'cloudy', 'thunderstorm'],
-    times: ['morning', 'noon', 'afternoon', 'sunset'],
-    accent: 0xffa04a, fogTint: 0xc99a72, landmark: ['mesaArch', 'archBridge', 'canyonNarrows'],
-  }),
-  B({
-    id: 'storm', name: 'TEMPEST FRONT', short: 'Storm',
-    desc: 'A permanent supercell system. Lightning fields, violent shear and cloud walls that swallow gates whole. The circuit\'s highest-risk venue.',
-    difficulty: 1.5, order: 15,
-    ground: { base: 0x3b4348, high: 0x545f66, low: 0x232a2f, rock: 0x474f55, snowLine: 3400, water: 0x1b2a33 },
-    relief: { scale: 0.00040, height: 1250, ridge: 0.7, roughness: 0.65, plateau: 0.25, water: 0.32 },
-    props: { trees: 0.3, buildings: 0.2, rocks: 0.6, towers: 0.4, farms: 0.05 },
-    weather: ['thunderstorm', 'storm', 'heavyRain', 'fog'],
-    times: ['afternoon', 'dusk', 'night'],
-    accent: 0x8fb6ff, fogTint: 0x6b7783, landmark: ['stormPylon', 'ridgeTower', 'archBridge'],
-  }),
-  B({
-    id: 'neon', name: 'NEON MEGACITY', short: 'Neon',
-    desc: 'Rain-slick hologram canyons at three in the morning. Every surface is a light source and every reflection lies about the distance.',
-    difficulty: 1.4, order: 16,
-    ground: { base: 0x191d29, high: 0x2a3145, low: 0x0d1018, rock: 0x212636, snowLine: 9999, water: 0x0d1622 },
-    relief: { scale: 0.00026, height: 300, ridge: 0.2, roughness: 0.3, plateau: 0.8, water: 0.18 },
-    props: { trees: 0.1, buildings: 1.8, rocks: 0.05, towers: 1.4, farms: 0 },
-    weather: ['neonNight', 'night', 'heavyRain', 'fog', 'lightRain'],
-    times: ['night'],
-    accent: 0xff2fd0, fogTint: 0x2a2140, landmark: ['megaSpire', 'skyBridge', 'holoArray'],
-  }),
-];
+export {
+  LOCATIONS, LOCATIONS_BY_ID, LOCATION_MENU, RANDOM_LOCATION,
+  STRUCTURE_KINDS, VENUE_KINDS, VEHICLE_KINDS, TREE_SPECIES, FLOWER_KINDS,
+} from './locations.js';
 
-export const BIOMES_BY_ID = Object.fromEntries(BIOMES.map((b) => [b.id, b]));
+export const BIOMES = LOCATIONS;
+export const BIOMES_BY_ID = LOCATIONS_BY_ID;
 
 /* ===========================================================================
  * WEATHER + TIME OF DAY
+ * ------------------------------------------------------------------------
+ * Every state below is selectable from the main menu. A location publishes a
+ * `weather` pool of the states that make sense for it — you cannot fly a dust
+ * storm through a glacier — and the menu greys out anything outside that pool.
+ * `Random` (the default) draws from the pool at launch using the run seed.
+ *
+ * `cloud`/`fog`/`vis` drive the sky shader and fog density, `precip` picks the
+ * particle field, `wind`/`turb` feed the flight model, and `sat`/`exposure`
+ * grade the final image. `time` pins the sun where a state implies one.
  * ======================================================================== */
 
 export const WEATHER = {
-  clear:        { name: 'Clear',          cloud: 0.22, fog: 0.35, vis: 1.00, precip: null,  precipRate: 0,    wind: 0.25, turb: 0.20, lightning: 0,    sat: 1.05, exposure: 1.00 },
+  /* ---- clear family ---- */
+  clear:        { name: 'Clear Sky',      cloud: 0.22, fog: 0.35, vis: 1.00, precip: null,  precipRate: 0,    wind: 0.25, turb: 0.20, lightning: 0,    sat: 1.05, exposure: 1.00 },
+  brightSun:    { name: 'Bright Sunny',   cloud: 0.10, fog: 0.22, vis: 1.00, precip: null,  precipRate: 0,    wind: 0.18, turb: 0.14, lightning: 0,    sat: 1.12, exposure: 1.06 },
+  partlyCloudy: { name: 'Partly Cloudy',  cloud: 0.42, fog: 0.42, vis: 0.94, precip: null,  precipRate: 0,    wind: 0.32, turb: 0.26, lightning: 0,    sat: 1.02, exposure: 0.98 },
   cloudy:       { name: 'Cloudy',         cloud: 0.68, fog: 0.55, vis: 0.86, precip: null,  precipRate: 0,    wind: 0.40, turb: 0.35, lightning: 0,    sat: 0.94, exposure: 0.94 },
-  lightRain:    { name: 'Light Rain',     cloud: 0.78, fog: 0.70, vis: 0.72, precip: 'rain', precipRate: 0.35, wind: 0.50, turb: 0.45, lightning: 0,    sat: 0.90, exposure: 0.88 },
-  heavyRain:    { name: 'Heavy Rain',     cloud: 0.92, fog: 0.88, vis: 0.54, precip: 'rain', precipRate: 1.00, wind: 0.72, turb: 0.68, lightning: 0.05, sat: 0.84, exposure: 0.80 },
-  storm:        { name: 'Storm',          cloud: 0.96, fog: 0.92, vis: 0.48, precip: 'rain', precipRate: 0.80, wind: 0.92, turb: 0.90, lightning: 0.25, sat: 0.80, exposure: 0.76 },
-  thunderstorm: { name: 'Thunderstorm',   cloud: 1.00, fog: 0.95, vis: 0.42, precip: 'rain', precipRate: 1.15, wind: 1.00, turb: 1.00, lightning: 1.00, sat: 0.78, exposure: 0.72 },
+  overcast:     { name: 'Overcast',       cloud: 0.88, fog: 0.62, vis: 0.80, precip: null,  precipRate: 0,    wind: 0.46, turb: 0.40, lightning: 0,    sat: 0.86, exposure: 0.88 },
+  darkClouds:   { name: 'Dark Clouds',    cloud: 1.05, fog: 0.74, vis: 0.68, precip: null,  precipRate: 0,    wind: 0.62, turb: 0.56, lightning: 0.02, sat: 0.78, exposure: 0.80 },
+  /* ---- cloud-structure states — the sky itself is the terrain ---- */
+  floatingClouds:  { name: 'Floating Clouds',  cloud: 0.58, fog: 0.40, vis: 0.92, precip: null, precipRate: 0, wind: 0.28, turb: 0.30, lightning: 0, sat: 1.04, exposure: 1.00, banks: 1.3 },
+  suspendedClouds: { name: 'Suspended Clouds', cloud: 0.75, fog: 0.50, vis: 0.88, precip: null, precipRate: 0, wind: 0.22, turb: 0.34, lightning: 0, sat: 1.02, exposure: 0.98, banks: 1.8 },
+  denseCloud:   { name: 'Dense Cloud',    cloud: 1.20, fog: 0.85, vis: 0.46, precip: null,  precipRate: 0,    wind: 0.55, turb: 0.55, lightning: 0,    sat: 0.88, exposure: 0.90 },
+  /* ---- obscuration ---- */
+  fog:          { name: 'Fog',            cloud: 0.60, fog: 0.95, vis: 0.46, precip: null,  precipRate: 0,    wind: 0.18, turb: 0.24, lightning: 0,    sat: 0.86, exposure: 0.94 },
+  fogBank:      { name: 'Fog Bank',       cloud: 0.72, fog: 1.20, vis: 0.34, precip: null,  precipRate: 0,    wind: 0.20, turb: 0.28, lightning: 0,    sat: 0.82, exposure: 0.92 },
+  frozenFog:    { name: 'Frozen Fog',     cloud: 0.78, fog: 1.15, vis: 0.36, precip: 'snow', precipRate: 0.25, wind: 0.34, turb: 0.34, lightning: 0,    sat: 0.80, exposure: 1.00 },
+  dustStorm:    { name: 'Dust Atmosphere',cloud: 0.55, fog: 1.10, vis: 0.38, precip: 'dust', precipRate: 0.9,  wind: 0.85, turb: 0.78, lightning: 0,    sat: 0.92, exposure: 0.94, tint: 0xd9a463 },
+  /* ---- precipitation ---- */
+  lightRain:    { name: 'Light Rain',     cloud: 0.78, fog: 0.70, vis: 0.72, precip: 'rain', precipRate: 0.35, wind: 0.50, turb: 0.45, lightning: 0,    sat: 0.90, exposure: 0.88, wet: 0.55 },
+  heavyRain:    { name: 'Heavy Rain',     cloud: 0.92, fog: 0.88, vis: 0.54, precip: 'rain', precipRate: 1.00, wind: 0.72, turb: 0.68, lightning: 0.05, sat: 0.84, exposure: 0.80, wet: 1.00 },
   snow:         { name: 'Snow',           cloud: 0.80, fog: 0.78, vis: 0.66, precip: 'snow', precipRate: 0.45, wind: 0.45, turb: 0.42, lightning: 0,    sat: 0.86, exposure: 1.02 },
   heavySnow:    { name: 'Heavy Snow',     cloud: 0.95, fog: 0.95, vis: 0.40, precip: 'snow', precipRate: 1.10, wind: 0.80, turb: 0.72, lightning: 0,    sat: 0.78, exposure: 0.98 },
-  fog:          { name: 'Fog Bank',       cloud: 0.72, fog: 1.20, vis: 0.34, precip: null,  precipRate: 0,    wind: 0.20, turb: 0.28, lightning: 0,    sat: 0.82, exposure: 0.92 },
-  denseCloud:   { name: 'Dense Cloud',    cloud: 1.20, fog: 0.85, vis: 0.46, precip: null,  precipRate: 0,    wind: 0.55, turb: 0.55, lightning: 0,    sat: 0.88, exposure: 0.90 },
-  dustStorm:    { name: 'Dust Storm',     cloud: 0.55, fog: 1.10, vis: 0.38, precip: 'dust', precipRate: 0.9,  wind: 0.85, turb: 0.78, lightning: 0,    sat: 0.92, exposure: 0.94, tint: 0xd9a463 },
-  sunset:       { name: 'Sunset',         cloud: 0.45, fog: 0.55, vis: 0.90, precip: null,  precipRate: 0,    wind: 0.30, turb: 0.25, lightning: 0,    sat: 1.14, exposure: 1.02, time: 'sunset' },
+  storm:        { name: 'Storm',          cloud: 0.96, fog: 0.92, vis: 0.48, precip: 'rain', precipRate: 0.80, wind: 0.92, turb: 0.90, lightning: 0.25, sat: 0.80, exposure: 0.76, wet: 0.90 },
+  thunderstorm: { name: 'Thunderstorm',   cloud: 1.00, fog: 0.95, vis: 0.42, precip: 'rain', precipRate: 1.15, wind: 1.00, turb: 1.00, lightning: 1.00, sat: 0.78, exposure: 0.72, wet: 1.00 },
+  /* ---- times of day that carry their own light ---- */
+  dawn:         { name: 'Dawn',           cloud: 0.44, fog: 0.78, vis: 0.84, precip: null,  precipRate: 0,    wind: 0.22, turb: 0.20, lightning: 0,    sat: 1.06, exposure: 1.04, time: 'dawn' },
   sunrise:      { name: 'Sunrise',        cloud: 0.50, fog: 0.72, vis: 0.86, precip: null,  precipRate: 0,    wind: 0.28, turb: 0.24, lightning: 0,    sat: 1.10, exposure: 1.00, time: 'sunrise' },
+  goldenHour:   { name: 'Golden Hour',    cloud: 0.38, fog: 0.50, vis: 0.92, precip: null,  precipRate: 0,    wind: 0.26, turb: 0.22, lightning: 0,    sat: 1.18, exposure: 1.04, time: 'goldenHour' },
+  sunset:       { name: 'Sunset',         cloud: 0.45, fog: 0.55, vis: 0.90, precip: null,  precipRate: 0,    wind: 0.30, turb: 0.25, lightning: 0,    sat: 1.14, exposure: 1.02, time: 'sunset' },
+  dusk:         { name: 'Dusk',           cloud: 0.52, fog: 0.62, vis: 0.84, precip: null,  precipRate: 0,    wind: 0.30, turb: 0.28, lightning: 0,    sat: 1.02, exposure: 1.10, time: 'dusk' },
   night:        { name: 'Night',          cloud: 0.42, fog: 0.55, vis: 0.80, precip: null,  precipRate: 0,    wind: 0.32, turb: 0.30, lightning: 0,    sat: 0.94, exposure: 1.18, time: 'night' },
-  neonNight:    { name: 'Neon Night',     cloud: 0.62, fog: 0.80, vis: 0.66, precip: 'rain', precipRate: 0.45, wind: 0.40, turb: 0.38, lightning: 0,    sat: 1.22, exposure: 1.22, time: 'night', tint: 0x5a3aff },
+  neonNight:    { name: 'Neon Night',     cloud: 0.62, fog: 0.80, vis: 0.66, precip: 'rain', precipRate: 0.45, wind: 0.40, turb: 0.38, lightning: 0,    sat: 1.22, exposure: 1.22, time: 'night', tint: 0x5a3aff, wet: 0.85, neon: 1 },
 };
 export const WEATHER_IDS = Object.keys(WEATHER);
 
+/**
+ * The order the WEATHER tab lists states in. `random` is not a weather state —
+ * it is the instruction to draw one from the location's pool, and it is the
+ * shipping default.
+ */
+export const WEATHER_MENU = [
+  'random',
+  'clear', 'brightSun', 'partlyCloudy', 'cloudy', 'overcast', 'darkClouds',
+  'floatingClouds', 'suspendedClouds', 'fog', 'fogBank',
+  'dawn', 'sunrise', 'goldenHour', 'sunset', 'dusk', 'night', 'neonNight',
+  'lightRain', 'heavyRain', 'snow', 'heavySnow', 'storm', 'thunderstorm', 'dustStorm',
+];
+
 /** Sun elevation/azimuth + colour identity per time of day. */
 export const TIME_OF_DAY = {
+  dawn:      { name: 'Dawn',      elev: -2,  azim: 88,  sun: 0xff9a6a, ambient: 0x46557e, ground: 0x4a4438, intensity: 1.25, sky: 0.24, stars: 0.42 },
   sunrise:   { name: 'Sunrise',   elev: 5,   azim: 96,  sun: 0xffb072, ambient: 0x5a6b8c, ground: 0x6b5a48, intensity: 2.4, sky: 0.42, stars: 0.15 },
   morning:   { name: 'Morning',   elev: 32,  azim: 118, sun: 0xfff0d8, ambient: 0x8aa4c8, ground: 0x6b7264, intensity: 3.5, sky: 0.9,  stars: 0 },
   noon:      { name: 'Noon',      elev: 72,  azim: 176, sun: 0xffffff, ambient: 0x9dbbe0, ground: 0x76806f, intensity: 4.1, sky: 1.0,  stars: 0 },
   afternoon: { name: 'Afternoon', elev: 40,  azim: 232, sun: 0xffeccb, ambient: 0x8fabd0, ground: 0x726f5f, intensity: 3.3, sky: 0.86, stars: 0 },
+  goldenHour:{ name: 'Golden Hour',elev: 12, azim: 256, sun: 0xffb466, ambient: 0x7a6f96, ground: 0x6a5a44, intensity: 2.9, sky: 0.56, stars: 0.04 },
   sunset:    { name: 'Sunset',    elev: 4,   azim: 268, sun: 0xff9a4d, ambient: 0x6a5f86, ground: 0x5c4a3c, intensity: 2.6, sky: 0.38, stars: 0.2 },
   dusk:      { name: 'Dusk',      elev: -4,  azim: 282, sun: 0xff6a3c, ambient: 0x3f4a72, ground: 0x2e3040, intensity: 1.1, sky: 0.2,  stars: 0.55 },
   night:     { name: 'Night',     elev: -16, azim: 310, sun: 0x9fc0ff, ambient: 0x1d2740, ground: 0x14181f, intensity: 0.45, sky: 0.06, stars: 1.0 },
@@ -924,7 +804,7 @@ export const DIFFICULTY_ORDER = ['normal', 'hard', 'elite', 'master', 'legendary
 
 export const MODES = {
   endless: {
-    id: 'endless', name: 'ENDLESS FLIGHT', tag: 'DEFAULT',
+    id: 'endless', name: 'ENDLESS FLIGHT', tag: null,
     desc: 'An infinite procedurally streamed sky route that escalates for as long as you survive. Distance and score are everything.',
     hasLaps: false, hasRivals: true, hasTimer: false, escalates: true, failOnDamage: true, primary: 'distance',
   },
@@ -949,7 +829,7 @@ export const MODES = {
     hasLaps: false, hasRivals: false, hasTimer: true, startTime: 45, escalates: true, failOnDamage: true, primary: 'checkpoints',
   },
   battle: {
-    id: 'battle', name: 'ENDLESS BATTLE', tag: 'NEW',
+    id: 'battle', name: 'ENDLESS BATTLE', tag: 'DEFAULT',
     desc: 'Open airspace, no gates and no rings — just hostile fighters. Guns, missiles, laser-guided rounds, grenades and RPGs, with unlimited ammunition. Enemy waves get faster, sharper and better organised the longer you last.',
     hasLaps: false, hasRivals: false, hasTimer: false, escalates: true, failOnDamage: true,
     combat: true, noRings: true, primary: 'kills',
@@ -995,7 +875,7 @@ export const MODES = {
     hasLaps: false, hasRivals: false, hasTimer: false, escalates: false, failOnDamage: false, primary: 'distance',
   },
 };
-export const MODE_ORDER = ['endless', 'battle', 'endlessrace', 'quick', 'campaign', 'survival', 'timeattack', 'free'];
+export const MODE_ORDER = ['battle', 'endless', 'endlessrace', 'quick', 'campaign', 'survival', 'timeattack', 'free'];
 
 /* ===========================================================================
  * WEAPONS
@@ -1036,29 +916,45 @@ export const WEAPONS = [
     guided: false, radius: 30, color: 0x7ff0ff, tracer: true, barrels: 2,
     desc: 'Charged bolts. Almost no lead required at this velocity.',
   },
+  /* ---- heavy weapons ----------------------------------------------------
+   * The four heavies are a RANGE LADDER: 8 / 10 / 12 / 15 km. `range` is the
+   * launch authority — the furthest the round is credited to reach — and it is
+   * what the lock gate in combat.js measures against before it will let the
+   * weapon off the rail. `life` is then derived to match: a round that claims
+   * 15 km must still be alive when it gets there, so life ≥ range / speed with
+   * a margin for the manoeuvring a lead-pursuit intercept actually costs.
+   *
+   * Guided rounds also carry `precision`, which tightens the terminal seeker.
+   * The laser is the reference weapon: highest precision, longest reach, and
+   * the tightest turn rate, at the cost of the longest reload on the ladder.
+   * -------------------------------------------------------------------- */
   {
     id: 'missile', name: 'Missile', short: 'MSL', icon: 'missile', heavy: true,
-    damage: 46, speed: 1250, life: 7.0, cooldown: 1.5, spread: 0,
-    guided: true, turnRate: 2.6, radius: 62, blast: 120, color: 0xff9a4a,
-    desc: 'Heat-seeking missile. Needs a lock.',
+    damage: 52, speed: 2050, life: 8.0, cooldown: 1.5, spread: 0,
+    guided: true, turnRate: 3.4, radius: 70, blast: 180, color: 0xff9a4a,
+    range: 8000, precision: 0.80,
+    desc: 'Heat-seeking missile. 8 km. Needs a lock.',
   },
   {
     id: 'laser', name: 'Laser-Guided Missile', short: 'LGM', icon: 'missile', heavy: true,
-    damage: 62, speed: 1750, life: 6.0, cooldown: 2.6, spread: 0,
-    guided: true, turnRate: 4.6, radius: 58, blast: 110, color: 0x66e8ff, beam: true,
-    desc: 'Beam-riding missile. Tighter tracking, longer reload.',
+    damage: 76, speed: 2600, life: 9.0, cooldown: 2.6, spread: 0,
+    guided: true, turnRate: 6.2, radius: 66, blast: 165, color: 0x66e8ff, beam: true,
+    range: 15000, precision: 1.00,
+    desc: 'Beam-riding missile. 15 km, laser-guided precision.',
   },
   {
     id: 'grenade', name: 'Air Grenade', short: 'GRN', icon: 'missile', heavy: true,
-    damage: 54, speed: 720, life: 3.4, cooldown: 1.9, spread: 0.02,
-    guided: false, gravity: 26, radius: 90, blast: 260, color: 0x9dff6a, fuse: 1.5,
-    desc: 'Lobbed cluster charge with a wide blast. Unguided.',
+    damage: 62, speed: 1500, life: 8.0, cooldown: 1.9, spread: 0.012,
+    guided: true, turnRate: 2.2, radius: 110, blast: 320, color: 0x9dff6a,
+    range: 10000, precision: 0.62,
+    desc: 'Guided cluster charge. 10 km, widest blast on the rail.',
   },
   {
     id: 'rpg', name: 'RPG', short: 'RPG', icon: 'missile', heavy: true,
-    damage: 78, speed: 980, life: 4.5, cooldown: 2.8, spread: 0.006,
-    guided: false, radius: 70, blast: 200, color: 0xff5a3c, smoke: true,
-    desc: 'Heavy unguided rocket. Enormous damage, dead straight.',
+    damage: 92, speed: 2200, life: 8.0, cooldown: 2.8, spread: 0.004,
+    guided: true, turnRate: 2.8, radius: 86, blast: 260, color: 0xff5a3c, smoke: true,
+    range: 12000, precision: 0.72,
+    desc: 'Heavy guided rocket. 12 km, enormous damage.',
   },
 ];
 export const WEAPONS_BY_ID = Object.fromEntries(WEAPONS.map((w) => [w.id, w]));
@@ -1078,7 +974,9 @@ export const COMBAT = {
    * -------------------------------------------------------------------- */
   lockConeDeg: 38,             // half-angle to ACQUIRE a lock
   lockHoldDeg: 62,             // half-angle to KEEP one — hysteresis
-  lockRange: 14000,            // m — furthest a lock will hold
+  /* The seeker has to see at least as far as the longest weapon can reach, or
+   * the 15 km round could never be launched at its own rated range. */
+  lockRange: 16000,            // m — furthest a lock will hold
   lockTime: 0.55,              // s of continuous tracking to acquire
   lockDecay: 0.8,              // how fast a broken lock bleeds away
   /* ---- gunnery ----------------------------------------------------------
@@ -1092,7 +990,23 @@ export const COMBAT = {
   enemyHealth: 100,
   playerHitFlash: 0.35,
   waveInterval: 26,            // s between reinforcement waves
-  maxEnemies: 9,
+  /* ---- squadron size ----------------------------------------------------
+   * The airspace holds twenty hostiles minimum in every mode that fields them.
+   * `minEnemies` is a FLOOR the director tops back up to as kills come in, not
+   * just an opening grid — so the fight never thins out into a chase. `maxEnemies`
+   * is the hard cap on live airframes, and the two are deliberately close: the
+   * pressure is meant to be constant rather than arriving in lulls and spikes.
+   * -------------------------------------------------------------------- */
+  minEnemies: 20,
+  maxEnemies: 26,
+  /** Seconds after a kill before that slot is refilled. */
+  respawnDelay: 3.5,
+  /* ---- approach geometry ------------------------------------------------
+   * Hostiles do not all arrive from behind. The weights below are the shape of
+   * the threat: `head` puts them nose-to-nose closing at combined Mach 30-plus,
+   * which is the hardest merge in the game and the one the brief asks for.
+   * -------------------------------------------------------------------- */
+  approach: { head: 0.34, rear: 0.20, side: 0.26, diagonal: 0.14, vertical: 0.06 },
   /** Enemy liveries — the recolours the same three airframes are issued in. */
   liveries: [
     0x2fd96b, 0x3aa0ff, 0xff5fb0, 0xffd63a, 0xff8a26, 0x1b1d22,
@@ -1321,14 +1235,20 @@ export const DEFAULT_SAVE = {
   credits: 0,
   unlocked: ['raptor'],
   selectedAircraft: 'raptor',
-  selectedMode: 'endless',
+  selectedMode: 'battle',
   selectedDifficulty: 'elite',
   selectedLocation: 'random',
+  /* `random` is not a weather state — it is the instruction to draw one from
+   * the selected location's own pool at launch. It is the shipping default. */
+  selectedWeather: 'random',
   campaignProgress: 0,
   achievements: [],
   dailyState: { date: null, completed: false, best: 0 },
   settings: {
-    graphics: 'medium',
+    /* null means "never chosen". The opening preset is then resolved per device
+       by DEFAULTS.graphicsFor() — Extreme on a landscape phone, Medium on a
+       desktop. A stored string is an explicit choice and is never overridden. */
+    graphics: null,
     resolutionScale: 1.0,
     shadows: true,
     reflections: true,
@@ -1366,11 +1286,34 @@ export const DEFAULT_SAVE = {
 };
 
 export const DEFAULTS = {
-  mode: 'endless',
+  mode: 'battle',
   difficulty: 'elite',
   location: 'random',
-  graphics: 'medium',
+  weather: 'random',
   aircraft: 'raptor',
+  /* ---- graphics ---------------------------------------------------------
+   * The default quality is PLATFORM-DEPENDENT, so it is resolved rather than
+   * fixed. A phone held in landscape is a deliberate, committed play session on
+   * a panel with a high pixel density and a GPU that handles this scene well,
+   * so it opens at Extreme. Desktop covers everything from a gaming tower to
+   * onboard graphics in a laptop, so it opens at Medium and invites a change.
+   * Portrait phones get the conservative preset — the game wants landscape and
+   * the player is most likely still rotating the device. */
+  graphics: 'medium',
+  graphicsMobileLandscape: 'extreme',
+  graphicsMobilePortrait: 'low',
+  graphicsDesktop: 'medium',
+  /**
+   * Resolve the opening graphics preset for the device that is actually running
+   * the game. Kept here beside the values it chooses between so there is one
+   * place to reason about the policy.
+   * @param {{mobile:boolean, landscape:boolean}} device
+   * @returns {string} a key of GRAPHICS
+   */
+  graphicsFor({ mobile, landscape }) {
+    if (!mobile) return this.graphicsDesktop;
+    return landscape ? this.graphicsMobileLandscape : this.graphicsMobilePortrait;
+  },
 };
 
 /* ===========================================================================

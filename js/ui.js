@@ -11,7 +11,7 @@
 
 import {
   AIRCRAFT, AIRCRAFT_BY_ID, BIOMES, BIOMES_BY_ID, MODES, MODE_ORDER,
-  DIFFICULTIES, DIFFICULTY_ORDER, POWERS, WEATHER, CAMPAIGN, ACHIEVEMENTS,
+  DIFFICULTIES, DIFFICULTY_ORDER, POWERS, WEATHER, WEATHER_MENU, CAMPAIGN, ACHIEVEMENTS,
   QUALITY_ORDER, QUALITY_PRESETS, BINDING_LABELS, DEFAULT_BINDINGS, TIPS,
   CONTROL_GROUPS, MACH, WEAPONS, GAME_NAME, VERSION, clamp, clamp01, lerp, TAU,
 } from './config.js';
@@ -70,7 +70,7 @@ const ICONS = {
   camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8.5h3.4L8 6.4h5.4L15 8.5H18a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="11.5" cy="13" r="3"/></svg>',
   expand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
   pause: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="7" y="5" width="3.4" height="14" rx="1"/><rect x="13.6" y="5" width="3.4" height="14" rx="1"/></svg>',
-  play: '▶', mode: '◈', diff: '▲', loc: '◎', craft: '✈', daily: '★',
+  play: '▶', mode: '◈', diff: '▲', loc: '◎', wx: '☁', craft: '✈', daily: '★',
   camp: '❐', ach: '✦', stats: '▤', set: '⚙', help: '?', cred: '©',
 };
 
@@ -191,6 +191,10 @@ export class UI {
     this.currentScreen = 'loading';
     this.menuSection = 'play';
     this.hangarSelection = save.data.selectedAircraft;
+    /* The preset the renderer is actually running. Distinct from
+       settings.graphics, which is null until the player picks one — this is
+       what the Settings screen shows as active in that case. */
+    this.activePreset = save.data.settings.graphics || null;
     this.notifications = [];
     this.listeningFor = null;
     this.hudVisible = false;
@@ -261,6 +265,10 @@ export class UI {
       controls: $('#hud-controls'),
       machBlock: $('#hud-mach-block'),
       machValue: $('#hud-mach'),
+      hudHide: $('#btn-hud-hide'),
+      hudHideText: $('#btn-hud-hide-text'),
+      touchGunName: $('#touch-gun-name'),
+      touchMslName: $('#touch-msl-name'),
     };
     this.radarCtx = this.dom.radar.getContext('2d');
 
@@ -270,9 +278,13 @@ export class UI {
     this.buildControlLegend();
     this._buildOnboarding();
     this._buildMenuNav();
+    // Through setSection rather than a bare _renderMenuPanel, so the launch
+    // button's visibility is decided in exactly one place.
+    this.setSection(this.menuSection);
     this._bindStatic();
     this._bindTouch();
     this._applyBodyFlags();
+    this.armFullscreenGesture();
     this.setTip();
   }
 
@@ -498,6 +510,7 @@ export class UI {
     const items = [
       ['play', 'Play', ICONS.play], ['mode', 'Game Mode', ICONS.mode],
       ['difficulty', 'Difficulty', ICONS.diff], ['location', 'Location', ICONS.loc],
+      ['weather', 'Weather', ICONS.wx],
       ['aircraft', 'Aircraft', ICONS.craft], ['campaign', 'Campaign', ICONS.camp],
       ['daily', 'Daily Challenge', ICONS.daily], ['achievements', 'Achievements', ICONS.ach],
       ['stats', 'Statistics', ICONS.stats], ['settings', 'Settings', ICONS.set],
@@ -521,6 +534,10 @@ export class UI {
     // The hangar takes over the live background camera for a close inspection
     // orbit; every other section gets the cinematic fly-by.
     this.dom.menu.classList.toggle('hangar-open', id === 'aircraft');
+    // Launch belongs to the Ready Room and nowhere else. Elsewhere it invites a
+    // launch before the loadout has been confirmed, which is exactly what the
+    // summary on the Play panel exists to prevent.
+    this.dom.menu.classList.toggle('show-launch', id === 'play');
     this.callbacks.onHangarMode?.(id === 'aircraft');
     this._renderMenuPanel();
     if (id === 'aircraft') this.callbacks.onHangarPreview?.(this.hangarSelection);
@@ -538,6 +555,7 @@ export class UI {
       case 'mode': p.innerHTML = this._panelMode(); break;
       case 'difficulty': p.innerHTML = this._panelDifficulty(); break;
       case 'location': p.innerHTML = this._panelLocation(); break;
+      case 'weather': p.innerHTML = this._panelWeather(); break;
       case 'aircraft': p.innerHTML = this._panelAircraft(); break;
       case 'campaign': p.innerHTML = this._panelCampaign(); break;
       case 'daily': p.innerHTML = this._panelDaily(); break;
@@ -560,9 +578,33 @@ export class UI {
     const diff = DIFFICULTIES[s.selectedDifficulty];
     const loc = s.selectedLocation === 'random' ? null : BIOMES_BY_ID[s.selectedLocation];
     const craft = AIRCRAFT_BY_ID[s.selectedAircraft];
+    const wxId = s.selectedWeather || 'random';
+    const wx = wxId === 'random' ? null : WEATHER[wxId];
     const st = s.stats;
+
+    /* The full launch contract in one block. Everything that changes the run —
+     * including the two multipliers, shown multiplied out, because that product
+     * is the number the score is actually scaled by and neither factor alone
+     * tells the player what they are about to earn. */
+    const locMult = loc ? loc.difficulty : 1;
+    const total = diff.rewardMult * locMult;
+    const gfx = QUALITY_PRESETS[s.settings.graphics || this.activePreset]?.label || 'Auto';
+    const summary = [
+      ['Mode', mode.name, 'mode'],
+      ['Difficulty', diff.name, 'difficulty'],
+      ['Location', loc ? loc.name : 'Random venue', 'location'],
+      ['Weather', wx ? wx.name : 'Random (location pool)', 'weather'],
+      ['Aircraft', craft.name, 'aircraft'],
+      ['Graphics', gfx, 'settings'],
+    ].map(([k, v, jump]) => `<button class="sum-row" data-jump="${jump}"><i>${k}</i><b>${v}</b><em>change</em></button>`).join('');
+
     return `
-      ${this._head('READY ROOM', 'Confirm your loadout, then launch. Endless Flight on Elite over a random venue is the standard configuration.')}
+      ${this._head('READY ROOM', 'Confirm the loadout, then launch. Every launch regenerates the world from a fresh seed.')}
+      <div class="launch-summary">
+        ${summary}
+        <div class="sum-row sum-total"><i>Reward multiplier</i><b>×${total.toFixed(2)}</b><em>${diff.rewardMult.toFixed(2)} diff · ${locMult.toFixed(2)} venue</em></div>
+        <div class="sum-row sum-total"><i>Grid</i><b>${diff.aiCount + 1}</b><em>${mode.combat ? 'combat' : mode.hasRivals ? 'rivals' : 'solo'}</em></div>
+      </div>
       <div class="card-grid wide stagger">
         <button class="card" data-jump="mode">
           <div class="card-title"><b>${mode.name}</b><span class="card-tag">MODE</span></div>
@@ -576,6 +618,12 @@ export class UI {
         <button class="card" data-jump="location">
           <div class="card-title"><b>${loc ? loc.name : 'RANDOM VENUE'}</b><span class="card-tag">LOCATION</span></div>
           <div class="card-desc">${loc ? loc.desc : 'A different venue, weather system and time of day every single run.'}</div>
+        </button>
+        <button class="card" data-jump="weather">
+          <div class="card-title"><b>${wx ? wx.name : 'RANDOM WEATHER'}</b><span class="card-tag">WEATHER</span></div>
+          <div class="card-desc">${wx
+            ? `Visibility ${Math.round(wx.vis * 100)}%, turbulence ${Math.round(wx.turb * 100)}%${wx.precip ? `, ${wx.precip}` : ''}.`
+            : 'Drawn from the location\'s own pool each launch.'}</div>
         </button>
         <button class="card" data-jump="aircraft">
           <div class="card-title"><b>${craft.name}</b><span class="card-tag">AIRFRAME</span></div>
@@ -663,7 +711,7 @@ export class UI {
         <div class="card-swatch" style="background:${hex(b.accent)}"></div>
       </button>`;
     }).join('');
-    return `${this._head('LOCATION', 'Seventeen venues, each an aerial interpretation with its own terrain, palette, weather pool and hazards. Random recombines venue, weather and time of day every run.')}
+    return `${this._head('LOCATION', `${BIOMES.length} venues plus Random — each a world type rather than a fixed map, with its own terrain, architecture, vegetation, palette, weather pool and hazards. Every launch regenerates the world from a new seed, so no two runs of the same location are alike.`)}
       <div class="card-grid wide stagger">
         <button class="card${randomSel}" data-location="random">
           <div class="card-title"><b>RANDOM</b><span class="card-tag">DEFAULT</span></div>
@@ -674,17 +722,88 @@ export class UI {
       </div>`;
   }
 
+  /**
+   * WEATHER
+   *
+   * Every state in the table, grouped by what it does to a flight rather than
+   * by name, because "Fog Bank" and "Heavy Snow" are the same problem — you
+   * cannot see — and belong next to each other.
+   *
+   * States outside the selected location's pool are marked rather than
+   * disabled. Snow over the neon megacity is not a broken combination, it is
+   * simply not the house style, and forbidding it would remove the one thing
+   * this screen is for. The tag says "off-pool" and the choice still stands.
+   */
+  _panelWeather() {
+    const s = this.save.data;
+    const loc = s.selectedLocation === 'random' ? null : BIOMES_BY_ID[s.selectedLocation];
+    const pool = loc ? new Set(loc.weather) : null;
+    const sel = s.selectedWeather || 'random';
+
+    const groups = [
+      ['CLEAR & CLOUD', ['clear', 'brightSun', 'partlyCloudy', 'cloudy', 'overcast', 'darkClouds', 'floatingClouds', 'suspendedClouds']],
+      ['LIGHT & TIME', ['dawn', 'sunrise', 'goldenHour', 'sunset', 'dusk', 'night', 'neonNight']],
+      ['LOW VISIBILITY', ['fog', 'fogBank', 'dustStorm']],
+      ['PRECIPITATION', ['lightRain', 'heavyRain', 'snow', 'heavySnow', 'storm', 'thunderstorm']],
+    ];
+    // Anything in the menu list but not in a group above still gets shown, so a
+    // new state added to config.js cannot silently vanish from this screen.
+    const grouped = new Set(groups.flatMap(([, ids]) => ids));
+    const stray = WEATHER_MENU.filter((id) => id !== 'random' && !grouped.has(id) && WEATHER[id]);
+    if (stray.length) groups.push(['OTHER', stray]);
+
+    const cell = (id) => {
+      const w = WEATHER[id];
+      if (!w) return '';
+      const on = sel === id ? ' selected' : '';
+      const off = pool && !pool.has(id) ? ' offpool' : '';
+      // Visibility and turbulence are what the player actually feels, so those
+      // are the two numbers on the card.
+      return `<button class="card wx-card${on}${off}" data-weather="${id}">
+        <div class="card-title"><b>${w.name}</b>${off ? '<span class="card-tag offTag">OFF-POOL</span>' : ''}</div>
+        <div class="card-meta">
+          <span>VIS ${Math.round(w.vis * 100)}%</span>
+          <span>TURB ${Math.round(w.turb * 100)}%</span>
+          ${w.precip ? `<span>${w.precip.toUpperCase()}</span>` : ''}
+          ${w.lightning ? '<span class="warnTag">LIGHTNING</span>' : ''}
+        </div>
+      </button>`;
+    };
+
+    const body = groups.map(([title, ids]) => `
+      <div class="panel-head sub"><h2>${title}</h2></div>
+      <div class="card-grid wide stagger">${ids.map(cell).join('')}</div>`).join('');
+
+    const poolNote = loc
+      ? `${loc.name} normally flies ${loc.weather.map((w) => WEATHER[w].name).join(' · ')}.`
+      : 'Location is set to Random, so every state is in play.';
+
+    return `${this._head('WEATHER', `Weather drives visibility, lighting, wet roads and reflections, particle load, turbulence and how the aircraft handles. Random draws from the location's own pool. ${poolNote}`)}
+      <div class="card-grid wide stagger">
+        <button class="card${sel === 'random' ? ' selected' : ''}" data-weather="random">
+          <div class="card-title"><b>RANDOM</b><span class="card-tag">DEFAULT</span></div>
+          <div class="card-desc">Drawn from the selected location's weather pool every launch, so the venue keeps its atmospheric identity while no two runs match.</div>
+          <div class="card-meta"><span>MAXIMUM VARIETY</span></div>
+        </button>
+      </div>
+      ${body}`;
+  }
+
   _panelAircraft() {
     const s = this.save.data;
     const sel = AIRCRAFT_BY_ID[this.hangarSelection] || AIRCRAFT_BY_ID[s.selectedAircraft];
     const unlocked = (a) => a.unlock.type === 'default' || s.unlocked.includes(a.id);
     const list = AIRCRAFT.map((a) => {
       const isSel = a.id === sel.id ? ' selected' : '';
-      const lock = unlocked(a) ? '' : ' locked';
-      const tag = !unlocked(a)
+      const open = unlocked(a);
+      const lock = open ? '' : ' locked';
+      // The airframe you will actually fly is marked with a tick, not a word,
+      // so it survives a glance down a list of thirteen.
+      const active = open && a.id === s.selectedAircraft;
+      const tag = !open
         ? `<span class="card-tag lockTag">${a.unlock.type === 'credits' ? `${nf(a.unlock.cost)} ◈` : 'LOCKED'}</span>`
-        : (a.id === s.selectedAircraft ? '<span class="card-tag">ACTIVE</span>' : '');
-      return `<button class="card${isSel}${lock}" data-craft="${a.id}">
+        : (active ? '<span class="card-tag activeTag">✓ ACTIVE</span>' : '');
+      return `<button class="card${isSel}${lock}${active ? ' is-active' : ''}" data-craft="${a.id}"${open ? '' : ' data-locked="1"'}>
         <div class="card-title"><b>${a.name}</b>${tag}</div>
         ${jetSilhouette(a)}
         <div class="card-desc">${a.class}</div>
@@ -696,14 +815,14 @@ export class UI {
     const canBuy = sel.unlock.type === 'credits' && s.credits >= sel.unlock.cost;
     const unlockBlock = unlocked(sel)
       ? (sel.id === s.selectedAircraft
-        ? '<div class="muted" style="font-size:.76rem">Currently selected</div>'
-        : `<button class="btn btn-primary" data-select-craft="${sel.id}">Select</button>`)
+        ? '<div class="active-confirm">✓ ACTIVE — this is the aircraft you will fly</div>'
+        : `<button class="btn btn-primary" data-select-craft="${sel.id}">SET ACTIVE</button>`)
       : (sel.unlock.type === 'credits'
         ? `<div class="daily-best">${nf(sel.unlock.cost)} ◈ · you have ${nf(s.credits)}</div>
            <button class="btn ${canBuy ? 'btn-primary' : 'disabled'}" data-buy-craft="${sel.id}">Unlock</button>`
         : `<div class="daily-best">${sel.unlock.label}</div>`);
 
-    return `${this._head('HANGAR', 'Thirteen airframes with genuinely different geometry, mass and handling — three of them modelled in full. The silhouette tells you how each one flies.')}
+    return `${this._head('HANGAR', `${AIRCRAFT.length} airframes with genuinely different geometry, mass and handling — three of them modelled in full. Tap an airframe to make it active; the silhouette tells you how each one flies.`)}
       <div class="hangar">
         <div class="hangar-list stagger">${list}</div>
         <aside class="hangar-detail">
@@ -866,13 +985,34 @@ export class UI {
     const pick = (sel, fn) => p.querySelectorAll(sel).forEach((n) => n.addEventListener('click', (e) => {
       e.preventDefault(); this.audio.ui('select'); fn(n);
     }));
-    pick('[data-jump]', (n) => this.setSection(n.dataset.jump));
+    /* Most summary rows jump to a nav section; Graphics lives in the Settings
+       overlay instead, which has no nav entry — routing it through setSection
+       would leave menuSection on a value _renderMenuPanel has no case for, and
+       so an empty panel. */
+    pick('[data-jump]', (n) => {
+      const to = n.dataset.jump;
+      if (to === 'settings') this.openSettings();
+      else this.setSection(to);
+    });
     pick('[data-mode]', (n) => { this.save.set('selectedMode', n.dataset.mode); this._renderMenuPanel(); });
     pick('[data-difficulty]', (n) => { this.save.set('selectedDifficulty', n.dataset.difficulty); this._renderMenuPanel(); });
     pick('[data-location]', (n) => { this.save.set('selectedLocation', n.dataset.location); this._renderMenuPanel(); });
+    pick('[data-weather]', (n) => { this.save.set('selectedWeather', n.dataset.weather); this._renderMenuPanel(); });
+    /* Clicking a card in the hangar both previews it and makes it the aircraft
+     * you will actually fly. Previously the card only previewed and a separate
+     * "Select" button in the detail pane committed it, which meant browsing the
+     * list looked exactly like choosing from it — the reported bug where the
+     * jet you picked was not the one that launched. Locked airframes still only
+     * preview; they have an Unlock button instead. */
     pick('[data-craft]', (n) => {
-      this.hangarSelection = n.dataset.craft;
-      this.callbacks.onHangarPreview?.(this.hangarSelection);
+      const id = n.dataset.craft;
+      this.hangarSelection = id;
+      this.callbacks.onHangarPreview?.(id);
+      if (n.dataset.locked !== '1') {
+        this.save.set('selectedAircraft', id);
+        this.audio.ui('confirm');
+        this.callbacks.onAircraftChange?.(id);
+      }
       this._renderMenuPanel();
     });
     this._wireHangarDrag();
@@ -932,10 +1072,13 @@ export class UI {
     const diff = DIFFICULTIES[s.selectedDifficulty];
     const loc = s.selectedLocation === 'random' ? 'Random' : BIOMES_BY_ID[s.selectedLocation].short;
     const craft = AIRCRAFT_BY_ID[s.selectedAircraft];
+    const wxId = s.selectedWeather || 'random';
+    const wx = wxId === 'random' ? 'Random' : (WEATHER[wxId]?.name || 'Random');
     this.dom.loadout.innerHTML = [
-      ['Mode', mode.name], ['Difficulty', diff.name], ['Location', loc], ['Airframe', craft.name],
+      ['Mode', mode.name], ['Difficulty', diff.name], ['Location', loc],
+      ['Weather', wx], ['Airframe', craft.name],
     ].map(([k, v]) => `<div class="loadout-chip"><i>${k}</i><b>${v}</b></div>`).join('');
-    this.dom.launchSub.textContent = `${mode.name} · ${diff.name} · ${loc}`;
+    this.dom.launchSub.textContent = `${mode.name} · ${diff.name} · ${loc} · ${wx}`;
     this.dom.credits.textContent = nf(s.credits);
   }
 
@@ -993,10 +1136,13 @@ export class UI {
       t.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flip(); } });
       return t;
     };
-    const seg = (key, options) => {
+    const seg = (key, options, effective = null) => {
       const g = el('div', 'seg');
+      // `effective` covers the settings that are null until the player chooses,
+      // so the segment shows what is actually running rather than nothing.
+      const current = s[key] ?? effective;
       options.forEach(([val, label]) => {
-        const b = el('button', s[key] === val ? 'active' : '', label);
+        const b = el('button', current === val ? 'active' : '', label);
         b.type = 'button';
         b.addEventListener('click', () => {
           this.save.setSetting(key, val);
@@ -1012,8 +1158,8 @@ export class UI {
 
     /* -- graphics -- */
     const gg = group('Graphics');
-    field(gg, 'Quality Preset', 'Medium is the default and runs the full effect stack. The adaptive ladder eases detail down on its own if frames get tight.',
-      seg('graphics', QUALITY_ORDER.map((q) => [q, QUALITY_PRESETS[q].label])));
+    field(gg, 'Quality Preset', 'Chosen for your device on first run — Extreme on a landscape phone, Medium on desktop. The adaptive ladder eases detail down on its own if frames get tight.',
+      seg('graphics', QUALITY_ORDER.map((q) => [q, QUALITY_PRESETS[q].label]), this.activePreset));
     field(gg, 'Resolution Scale', 'Renders below native resolution to buy frame time.',
       slider('resolutionScale', 0.5, 1.5, 0.05, (v) => `${Math.round(v * 100)}%`));
     field(gg, 'Shadows', 'Sun shadows on terrain and aircraft.', toggle('shadows'));
@@ -1212,6 +1358,7 @@ export class UI {
     while (pool.length < s.boxes.length) {
       const n = el('div', 'tgt');
       n.innerHTML = '<i></i><i></i><i></i><i></i>'
+        + '<div class="tgt-name"></div>'
         + '<div class="tgt-hull"><b></b></div>'
         + '<div class="tgt-lock-label">TARGET LOCKED</div>'
         + '<div class="tgt-info"><span class="mach"></span> · <span class="kmh"></span></div>';
@@ -1219,6 +1366,7 @@ export class UI {
       pool.push({
         root: n, hull: n.querySelector('.tgt-hull b'),
         label: n.querySelector('.tgt-lock-label'),
+        name: n.querySelector('.tgt-name'),
         mach: n.querySelector('.mach'), kmh: n.querySelector('.kmh'),
       });
     }
@@ -1235,15 +1383,46 @@ export class UI {
       p.root.classList.toggle('tracking', !!b.tracking && !b.locked);
       p.hull.style.width = `${Math.round(b.health * 100)}%`;
       p.label.style.display = b.locked ? '' : 'none';
+      if (p.name && p.name.textContent !== (b.label || '')) p.name.textContent = b.label || '';
       p.mach.textContent = `M ${b.mach}`;
       p.kmh.textContent = `${b.kmh.toLocaleString('en-US')} km/h`;
+    }
+
+    /* --- rounds in flight --------------------------------------------------
+     * One label per live missile, riding above it, counting the gap down. Same
+     * pooled-node approach as the target brackets: allocation during a fight is
+     * the one thing the HUD must not do. */
+    const mpool = (this._mslPool ||= []);
+    const mList = s.missiles || [];
+    while (mpool.length < mList.length) {
+      const n = el('div', 'msl-tag');
+      n.innerHTML = '<span class="msl-d"></span>';
+      host.appendChild(n);
+      mpool.push({ root: n, d: n.querySelector('.msl-d') });
+    }
+    for (let i = 0; i < mpool.length; i++) {
+      const p = mpool[i], m = mList[i];
+      if (!m) { p.root.style.display = 'none'; continue; }
+      p.root.style.display = '';
+      p.root.style.left = `${m.x}%`;
+      p.root.style.top = `${m.y}%`;
+      p.root.classList.toggle('near', !!m.near);
+      p.d.textContent = `${m.km} km`;
     }
 
     const strip = this.dom.lockStrip;
     strip.classList.toggle('locked', !!s.locked);
     strip.classList.toggle('tracking', !s.locked && s.lock > 0.02);
-    this.dom.lockText.textContent = s.locked ? 'TARGET LOCKED'
-      : s.lock > 0.02 ? `ACQUIRING ${Math.round(s.lock * 100)}%` : 'NO TARGET';
+    /* Out of range is its own state. A solid lock on something the armed weapon
+     * cannot reach is exactly the case where the launch will be refused, so the
+     * strip says so before the player presses the key rather than after. */
+    const far = !!s.locked && s.targetRange != null && !s.inRange;
+    strip.classList.toggle('outofrange', far);
+    this.dom.lockText.textContent = far
+      ? `OUT OF RANGE ${s.targetKm} km / ${s.weaponRangeKm} km`
+      : s.locked
+        ? (s.targetKm != null ? `TARGET LOCKED · ${s.targetKm} km` : 'TARGET LOCKED')
+        : s.lock > 0.02 ? `ACQUIRING ${Math.round(s.lock * 100)}%` : 'NO TARGET';
     this.dom.wpnName.textContent = (s.weapon?.name || '').toUpperCase();
     // Gun belt: built once, then only the armed class changes.
     if (this.dom.gunRack && s.gunRack) {
@@ -1281,6 +1460,17 @@ export class UI {
       }
     }
     this.dom.wpnReload.style.width = `${Math.round(clamp01(s.reload) * 100)}%`;
+    /* The touch arm buttons carry the same short codes as the desktop racks, so
+     * what is armed is legible without the rack itself, which does not fit on a
+     * phone. Guarded on change: these are string writes inside the combat loop. */
+    if (this.dom.touchGunName) {
+      const g = s.gunRack?.find((w) => w.armed)?.short || '—';
+      if (this._touchGunShort !== g) { this._touchGunShort = g; this.dom.touchGunName.textContent = g; }
+    }
+    if (this.dom.touchMslName) {
+      const m = s.rack?.find((w) => w.armed)?.short || '—';
+      if (this._touchMslShort !== m) { this._touchMslShort = m; this.dom.touchMslName.textContent = m; }
+    }
     this.dom.cbtWave.textContent = String(s.wave);
     this.dom.cbtKills.textContent = String(s.kills);
     this.dom.cbtHostiles.textContent = String(s.hostiles);
@@ -1697,6 +1887,7 @@ export class UI {
     });
     click('#ob-skip', () => { this.audio.ui('back'); this.callbacks.onOnboardingDone?.(); });
     click('#btn-launch', () => { this.audio.ui('confirm'); this.callbacks.onLaunch?.(); });
+    click('#btn-hud-hide', () => this.toggleHudChrome());
     // Camera zoom. Repeats while held so dragging the framing in is one press
     // rather than eight, and both pointer and touch drive the same path.
     const zoomHold = (el, dir) => {
@@ -1833,6 +2024,45 @@ export class UI {
     const portrait = window.innerHeight > window.innerWidth;
     // Portrait on a touch device is never playable, whatever the width.
     this.dom.orientation.classList.toggle('show', this.device.isTouch && portrait);
+  }
+
+  /**
+   * Hide or show every control overlay in one click.
+   *
+   * Everything the pilot does not need in order to fly — the control legend, the
+   * zoom rack, the camera chip, the radar, the touch cluster — goes behind a
+   * single body class, so the CSS decides what "chrome" means rather than this
+   * method holding a list that drifts. The flight instruments stay: this is a
+   * clean-screen toggle for a look at the world, not a no-HUD mode.
+   */
+  toggleHudChrome(force = null) {
+    const hidden = force == null ? !document.body.classList.contains('hud-hidden') : !!force;
+    document.body.classList.toggle('hud-hidden', hidden);
+    this.dom.hudHide?.setAttribute('aria-pressed', String(hidden));
+    if (this.dom.hudHideText) this.dom.hudHideText.textContent = hidden ? 'SHOW UI' : 'HIDE UI';
+    this.audio.ui('click');
+    return hidden;
+  }
+
+  /**
+   * Landscape phones get fullscreen, but only on a real tap: every browser
+   * rejects a programmatic request, so this arms a one-shot listener and fires
+   * on whatever the player touches first. Desktop is left alone — taking over
+   * the whole screen uninvited on a desktop is hostile.
+   */
+  armFullscreenGesture() {
+    if (this._fsArmed) return;
+    if (!this.device.isMobile) return;
+    this._fsArmed = true;
+    const go = () => {
+      window.removeEventListener('pointerdown', go);
+      window.removeEventListener('touchend', go);
+      if (window.innerHeight > window.innerWidth) return;   // portrait: not yet
+      if (document.fullscreenElement) return;
+      this.toggleFullscreen();
+    };
+    window.addEventListener('pointerdown', go, { once: true });
+    window.addEventListener('touchend', go, { once: true });
   }
 
   toggleFullscreen() {

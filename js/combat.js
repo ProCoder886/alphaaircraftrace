@@ -265,17 +265,41 @@ export class EnemyFighter extends AIRacer {
     this.livery = opts.livery ?? COMBAT.liveries[index % COMBAT.liveries.length];
     this.visual.recolour(this.livery);
 
+    /* Callsign. Numbered from one in spawn order and stable for the life of the
+     * sortie, so "Enemy 7" always means the same aircraft on the HUD, on the
+     * radar and in the kill feed. */
+    this.enemyNumber = index + 1;
+    this.callsign = `ENEMY ${this.enemyNumber}`;
+
+    /* Trail colour. The livery is deliberately saturated so the airframe reads
+     * against terrain, but a trail in that colour disappears against a dark
+     * world. This washes the livery most of the way to white: a pale ribbon
+     * that holds up against sky, ground and city alike, and lets the player
+     * read where a fighter has been from across the map. */
+    this.trailColor = new THREE.Color(this.livery).lerp(new THREE.Color(0xffffff), 0.62).getHex();
+    this.visual.setTrailColor?.(this.trailColor);
+
     this.maxHealth = COMBAT.enemyHealth * lerp(0.8, 1.5, spec.stats.durability) * lerp(0.8, 1.6, D.aiSkill);
     this.health = this.maxHealth;
 
     // Combat skill. Everything a hostile is good at scales off difficulty and
     // off the wave number, so wave 8 is a genuinely different opponent to wave 1.
+    /* Engagement envelope. The old numbers were the reason hostiles read as
+     * passive: a 1.5-2.6 km engage range is under two seconds of closure at
+     * Mach 15, so a fighter was almost never inside its own firing window long
+     * enough to shoot. Hostiles now engage at missile range and every term below
+     * is driven by the difficulty the *user* picked, so Rookie is survivable and
+     * Legend genuinely hunts. */
     const tier = clamp01((opts.tier || 0) / 10);
-    this.accuracy = clamp01(lerp(0.34, 0.88, D.aiSkill) + tier * 0.24);
-    this.fireRate = lerp(0.55, 1.45, D.aiAggression) * (1 + tier * 0.6);
-    this.heavyChance = clamp01(lerp(0.18, 0.62, D.aiAggression) + tier * 0.28);
-    this.engageRange = lerp(1500, 2600, D.aiSkill) * (1 + tier * 0.25);
+    this.accuracy = clamp01(lerp(0.40, 0.95, D.aiSkill) + tier * 0.22);
+    this.fireRate = lerp(0.85, 2.30, D.aiAggression) * (1 + tier * 0.6);
+    this.heavyChance = clamp01(lerp(0.40, 0.95, D.aiAggression) + tier * 0.25);
+    this.engageRange = lerp(7000, 13000, D.aiSkill) * (1 + tier * 0.2);
+    this.gunOpenRange = lerp(1500, 2400, D.aiSkill);
     this.evasion = clamp01(lerp(0.25, 0.85, D.aiSkill) + tier * 0.2);
+    // Gun discipline: a poor pilot needs the pipper almost on the target, a good
+    // one will take a deflection shot. This is the cone, in cosine.
+    this.gunDisciplineCos = lerp(0.965, 0.86, D.aiSkill);
 
     this.gunTimer = this.rng.float(0.4, 2.4);
     this.heavyTimer = this.rng.float(2.5, 7.0);
@@ -316,11 +340,21 @@ export class EnemyFighter extends AIRacer {
     if (this.manoeuvre > 0) {
       this.manoeuvre -= dt;
     } else if (this.manoeuvreTimer <= 0) {
-      this.manoeuvreTimer = lerp(9, 3.2, this.evasion) * this.rng.float(0.7, 1.5);
-      const kinds = range < 1200 ? ['break', 'barrel', 'scissors'] : ['yoyo', 'barrel', 'climb'];
+      this.manoeuvreTimer = lerp(7, 2.2, this.evasion) * this.rng.float(0.7, 1.5);
+      /* The move is chosen for the geometry it is actually in. Knife-fight
+       * range gets defensive and rolling moves; the merge gets a break turn or
+       * a high-G barrel roll; long range gets repositioning. */
+      const kinds = range < 1200
+        ? ['break', 'barrel', 'scissors', 'rollLeft', 'rollRight', 'splitS']
+        : range < 4000
+          ? ['barrel', 'yoyo', 'rollLeft', 'rollRight', 'highYoyo', 'break']
+          : ['yoyo', 'climb', 'barrel', 'immelmann'];
       this.manoeuvreKind = kinds[this.rng.int(0, kinds.length - 1)];
       this.manoeuvre = this.rng.float(1.1, 2.4);
       this._manoeuvreSign = this.rng.next() < 0.5 ? -1 : 1;
+      // A roll is a visible, committed thing — the airframe actually rotates.
+      if (this.manoeuvreKind === 'rollLeft') this._manoeuvreSign = -1;
+      if (this.manoeuvreKind === 'rollRight') this._manoeuvreSign = 1;
     }
     if (this.manoeuvre > 0) {
       const s = this._manoeuvreSign;
@@ -340,11 +374,36 @@ export class EnemyFighter extends AIRacer {
         case 'yoyo':                         // trade height for turn rate
           this.targetVertical += (phase > 4 ? 150 : -170) * dt;
           break;
+        case 'highYoyo':                     // pull up and over to kill closure
+          this.targetVertical += 210 * dt;
+          this.targetLateral += s * 180 * dt;
+          break;
         case 'climb':
           this.targetVertical += 180 * dt;
           break;
+        /* Aileron rolls. `rollBias` is read by the visual so the model rotates
+         * about its own axis rather than merely sliding sideways — a roll the
+         * player cannot see is not a roll. */
+        case 'rollLeft':
+        case 'rollRight':
+          this.rollBias = s * 5.2;
+          this.targetLateral += s * 120 * dt;
+          break;
+        case 'splitS':                       // roll inverted and pull down and away
+          this.rollBias = s * 4.4;
+          this.targetVertical -= 260 * dt;
+          this.targetLateral += s * 150 * dt;
+          break;
+        case 'immelmann':                    // climb, half roll, reverse
+          this.rollBias = s * 3.2;
+          this.targetVertical += 240 * dt;
+          this.targetLateral -= s * 160 * dt;
+          break;
         default: break;
       }
+    } else {
+      // Bleed the roll back off once the move is finished.
+      this.rollBias = (this.rollBias || 0) * Math.max(0, 1 - dt * 3);
     }
 
     /* --- lock --------------------------------------------------------------
@@ -361,21 +420,34 @@ export class EnemyFighter extends AIRacer {
 
     /* --- guns --------------------------------------------------------------
      * Fired in bursts, and only when the pipper is genuinely near the target —
-     * a hostile that hoses the sky continuously is noise, not pressure. */
+     * a hostile that hoses the sky continuously is noise, not pressure. The
+     * cone it will take a shot through is its own gun discipline, so a better
+     * pilot opens up on a deflection angle a poor one would not attempt. */
     this.gunTimer -= dt * this.fireRate;
-    if (this.gunTimer <= 0 && inCone && range < COMBAT.gunRange && cosAng > 0.965) {
-      this.gunTimer = lerp(1.5, 0.42, this.accuracy) * this.rng.float(0.8, 1.3);
-      const burst = 3 + Math.round(this.accuracy * 5);
+    if (this.gunTimer <= 0 && inCone && range < this.gunOpenRange && cosAng > this.gunDisciplineCos) {
+      this.gunTimer = lerp(1.5, 0.30, this.accuracy) * this.rng.float(0.8, 1.3);
+      const burst = 3 + Math.round(this.accuracy * 7);
       combat.enemyBurst(this, player, burst);
     }
 
-    /* --- heavy weapons ---------------------------------------------------- */
+    /* --- heavy weapons -----------------------------------------------------
+     * A hostile picks a weapon it can actually reach with: the round has to be
+     * rated for the current range, exactly as the player's launch gate demands.
+     * Without that filter they fire 8 km missiles from 12 km and every shot is
+     * a guaranteed miss, which is indistinguishable from not shooting at all. */
     this.heavyTimer -= dt;
     if (this.heavyTimer <= 0 && this.lockProgress >= 1 && range < this.engageRange
         && this.rng.next() < this.heavyChance) {
-      this.heavyTimer = lerp(9, 3.0, this.fireRate / 2) * this.rng.float(0.8, 1.4);
-      const pick = HEAVY_ORDER[this.rng.int(0, HEAVY_ORDER.length - 1)];
-      combat.spawn(WEAPONS_BY_ID[pick], this.position3, this.quaternion, this, player, this.livery);
+      const usable = HEAVY_ORDER.filter((id) => (WEAPONS_BY_ID[id].range ?? 0) >= range);
+      if (usable.length) {
+        this.heavyTimer = lerp(7.5, 2.2, clamp01(this.fireRate / 2)) * this.rng.float(0.8, 1.4);
+        const pick = usable[this.rng.int(0, usable.length - 1)];
+        const w = WEAPONS_BY_ID[pick];
+        combat.spawn(w, this.position3, this.quaternion, this, player, this.livery);
+        combat.onEnemyLaunch?.(this, w);
+      } else {
+        this.heavyTimer = 0.8;             // too far for anything — try again soon
+      }
     } else if (this.heavyTimer <= 0) {
       this.heavyTimer = 1.2;
     }
@@ -416,6 +488,12 @@ export class CombatSystem {
     this.wave = 0;
     this.waveTimer = 3;
     this.kills = 0;
+    /* Hostiles are numbered for the life of the sortie, not per wave, so the
+     * label over a fighter is stable and "Enemy 14" is always the same
+     * aircraft. Killed slots are never reissued. */
+    this._nextIndex = 0;
+    /** Seconds until the director tops the squadron back up to the floor. */
+    this._respawnTimer = 0;
     this._aimQ = new THREE.Quaternion();
   }
 
@@ -493,7 +571,15 @@ export class CombatSystem {
 
   /**
    * Put a wave of hostiles in the air around the player.
-   * Size, skill and formation discipline all climb with the wave number.
+   *
+   * The squadron is held at `COMBAT.minEnemies` (20) rather than grown from
+   * two: this is a battle, and a battle that opens with a pair and thins out
+   * as you kill them is a chase. Each wave tops the airspace back up to the
+   * floor and pushes a little past it as the fight escalates.
+   *
+   * Approach geometry is drawn per fighter from `COMBAT.approach`, so a wave
+   * arrives from in front, behind, either side, the diagonals and above/below
+   * at once — being bounced from three directions is the point.
    */
   spawnWave(playerDistance, specs) {
     this.wave++;
@@ -502,29 +588,143 @@ export class CombatSystem {
     // pairs, later ones fly a proper four-ship.
     const formation = FORMATION_IDS[Math.min(FORMATION_IDS.length - 1,
       Math.floor(this.wave / 2)) % FORMATION_IDS.length];
-    const want = Math.min(COMBAT.maxEnemies,
-      2 + Math.floor(this.wave * 0.75) + Math.round(D.aiSkill * 2));
-    const room = COMBAT.maxEnemies - this.enemies.filter((e) => e.alive).length;
-    const count = Math.max(0, Math.min(want, room));
+    const live = this.enemies.filter((e) => e.alive).length;
+    // Top back up to the floor, plus a slow climb above it as waves stack.
+    const target = Math.min(COMBAT.maxEnemies,
+      COMBAT.minEnemies + Math.floor(this.wave * 0.5) + Math.round(D.aiSkill * 2));
+    const count = Math.max(0, target - live);
 
     for (let i = 0; i < count; i++) {
       const spec = specs[this.rng.int(0, specs.length - 1)];
       const arch = ENEMY_ARCHETYPES[this.rng.int(0, ENEMY_ARCHETYPES.length - 1)];
       const livery = COMBAT.liveries[this.rng.int(0, COMBAT.liveries.length - 1)];
       const e = new EnemyFighter(this.render, this.world, spec, arch, D,
-        this.enemies.length + i, this.world.seed, {
+        this._nextIndex++, this.world.seed, {
           livery, slot: i, formation, tier: this.wave, speedFocus: this.speedFocus,
         });
       const off = e.formationOffset();
-      // Ahead of the player in the speed mode (they are being chased down),
-      // spread around them in the battle mode.
-      const lead = this.speedFocus ? 1400 : this.rng.float(-600, 1600);
-      e.spawn(playerDistance + lead + off[2], off[0] + this.rng.float(-60, 60),
-        off[1] + this.rng.float(-40, 40));
+      const a = this._approach(off);
+      e.approach = a.kind;
+      e.spawn(playerDistance + a.along, a.lateral, a.vertical);
       this.enemies.push(e);
     }
     this.events.push({ type: 'wave', wave: this.wave, count, formation });
     return count;
+  }
+
+  /**
+   * Draw one approach geometry from the weighted table.
+   *
+   * Everything is expressed in the path space the AI already flies — distance
+   * along the route, lateral offset, vertical offset — so a head-on merge is
+   * simply a hostile placed well *ahead* of the player, closing. `speedFocus`
+   * overrides the draw: in that mode they are the pack being chased, so they
+   * are always in front.
+   *
+   * IMPROVED: In combat modes, enemies now ALWAYS spawn ahead of the player
+   * to prevent immediate rear attacks at game start.
+   *
+   * @param {number[]} off the fighter's formation slot offset
+   * @returns {{kind:string, along:number, lateral:number, vertical:number}}
+   */
+  _approach(off) {
+    const jitterL = () => this.rng.float(-90, 90);
+    const jitterV = () => this.rng.float(-60, 60);
+    
+    // ALWAYS spawn ahead in combat modes - no rear attacks at start
+    if (this.speedFocus) {
+      return {
+        kind: 'lead',
+        along: 1400 + off[2], lateral: off[0] + jitterL(), vertical: off[1] + jitterV(),
+      };
+    }
+    
+    const t = COMBAT.approach;
+    let r = this.rng.next() * (t.head + t.side + t.diagonal + t.vertical);
+    
+    // HEAD-ON: Far ahead, random lateral/vertical spread
+    if ((r -= t.head) < 0) {
+      return {
+        kind: 'head',
+        along: this.rng.float(4200, 7000) + off[2],
+        lateral: off[0] + this.rng.float(-260, 260), 
+        vertical: off[1] + this.rng.float(-180, 180),
+      };
+    }
+    
+    // SIDE: Ahead and to the side, random direction
+    if ((r -= t.side) < 0) {
+      const s = this.rng.next() < 0.5 ? -1 : 1;
+      return {
+        kind: 'side',
+        along: this.rng.float(800, 1600) + off[2],  // Always ahead
+        lateral: off[0] + s * this.rng.float(900, 1800), 
+        vertical: off[1] + jitterV(),
+      };
+    }
+    
+    // DIAGONAL: Ahead and diagonal approach
+    if ((r -= t.diagonal) < 0) {
+      const s = this.rng.next() < 0.5 ? -1 : 1;
+      return {
+        kind: 'diagonal',
+        along: this.rng.float(1800, 3600) + off[2],
+        lateral: off[0] + s * this.rng.float(700, 1500),
+        vertical: off[1] + this.rng.float(-320, 320),
+      };
+    }
+    
+    // VERTICAL: Ahead and above/below
+    const s = this.rng.next() < 0.5 ? -1 : 1;
+    return {
+      kind: 'vertical',
+      along: this.rng.float(600, 1800) + off[2],  // Always ahead
+      lateral: off[0] + jitterL(), 
+      vertical: off[1] + s * this.rng.float(600, 1200),
+    };
+  }
+
+  /**
+   * Keep the airspace at strength between waves.
+   *
+   * A wave is a scripted arrival; this is the steady state. As kills come in
+   * the squadron drops below `COMBAT.minEnemies`, and after a short delay
+   * replacements join from a fresh approach direction. Without this the fight
+   * decays into a chase after the first competent minute.
+   *
+   * @param {number} dt
+   * @param {number} playerDistance the player's distance along the route
+   * @param {Array}  specs airframe specs replacements may be issued
+   * @returns {number} how many joined this frame
+   */
+  topUp(dt, playerDistance, specs) {
+    if (!specs || !specs.length) return 0;
+    const live = this.enemies.filter((e) => e.alive).length;
+    if (live >= COMBAT.minEnemies) { this._respawnTimer = COMBAT.respawnDelay; return 0; }
+
+    this._respawnTimer -= dt;
+    if (this._respawnTimer > 0) return 0;
+    this._respawnTimer = COMBAT.respawnDelay;
+
+    // Replace a couple at a time — a whole squadron appearing at once reads as
+    // a spawn, a trickle of reinforcements reads as a fight that keeps going.
+    const D = this.difficulty;
+    const join = Math.min(3, COMBAT.minEnemies - live);
+    for (let i = 0; i < join; i++) {
+      const spec = specs[this.rng.int(0, specs.length - 1)];
+      const arch = ENEMY_ARCHETYPES[this.rng.int(0, ENEMY_ARCHETYPES.length - 1)];
+      const livery = COMBAT.liveries[this.rng.int(0, COMBAT.liveries.length - 1)];
+      const e = new EnemyFighter(this.render, this.world, spec, arch, D,
+        this._nextIndex++, this.world.seed, {
+          livery, slot: i, formation: 'finger', tier: this.wave, speedFocus: this.speedFocus,
+        });
+      const a = this._approach(e.formationOffset());
+      e.approach = a.kind;
+      e.spawn(playerDistance + a.along, a.lateral, a.vertical);
+      this.enemies.push(e);
+    }
+    this.events.push({ type: 'reinforce', count: join });
+    return join;
   }
 
   /* =====================================================================
@@ -614,6 +814,18 @@ export class CombatSystem {
       this.events.push({ type: 'noLock', weapon: w });
       return null;
     }
+    /* --- range gate --------------------------------------------------------
+     * The distance is solved BEFORE the round is committed. Every heavy has a
+     * rated reach (8/10/12/15 km) and firing beyond it would launch a weapon
+     * that provably cannot arrive — the motor burns out short of the target.
+     * Refusing the shot and saying why is better than a guaranteed miss. */
+    const range = this.targetRange(player);
+    if (w.guided && w.range && range != null && range > w.range) {
+      this.audio?.play('powerBlocked', { volume: 0.7 });
+      this.events.push({ type: 'outOfRange', weapon: w, distance: range, max: w.range });
+      return null;
+    }
+
     this.heavyCooldown = w.cooldown;
     _v3.set(0, -1.2, -3).applyQuaternion(player.quaternion).add(player.position);
     const s = this.spawn(w, _v3, player.quaternion, player, this.lockTarget, w.color);
@@ -730,24 +942,40 @@ export class CombatSystem {
   _updateLock(dt, player) {
     if (this.lockTarget && !this.lockTarget.alive) this.lockTarget = null;
 
-    // An existing lock is tested against the WIDE cone, a new one against the
-    // narrow one. Only if the current target falls outside even the wide cone
-    // does the seeker go looking for another.
+    // AUTOMATIC TARGET LOCK: Always acquire the nearest enemy automatically
+    // Continuously update to the nearest target, even at ultra-high speeds
+    const allCandidates = this._candidates(player, false);
+    const nearest = allCandidates[0] || null;
+
+    // Switch to nearest if we have no target or if a closer threat appears
+    if (nearest && (!this.lockTarget || nearest !== this.lockTarget)) {
+      const wasLocked = this.lockProgress >= 1;
+      this.lockTarget = nearest;
+      
+      // Fast acquisition for new targets - improved for high-speed precision
+      if (!wasLocked) {
+        this.lockProgress = Math.min(0.35, this.lockProgress);
+      }
+      
+      // Fire "TARGET ACQUIRED" event when locking a new target
+      if (this.lockProgress < 1) {
+        this.events.push({ type: 'targetAcquired', target: this.lockTarget });
+      }
+    }
+
+    // An existing lock is tested against the WIDE cone for stability
     const held = this.lockTarget && this._candidates(player, true).includes(this.lockTarget);
     if (!held) {
-      const fresh = this._candidates(player, false);
-      const next = fresh[0] || null;
-      if (next !== this.lockTarget) {
-        this.lockTarget = next;
-        // Losing the target does not dump the lock instantly — it bleeds, so a
-        // momentary break through the edge of the cone is survivable.
-        if (!next) this.lockProgress = Math.max(0, this.lockProgress - dt * COMBAT.lockDecay);
-      }
+      this.lockTarget = null;
+      this.lockProgress = Math.max(0, this.lockProgress - dt * COMBAT.lockDecay);
     }
 
     if (this.lockTarget) {
       const was = this.lockProgress;
-      this.lockProgress = clamp01(this.lockProgress + dt / COMBAT.lockTime);
+      // Faster lock time at high speeds - improved accuracy and precision
+      const speedBonus = player.mach > 10 ? 1.5 : 1.0;
+      this.lockProgress = clamp01(this.lockProgress + dt / (COMBAT.lockTime / speedBonus));
+      
       if (was < 1 && this.lockProgress >= 1) {
         this.audio?.play('lockTone', { volume: 0.8 });
         this.events.push({ type: 'lock', target: this.lockTarget });
@@ -799,12 +1027,18 @@ export class CombatSystem {
           tof = _v.length() / Math.max(1, speed);
         }
         const d = _v.length();
+        s.range = d;             // live miss distance, read by the HUD readout
+        if (d < (s.closest ?? Infinity)) s.closest = d;
         if (d > 1) {
           _v.divideScalar(d);
           _v2.copy(s.vel).divideScalar(speed || 1);
-          // Terminal homing: the seeker gets sharper as it closes, which is
-          // what stops a near-miss at the last hundred metres.
-          const terminal = 1 + clamp01(1 - d / 900) * 2.2;
+          /* Terminal homing: the seeker gets sharper as it closes, which is what
+           * stops a near-miss at the last hundred metres. `precision` scales
+           * both how hard it can pull and how early the terminal phase starts,
+           * so the laser round (1.0) converges from much further out than the
+           * cluster charge (0.62) and effectively cannot be out-turned. */
+          const p = w.precision ?? 0.8;
+          const terminal = 1 + clamp01(1 - d / (700 + p * 1800)) * (1.6 + p * 3.4);
           const maxTurn = w.turnRate * terminal * dt;
           const cosA = clamp(_v2.dot(_v), -1, 1);
           const ang = Math.acos(cosA);
@@ -835,8 +1069,32 @@ export class CombatSystem {
 
       // A fused round (the grenade) goes off on its timer even if it misses.
       const fused = w.fuse && (w.life - s.life) >= w.fuse;
-      if (hit || fused || s.life <= 0 || this._hitGround(s)) {
-        if (hit || fused) this._detonate(s, hit, player);
+      const ground = this._hitGround(s);
+      if (hit || fused || s.life <= 0 || ground) {
+        /* A heavy round always detonates somewhere: on the target, on the
+         * ground, on a building, or when the motor burns out. Only tracers are
+         * allowed to simply stop existing. Terrain and structure impacts get
+         * the full fireball too — that is the point of "explodes on buildings,
+         * ground and other obstacles". */
+        if (hit || fused || !w.tracer) this._detonate(s, hit, player, ground);
+        /* --- outcome report ----------------------------------------------
+         * Every heavy the *player* launched resolves to exactly one verdict, so
+         * the HUD can say Target Hit or Target Missed and never both or
+         * neither. A splash kill still counts as a hit: the round did its job.
+         * `closest` is how near it got, which is the honest thing to show on a
+         * miss. */
+        if (s.fromPlayer && !w.tracer && !s.reported) {
+          s.reported = true;
+          const splashed = !hit && s.target && s.target.alive !== false
+            && (w.blast || 0) > 0 && (s.closest ?? Infinity) <= w.blast;
+          this.events.push({
+            type: (hit || splashed) ? 'targetHit' : 'targetMissed',
+            weapon: w,
+            target: s.target || hit || null,
+            distance: s.closest ?? null,
+            cause: hit ? 'direct' : splashed ? 'splash' : ground ? 'ground' : 'expired',
+          });
+        }
         this.shots.splice(i, 1);
         continue;
       }
@@ -884,7 +1142,7 @@ export class CombatSystem {
     return s.pos.y <= g + 2;
   }
 
-  _detonate(s, hit, player) {
+  _detonate(s, hit, player, ground = false) {
     const w = s.weapon;
     const blast = w.blast || 0;
     if (w.tracer) {
@@ -892,26 +1150,50 @@ export class CombatSystem {
       this.render.vfx.sparkBurst(s.pos, s.dir, 14, 0xffd27a);
       if (hit) this.render.vfx.explode(s.pos, 2.5, 0xffb063);
     } else {
-      /* A warhead going off is three things layered: the white-hot flash of
-       * the charge, the orange fireball expanding behind it, and the smoke
-       * column that hangs there afterwards. Doing all three is what makes it
-       * read as a detonation instead of a puff. */
-      const scale = clamp(blast * 0.14, 14, 44);
+      /* A warhead going off is layered: the white-hot flash of the charge, the
+       * fireball expanding behind it, a ring of secondary fireballs that give
+       * the blast real width, and the smoke column that hangs there afterwards.
+       * Doing all of it is what makes it read as a detonation rather than a
+       * puff — and these are big warheads, so the scale is generous. */
+      const scale = clamp(blast * 0.22, 26, 96);
+      this.render.vfx.explode(s.pos, scale * 1.15, 0xffffff);
       this.render.vfx.explode(s.pos, scale, 0xfff0c0);
-      this.render.vfx.explode(s.pos, scale * 0.7, s.color);
-      this.render.vfx.sparkBurst(s.pos, null, 48, 0xffc06a);
-      for (let i = 0; i < 7; i++) {
-        _v2.set((this.rng.next() - 0.5), (this.rng.next() - 0.2), (this.rng.next() - 0.5))
-          .multiplyScalar(scale * 1.6).add(s.pos);
-        this.render.vfx.smokePuff(_v2, 9, scale * 0.75, 0x4a4a4c);
+      this.render.vfx.explode(s.pos, scale * 0.72, s.color);
+      this.render.vfx.sparkBurst(s.pos, null, 96, 0xffc06a);
+      this.render.vfx.sparkBurst(s.pos, null, 44, 0xffffff);
+
+      // Secondary fireballs around the core, so the blast has a footprint.
+      for (let i = 0; i < 6; i++) {
+        _v2.set(this.rng.next() - 0.5, this.rng.next() * 0.4, this.rng.next() - 0.5)
+          .normalize().multiplyScalar(scale * (0.5 + this.rng.next() * 0.7)).add(s.pos);
+        this.render.vfx.explode(_v2, scale * (0.28 + this.rng.next() * 0.3), s.color);
       }
+      // Smoke column: rises, because a fireball this size draws air up with it.
+      for (let i = 0; i < 14; i++) {
+        _v2.set((this.rng.next() - 0.5) * 1.4, this.rng.next() * 1.5, (this.rng.next() - 0.5) * 1.4)
+          .multiplyScalar(scale * 1.5).add(s.pos);
+        this.render.vfx.smokePuff(_v2, 11, scale * 0.8, 0x45454a);
+      }
+      /* A ground or structure strike throws debris and dust outward along the
+       * surface instead of spherically, which is what distinguishes hitting a
+       * building from killing an aircraft. */
+      if (ground || !hit) {
+        for (let i = 0; i < 10; i++) {
+          const a = this.rng.next() * Math.PI * 2;
+          _v.set(Math.cos(a), 0.35 + this.rng.next() * 0.5, Math.sin(a));
+          _v2.copy(s.pos).addScaledVector(_v, scale * 0.7);
+          this.render.vfx.sparkBurst(_v2, _v, 12, 0xffbf6a);
+          this.render.vfx.smokePuff(_v2, 10, scale * 0.7, ground ? 0x6b5f4e : 0x50505a);
+        }
+      }
+
       // Felt from the cockpit if it went off anywhere near you.
-      const near = player ? clamp01(1 - s.pos.distanceTo(player.position) / 1400) : 0;
+      const near = player ? clamp01(1 - s.pos.distanceTo(player.position) / 2200) : 0;
       if (near > 0.02) {
-        this.render.postfx.flash(0.40 * near, 0xffb570);
-        this.render.rig.addShake(1.1 * near, 18);
+        this.render.postfx.flash(0.62 * near, 0xffb570);
+        this.render.rig.addShake(1.9 * near, 16);
       }
-      this.audio?.play('explosion', { volume: clamp01(0.55 + w.damage / 110) });
+      this.audio?.play('explosion', { volume: clamp01(0.6 + w.damage / 110) });
     }
 
     const apply = (victim, amount) => {
@@ -959,6 +1241,42 @@ export class CombatSystem {
   }
 
   drainEvents() { const e = this.events.slice(); this.events.length = 0; return e; }
+
+  /**
+   * Metres to the locked target, or null with no lock. This is the number the
+   * launch gate tests and the HUD shows beside the lock reticle, so both agree
+   * on the range by construction.
+   * @param {object} player
+   * @returns {number|null}
+   */
+  targetRange(player) {
+    const t = this.lockTarget;
+    if (!player || !t || t.alive === false) return null;
+    return player.position.distanceTo(t.position3 || t.position);
+  }
+
+  /** True when the locked target is inside the selected heavy's rated reach. */
+  targetInRange(player) {
+    const w = this.heavyWeapon;
+    const d = this.targetRange(player);
+    if (d == null || !w?.range) return false;
+    return d <= w.range;
+  }
+
+  /**
+   * Every heavy round the player currently has in the air, with how far it
+   * still has to fly. The HUD draws one distance label per round, above the
+   * missile, so the player can watch the gap close.
+   * @returns {Array<{pos:object, range:number|null, color:number, weapon:object}>}
+   */
+  liveMissiles() {
+    const out = [];
+    for (const s of this.shots) {
+      if (s.weapon.tracer || !s.fromPlayer) continue;
+      out.push({ pos: s.pos, range: s.range ?? null, color: s.color, weapon: s.weapon });
+    }
+    return out;
+  }
 
   /** Live enemies, for the HUD target boxes and speed labels. */
   liveEnemies() { return this.enemies.filter((e) => e.alive); }
