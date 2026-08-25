@@ -296,12 +296,6 @@ body.touch-mode .hud-brief { display: none !important; }
 .hud-bl { position: absolute; bottom: max(14px, env(safe-area-inset-bottom)); left: max(18px, env(safe-area-inset-left)); display: flex; align-items: flex-end; gap: 10px; }
 .radar-wrap { position: relative; width: 152px; height: 152px; }
 #radar { width: 100%; height: 100%; display: block; }
-.radar-labels { position: absolute; inset: 0; pointer-events: none; }
-.rl { position: absolute; font-size: 0.56em; letter-spacing: 0.16em; color: rgba(210, 240, 255, 0.55); }
-.rl.n { top: 3px; left: 50%; transform: translateX(-50%); }
-.rl.s { bottom: 3px; left: 50%; transform: translateX(-50%); }
-.rl.e { right: 4px; top: 50%; transform: translateY(-50%); }
-.rl.w { left: 4px; top: 50%; transform: translateY(-50%); }
 
 .alt-tape { position: relative; width: 7px; height: 128px; border: 1px solid rgba(200, 230, 255, 0.22); border-radius: 4px; background: rgba(6, 12, 19, 0.5); overflow: hidden; }
 .alt-tape-fill { position: absolute; left: 0; right: 0; bottom: 0; background: linear-gradient(180deg, rgba(157, 255, 74, 0.65), rgba(57, 245, 255, 0.35)); height: 0%; transition: height 120ms linear; }
@@ -840,3 +834,43 @@ body.hud-hidden #mobile-controls { display: none !important; }
   font-size: 0.6em; line-height: 1.35; color: rgba(200, 232, 255, 0.62);
 }
 .obj-hint.show { display: block; }
+
+/* ---------------------------------------------------------------------------
+ * HOSTILE COUNT
+ * Top centre, under the compass. The weapons panel is closed by default and
+ * this is the number the combat modes are entirely about, so it does not live
+ * behind a toggle. While hostiles are holding fire at the start of a sortie it
+ * shows that countdown instead — the one time something matters more than the
+ * count itself.
+ * ------------------------------------------------------------------------ */
+.hostile-count {
+  display: none; align-items: center; gap: 7px;
+  margin: 6px auto 0; width: max-content;
+  padding: 3px 12px 4px; border-radius: 999px;
+  border: 1px solid rgba(255, 70, 80, 0.42);
+  background: linear-gradient(180deg, rgba(34, 10, 12, 0.72), rgba(12, 5, 7, 0.55));
+  box-shadow: 0 0 16px rgba(255, 70, 80, 0.14) inset;
+  backdrop-filter: blur(4px);
+  white-space: nowrap;
+}
+.hostile-count.show { display: flex; }
+.hc-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: none;
+  background: #ff3b46; box-shadow: 0 0 8px rgba(255, 59, 70, 0.9);
+}
+.hc-value {
+  font-family: var(--font-num); font-size: 0.95rem; font-weight: 400; line-height: 1;
+  color: #ffd9dc; text-shadow: 0 0 10px rgba(255, 59, 70, 0.45);
+}
+.hc-label { font-size: 0.44rem; letter-spacing: 0.22em; color: rgba(255, 190, 195, 0.66); }
+/* Cleared the field: nothing left to shoot at. */
+.hostile-count.clear { border-color: rgba(157, 255, 74, 0.5); }
+.hostile-count.clear .hc-dot { background: var(--lime); box-shadow: 0 0 8px rgba(157, 255, 74, 0.9); }
+.hostile-count.clear .hc-value { color: #d8ffc0; text-shadow: 0 0 10px rgba(157, 255, 74, 0.45); }
+.hostile-count.clear .hc-label { color: rgba(200, 255, 170, 0.7); }
+/* Holding fire: amber, and pulsing, because it is a clock running down. */
+.hostile-count.hold { border-color: rgba(255, 182, 72, 0.6); }
+.hostile-count.hold .hc-dot { background: var(--amber); box-shadow: 0 0 8px rgba(255, 182, 72, 0.9); animation: warnFlash 1s ease-in-out infinite; }
+.hostile-count.hold .hc-value { color: #ffe6b8; text-shadow: 0 0 10px rgba(255, 182, 72, 0.5); }
+.hostile-count.hold .hc-label { color: rgba(255, 220, 170, 0.72); }
+body.hud-hidden .hostile-count { display: none !important; }

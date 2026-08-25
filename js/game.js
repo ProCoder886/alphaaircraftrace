@@ -10,7 +10,7 @@ import * as THREE from 'three';
 import {
   AIRCRAFT, AIRCRAFT_BY_ID, BIOMES, BIOMES_BY_ID, MODES, DIFFICULTIES, WEATHER, TIME_OF_DAY,
   CAMPAIGN, STORY, STORY_BY_ID, OBJECTIVE_POOL, ACHIEVEMENTS, SCORE, CREDITS, POWERS, WORLD,
-  FRAME_BAND, QUALITY_PRESETS,
+  FRAME_BAND, QUALITY_PRESETS, RADAR,
   DEFAULT_SAVE, STORAGE_KEY, LOADING_STAGES, DEFAULTS, MACH, COMBAT, WEAPONS_BY_ID,
   HEAVY_ORDER, GUN_ORDER, DEFAULT_BINDINGS,
   RNG, hashSeed, clamp, clamp01, lerp, damp, TAU,
@@ -280,7 +280,7 @@ export class Game {
     this.pendingCampaign = null;
     this.freezeTimer = 0;
     this.lastAutoSave = 0;
-    this._radarBuf = { path: [], cps: [], rivals: [], traffic: [], obstacles: [] };
+    this._radarBuf = { path: [], cps: [], rivals: [], enemies: [], traffic: [], obstacles: [] };
     this._accum = 0;
     this._rafId = 0;
     this._lastNotify = 0;
@@ -989,6 +989,7 @@ export class Game {
       lateral: clamp(player.smoothControls.roll, -1, 1),
       pitchRate: player.smoothControls.pitch,
       machZoom: player.mach01,
+      machExtreme: player.machExtreme,
       lagScale: 1 / clamp(this.save.data.settings.cameraSensitivity ?? 1, 0.5, 1.8),
     });
 
@@ -1296,15 +1297,17 @@ export class Game {
       this.score += SCORE.machHoldPerSec * dt * this.combo;
     }
 
-    /* High-Mach buffet. Past `shakeMach` the airframe starts to complain, and
-     * the shake is what sells the last seven Mach as genuinely fast rather than
-     * just a bigger number on the tape. It ramps in over the band shakeMach →
-     * MACH.max instead of snapping on, so crossing the threshold reads as the
-     * aircraft loading up rather than as a glitch. Re-applied every frame at low
-     * amplitude: the rig decays shake, so a steady trickle holds a steady rattle. */
-    if (player.mach > MACH.shakeMach) {
-      const t = clamp01((player.mach - MACH.shakeMach) / Math.max(0.001, MACH.max - MACH.shakeMach));
-      this.render.rig.addShake(MACH.shakeAmount * t * dt * 8, 26);
+    /* High-Mach buffet. Past `shakeMach` the airframe starts to complain and by
+     * `extremeMach` it is shaking as hard as the rig will allow — that band is
+     * what sells the top of the envelope as somewhere the airframe does not
+     * really want to be, rather than as a bigger number on the tape. Squared,
+     * so the onset is gentle and the last stretch is violent. Re-applied every
+     * frame at low amplitude: the rig decays shake, so a steady trickle holds
+     * a steady rattle rather than a series of jolts. */
+    const buffet = player.machExtreme;
+    if (buffet > 0) {
+      this.render.rig.addShake(MACH.shakeAmount * buffet * buffet * dt * 9,
+        26 + buffet * 16);
     }
   }
 
@@ -1398,6 +1401,8 @@ export class Game {
       wave: c.wave,
       kills: this.metrics.kills,
     });
+    // Top centre, outside the closable weapons panel.
+    this.ui.setHostileCount(c.enemies.filter((e) => e.alive).length, c.armTimer);
   }
 
   /**
@@ -1510,6 +1515,13 @@ export class Game {
         }
         case 'reinforce':
           this.ui.notify('HOSTILE REINFORCEMENTS', 'bad', `+${ev.count}`);
+          break;
+        case 'weaponsFree':
+          // The settle-in window is over. Said loudly, because the airspace
+          // the player has been flying through unopposed is now shooting back.
+          this.ui.banner('WEAPONS FREE', 'HOSTILES ARE ENGAGING');
+          this.ui.notify('HOSTILES ENGAGING', 'bad');
+          this.audio.play('lockWarn', { volume: 0.9 });
           break;
 
         default: break;
@@ -1933,6 +1945,8 @@ export class Game {
       focus: p.position,
       speed01: p.speed01 || 0,
       mach01: p.mach01 || 0,
+      // The extreme band: 0 below Mach 23, 1 at Mach 25 and above.
+      machExtreme: p.machExtreme || 0,
       boost: p.boostBlend || 0,
       damage: this.state === 'racing' ? clamp01((p.damage01 - 0.55) / 0.45) : 0,
       phase: p.phaseActive ? 1 : 0,
@@ -1972,9 +1986,15 @@ export class Game {
       }
     }
 
-    // Radar payload — everything relative to the player, north-up.
+    /* Radar payload — everything as a world-space offset from the player. The
+     * display resolves those onto the aircraft's own axes itself, so nothing
+     * here needs to know which way is up on the disc.
+     *
+     * Combat gets a far wider range than racing: hostiles sit seven to ten
+     * kilometres apart and arrive from twenty out, so the racing disc showed an
+     * empty circle in the one mode that is entirely about where they are. */
     const buf = this._radarBuf;
-    const range = 3200;
+    const range = cfg.mode.combat ? RADAR.combatRange : RADAR.raceRange;
     buf.path.length = 0;
     for (let i = 0; i < 14; i++) {
       const s = w.path.sample(p.distanceAlong + i * 240, {});
@@ -2007,6 +2027,25 @@ export class Game {
     const near = w.queryColliders(p.position, 1600);
     for (let i = 0; i < near.length && buf.obstacles.length < 40; i++) {
       buf.obstacles.push([near[i].pos.x - p.position.x, near[i].pos.z - p.position.z]);
+    }
+
+    /* Hostiles. These never reached the radar at all: the buffer was fed from
+     * the race director's rivals, and the combat modes have no rivals — so the
+     * one display whose whole job is telling you where the enemy is showed
+     * everything except the enemy. Nearest first, because when a hundred are
+     * airborne the ones that matter are the close ones. */
+    buf.enemies.length = 0;
+    if (this.combat) {
+      const locked = this.combat.lockTarget;
+      for (const e of this.combat.enemies) {
+        if (!e.alive) continue;
+        const dx = e.position3.x - p.position.x;
+        const dz = e.position3.z - p.position.z;
+        buf.enemies.push([dx, dz, e.position3.y - p.position.y, e === locked,
+          dx * dx + dz * dz]);
+      }
+      buf.enemies.sort((a, b) => a[4] - b[4]);
+      if (buf.enemies.length > RADAR.maxContacts) buf.enemies.length = RADAR.maxContacts;
     }
 
     // Active objective (rotate to the first incomplete one).
@@ -2069,6 +2108,7 @@ export class Game {
       radarPath: buf.path,
       radarCheckpoints: buf.cps,
       radarRivals: buf.rivals,
+      radarEnemies: buf.enemies,
       radarTraffic: buf.traffic,
       radarObstacles: buf.obstacles,
     });

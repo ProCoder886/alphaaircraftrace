@@ -14,7 +14,8 @@ import {
   DIFFICULTIES, DIFFICULTY_ORDER, POWERS, WEATHER, WEATHER_MENU, CAMPAIGN, ACHIEVEMENTS,
   STORY, STORY_BY_ID, STORY_ACTS, LOCATIONS_BY_ID, COMBAT,
   QUALITY_ORDER, QUALITY_PRESETS, BINDING_LABELS, DEFAULT_BINDINGS, TIPS,
-  CONTROL_GROUPS, MACH, WEAPONS, GAME_NAME, VERSION, clamp, clamp01, lerp, TAU,
+  CONTROL_GROUPS, MACH, WEAPONS, RADAR, radarProject, radarBearing,
+  GAME_NAME, VERSION, clamp, clamp01, lerp, TAU,
 } from './config.js';
 
 /* ---- helpers ------------------------------------------------------------ */
@@ -262,6 +263,9 @@ export class UI {
       cbtWave: $('#cbt-wave'),
       cbtKills: $('#cbt-kills'),
       cbtHostiles: $('#cbt-hostiles'),
+      hostileCount: $('#hostile-count'),
+      hostileValue: $('#hostile-count-value'),
+      hostileLabel: $('#hostile-count-label'),
       brief: $('#hud-brief'),
       controls: $('#hud-controls'),
       brief2: $('#mission-brief'),
@@ -1548,7 +1552,32 @@ export class UI {
   clearCombatHud() {
     this.dom.combat?.classList.remove('active');
     this.dom.lockRange?.classList.remove('active', 'locked', 'far');
+    this.dom.hostileCount?.classList.remove('show', 'clear', 'hold');
+    this._hostileKey = null;
     if (this._tgtPool) for (const p of this._tgtPool) p.root.style.display = 'none';
+  }
+
+  /**
+   * The hostile count, top centre.
+   *
+   * While the squadron is holding fire at the start of a sortie this shows
+   * that countdown instead of the tally: for those seconds the number that
+   * matters is how long you have left to get pointed and moving, not how many
+   * of them there are.
+   */
+  setHostileCount(n, holdSeconds = 0) {
+    const el = this.dom.hostileCount;
+    if (!el) return;
+    const hold = holdSeconds > 0;
+    // Ticks every frame; the text changes about once a second.
+    const key = hold ? `h${Math.ceil(holdSeconds)}` : `n${n}`;
+    if (key === this._hostileKey) return;
+    this._hostileKey = key;
+    el.classList.add('show');
+    el.classList.toggle('hold', hold);
+    el.classList.toggle('clear', !hold && n === 0);
+    this.dom.hostileValue.textContent = hold ? `${Math.ceil(holdSeconds)}s` : String(n);
+    this.dom.hostileLabel.textContent = hold ? 'WEAPONS FREE IN' : (n === 1 ? 'HOSTILE' : 'HOSTILES');
   }
 
   /**
@@ -1750,32 +1779,43 @@ export class UI {
   }
 
   /* ---- radar ------------------------------------------------------------ */
+  /**
+   * The radar. Heading-up: your nose is always the top of the disc.
+   *
+   * See the RADAR block in config.js for why it is not north-up. Everything
+   * here goes through `radarProject`, which resolves a world offset onto the
+   * aircraft's own axes — so a contact that is ahead of you is above your
+   * marker, on every heading, and there is no sign left to get backwards.
+   */
   _drawRadar(s) {
     const ctx = this.radarCtx;
     if (!ctx) return;
     const W = this.dom.radar.width, H = this.dom.radar.height;
-    const cx = W / 2, cy = H / 2, R = W / 2 - 8;
-    const range = s.radarRange || 3200;
+    const cx = W / 2, cy = H / 2, R = W / 2 - 12;
+    const range = s.radarRange || RADAR.raceRange;
+    const head = (s.heading || 0) * Math.PI / 180;
+    const pt = this._radarPt || (this._radarPt = {});
     ctx.clearRect(0, 0, W, H);
 
-    // frame
     ctx.save();
     ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.closePath();
-    ctx.fillStyle = 'rgba(5,11,18,0.55)'; ctx.fill();
+    ctx.fillStyle = 'rgba(5,11,18,0.58)'; ctx.fill();
     ctx.clip();
 
+    // Range rings and the nose/wing cross.
     ctx.strokeStyle = 'rgba(140,200,235,0.16)';
     ctx.lineWidth = 1.4;
     for (const f of [0.33, 0.66, 1.0]) { ctx.beginPath(); ctx.arc(cx, cy, R * f, 0, TAU); ctx.stroke(); }
     ctx.setLineDash([3, 5]);
-    ctx.beginPath(); ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R); ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R);
+    ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy);
+    ctx.stroke();
     ctx.setLineDash([]);
 
-    const toRadar = (dx, dz) => {
-      // North-up radar: world +Z is north, world +X is east.
-      const x = cx + (dx / range) * R;
-      const y = cy - (dz / range) * R;
-      return [x, y];
+    const plot = (dx, dz) => {
+      radarProject(dx, dz, head, range, R, pt);
+      return pt;
     };
 
     // route ahead
@@ -1784,38 +1824,73 @@ export class UI {
       ctx.lineWidth = 2.4;
       ctx.beginPath();
       s.radarPath.forEach((p, i) => {
-        const [x, y] = toRadar(p[0], p[1]);
-        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        const q = plot(p[0], p[1]);
+        i === 0 ? ctx.moveTo(cx + q.x, cy + q.y) : ctx.lineTo(cx + q.x, cy + q.y);
       });
       ctx.stroke();
     }
 
-    // obstacles
+    // obstacles — dim, and small, because they are scenery not threats
     if (s.radarObstacles) {
-      ctx.fillStyle = 'rgba(255,120,80,0.42)';
+      ctx.fillStyle = 'rgba(190,180,150,0.34)';
       for (const o of s.radarObstacles) {
-        const [x, y] = toRadar(o[0], o[1]);
-        ctx.beginPath(); ctx.arc(x, y, 2.4, 0, TAU); ctx.fill();
+        const q = plot(o[0], o[1]);
+        if (q.clamped) continue;
+        ctx.beginPath(); ctx.arc(cx + q.x, cy + q.y, 2, 0, TAU); ctx.fill();
       }
     }
     // traffic
     if (s.radarTraffic) {
-      ctx.fillStyle = 'rgba(220,235,250,0.62)';
+      ctx.fillStyle = 'rgba(220,235,250,0.5)';
       for (const o of s.radarTraffic) {
-        const [x, y] = toRadar(o[0], o[1]);
-        ctx.fillRect(x - 2, y - 2, 4, 4);
+        const q = plot(o[0], o[1]);
+        if (q.clamped) continue;
+        ctx.fillRect(cx + q.x - 2, cy + q.y - 2, 4, 4);
       }
     }
-    // rivals — colour by whether they are ahead of or behind the player
+    // rivals — amber, and only in the racing modes that have them
     if (s.radarRivals) {
+      ctx.fillStyle = 'rgba(255,182,72,0.92)';
       for (const r of s.radarRivals) {
-        const [x, y] = toRadar(r[0], r[1]);
-        ctx.fillStyle = r[2] > 0 ? 'rgba(255,80,100,0.95)' : 'rgba(255,182,72,0.9)';
-        ctx.beginPath(); ctx.arc(x, y, 4, 0, TAU); ctx.fill();
-        // altitude offset tick
-        const dy = clamp(r[3] / 400, -1, 1) * 6;
-        ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 1.4;
-        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y - dy); ctx.stroke();
+        const q = plot(r[0], r[1]);
+        ctx.beginPath(); ctx.arc(cx + q.x, cy + q.y, 4, 0, TAU); ctx.fill();
+      }
+    }
+    /* HOSTILES — red, and the only thing on this display drawn at full
+     * saturation. A contact past the edge of the disc is pinned to the rim
+     * rather than dropped: knowing a fighter is out there on your left beam is
+     * the whole reason to look at a radar, and dropping it the moment it
+     * leaves the range ring is how you get bounced. */
+    if (s.radarEnemies) {
+      for (const e of s.radarEnemies) {
+        const q = plot(e[0], e[1]);
+        const x = cx + q.x, y = cy + q.y;
+        if (q.clamped) {
+          // Edge contact: a small wedge on the rim pointing outward.
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.rotate(Math.atan2(q.y, q.x) + Math.PI / 2);
+          ctx.fillStyle = 'rgba(255,70,80,0.75)';
+          ctx.beginPath();
+          ctx.moveTo(0, -3.4); ctx.lineTo(2.8, 2.2); ctx.lineTo(-2.8, 2.2);
+          ctx.closePath(); ctx.fill();
+          ctx.restore();
+          continue;
+        }
+        // e[2] is the altitude offset; e[3] marks the locked target.
+        const locked = !!e[3];
+        ctx.fillStyle = locked ? '#fff' : '#ff3b46';
+        ctx.shadowColor = locked ? 'rgba(255,255,255,0.9)' : 'rgba(255,59,70,0.8)';
+        ctx.shadowBlur = locked ? 9 : 5;
+        ctx.beginPath(); ctx.arc(x, y, locked ? 5 : 3.6, 0, TAU); ctx.fill();
+        ctx.shadowBlur = 0;
+        // Above or below you: a tick up or down off the contact.
+        const dy = clamp((e[2] || 0) / 900, -1, 1) * 6;
+        if (Math.abs(dy) > 1.2) {
+          ctx.strokeStyle = locked ? '#fff' : 'rgba(255,59,70,0.85)';
+          ctx.lineWidth = 1.4;
+          ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y - dy); ctx.stroke();
+        }
       }
     }
     // checkpoints
@@ -1823,28 +1898,62 @@ export class UI {
       ctx.strokeStyle = 'rgba(157,255,74,0.95)';
       ctx.lineWidth = 2;
       s.radarCheckpoints.forEach((p, i) => {
-        const [x, y] = toRadar(p[0], p[1]);
-        ctx.beginPath(); ctx.arc(x, y, i === 0 ? 7 : 4.5, 0, TAU); ctx.stroke();
+        const q = plot(p[0], p[1]);
+        ctx.beginPath(); ctx.arc(cx + q.x, cy + q.y, i === 0 ? 7 : 4.5, 0, TAU); ctx.stroke();
         if (i === 0) { ctx.fillStyle = 'rgba(157,255,74,0.30)'; ctx.fill(); }
       });
     }
     ctx.restore();
 
-    // player arrow (rotates with heading)
+    /* --- compass ring ------------------------------------------------------
+     * Drawn HERE rather than as fixed HTML around the canvas, because on a
+     * heading-up display the letters have to turn with the world — and a
+     * label that is drawn by the same code as the plot cannot drift out of
+     * step with it, which is what fixed markup around a rotating plot does. */
+    const marks = [[0, 'N'], [90, 'E'], [180, 'S'], [270, 'W']];
     ctx.save();
     ctx.translate(cx, cy);
-    ctx.rotate(s.heading * Math.PI / 180);
+    ctx.font = '700 11px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const [deg, label] of marks) {
+      const a = radarBearing(deg, head);
+      const lx = Math.sin(a) * (R + 7);
+      const ly = -Math.cos(a) * (R + 7);
+      ctx.fillStyle = deg === 0 ? 'rgba(157,255,74,0.95)' : 'rgba(200,235,255,0.62)';
+      ctx.fillText(label, lx, ly);
+      // A tick on the rim so the letter is anchored to a real bearing.
+      ctx.strokeStyle = deg === 0 ? 'rgba(157,255,74,0.7)' : 'rgba(160,215,245,0.4)';
+      ctx.lineWidth = deg === 0 ? 2 : 1.3;
+      ctx.beginPath();
+      ctx.moveTo(Math.sin(a) * (R - 5), -Math.cos(a) * (R - 5));
+      ctx.lineTo(Math.sin(a) * R, -Math.cos(a) * R);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    /* --- the player --------------------------------------------------------
+     * A green arrow at the centre, pointing UP — because on a heading-up
+     * display that IS the direction the aircraft is flying, and the letters on
+     * the rim say which compass bearing that is. */
+    ctx.save();
+    ctx.translate(cx, cy);
     ctx.fillStyle = '#9dff4a';
     ctx.shadowColor = 'rgba(157,255,74,0.9)'; ctx.shadowBlur = 8;
     ctx.beginPath();
-    ctx.moveTo(0, -9); ctx.lineTo(6.5, 8); ctx.lineTo(0, 4.5); ctx.lineTo(-6.5, 8);
+    ctx.moveTo(0, -10); ctx.lineTo(6.5, 8); ctx.lineTo(0, 4.5); ctx.lineTo(-6.5, 8);
     ctx.closePath(); ctx.fill();
     ctx.restore();
 
-    // rim
+    // rim + range readout
     ctx.strokeStyle = 'rgba(160,215,245,0.32)';
     ctx.lineWidth = 1.6;
     ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.stroke();
+    ctx.font = '600 9px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'bottom';
+    ctx.fillStyle = 'rgba(200,235,255,0.45)';
+    ctx.fillText(`${(range / 1000).toFixed(0)} km`, W - 4, H - 2);
   }
 
   /* =====================================================================

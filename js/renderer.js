@@ -1495,8 +1495,15 @@ export class PostFX {
     // shader's radial mask holds the middle of the frame crisp, so the smear
     // can be this heavy at the edges without hiding anything you need to fly.
     const mach01 = clamp01(state.mach01 ?? speed01);
+    /* The extreme band. `mach01` saturates at the blur Mach and then has
+     * nothing left to say, which is a problem when the top of the envelope is
+     * another eight Mach above it — so past Mach 23 a second channel takes
+     * over and is at maximum by Mach 25. It roughly TRIPLES the smear, which
+     * is what the last five Mach should look like. */
+    const hot = clamp01(state.machExtreme ?? 0);
     const target = this.motionBlurEnabled
-      ? (Math.pow(mach01, 1.45) * 0.125 + boost * 0.032) * intensity * motion
+      ? (Math.pow(mach01, 1.45) * 0.125 + Math.pow(hot, 1.3) * 0.235 + boost * 0.032)
+        * intensity * motion
       : 0;
     u.uBlur.value = damp(u.uBlur.value, target, 8, dt);
     // The nitrous blur is deliberately its own channel rather than more of the
@@ -1521,25 +1528,34 @@ export class PostFX {
     // frame time does, but a machine dropping to 20 fps would then bury the
     // route in mud exactly when the player most needs to see it.
     const shutter = Math.min(1, (1 / 60) / Math.max(1e-4, dt));
-    const scale = this.motionBlurEnabled ? intensity * motion * shutter * (0.9 + boost * 1.0) : 0;
+    const scale = this.motionBlurEnabled
+      ? intensity * motion * shutter * (0.9 + boost * 1.0 + hot * 1.4) : 0;
     // Clamp: a camera cut or a respawn would otherwise smear the whole frame.
-    this._camVel.set(clamp(vx * scale, -0.055, 0.055), clamp(vy * scale, -0.055, 0.055));
+    // The extreme band gets a wider clamp — the whole point up there is that
+    // the picture is being torn apart by how fast the world is moving.
+    const lim = 0.055 + hot * 0.055;
+    this._camVel.set(clamp(vx * scale, -lim, lim), clamp(vy * scale, -lim, lim));
     u.uCamVel.value.lerp(this._camVel, clamp01(dt * 26));
     this._prevCamQuat.copy(cam.quaternion);
 
     // Speed lines follow Mach too — they start showing around Mach 6 and are
     // fully drawn by the time the blur saturates.
     const sl = this.motionBlurEnabled
-      ? clamp01((mach01 - 0.35) / 0.55) * (0.5 + boost * 0.7) * intensity * (state.reducedMotion ? 0.3 : 1)
+      ? clamp01(clamp01((mach01 - 0.35) / 0.55) * (0.5 + boost * 0.7) + hot * 0.85)
+        * intensity * (state.reducedMotion ? 0.3 : 1)
       : 0;
     u.uSpeedLines.value = damp(u.uSpeedLines.value, sl, 6, dt);
 
     if (state.blurCenter) u.uBlurCenter.value.lerp(state.blurCenter, clamp01(dt * 6));
 
     u.uChroma.value = damp(u.uChroma.value,
-      (this.preset.chromatic ? 0.00030 + speed01 * 0.00042 + boost * 0.00055 : 0) * intensity, 6, dt);
+      (this.preset.chromatic
+        ? 0.00030 + speed01 * 0.00042 + boost * 0.00055 + hot * 0.00120 : 0) * intensity, 6, dt);
 
-    u.uVignette.value = damp(u.uVignette.value, 0.42 + speed01 * 0.16 + (state.vignetteBoost || 0), 5, dt);
+    // The vignette closes in with the extreme band: the frame narrowing to a
+    // tunnel is most of what makes a speed feel dangerous rather than merely fast.
+    u.uVignette.value = damp(u.uVignette.value,
+      0.42 + speed01 * 0.16 + hot * 0.30 + (state.vignetteBoost || 0), 5, dt);
     u.uDamage.value = damp(u.uDamage.value, clamp01(state.damage ?? 0), 5, dt);
     u.uPhase.value = damp(u.uPhase.value, clamp01(state.phase ?? 0), 8, dt);
     u.uScan.value = damp(u.uScan.value, clamp01(state.scan ?? 0), 5, dt);
@@ -1701,7 +1717,14 @@ export class CameraRig {
     // reheat, so speed reads as the world tearing past the canopy instead of
     // the airframe shrinking away from you. It rushes in fast on the burner
     // and eases back out slowly, which is what gives the shove its punch.
-    const zoomTarget = 1 - speed01 * 0.17 - boost * 0.28 - clamp01(params.machZoom ?? 0) * 0.13;
+    /* The chase camera dollies IN as the aircraft accelerates and harder still
+     * under reheat, so speed reads as the world tearing past the canopy rather
+     * than the airframe shrinking away. The extreme band pulls in harder again:
+     * at the top of the envelope the camera is right on the tail and the
+     * world is coming at you rather than sliding by. */
+    const hot = clamp01(params.machExtreme ?? 0);
+    const zoomTarget = 1 - speed01 * 0.17 - boost * 0.28
+      - clamp01(params.machZoom ?? 0) * 0.13 - hot * 0.16;
     this.zoom = this.initialised
       ? damp(this.zoom, zoomTarget, zoomTarget < this.zoom ? 7.0 : 2.4, dt)
       : zoomTarget;
@@ -1727,7 +1750,11 @@ export class CameraRig {
     if (!m.rigid) desired.y += clamp(-(params.pitchRate ?? 0) * 8, -6, 10);
 
     const snap = !this.initialised;
-    const lag = m.rigid ? 40 : lerp(5.5, 11.0, speed01) * (params.lagScale ?? 1);
+    /* Lag tightens with the extreme band. A loose chase rig at Mach 30 reads
+     * as the aircraft towing the camera around behind it; a tight one reads as
+     * the camera struggling to keep up, which is the feeling wanted here. */
+    const lag = m.rigid ? 40
+      : lerp(5.5, 11.0, speed01) * lerp(1, 1.8, hot) * (params.lagScale ?? 1);
     if (snap) { this.position.copy(desired); this.initialised = true; }
     else {
       this.position.x = damp(this.position.x, desired.x, lag, dt);
@@ -1778,8 +1805,12 @@ export class CameraRig {
     // The hangar preview drops the camera to a 34° long lens. Easing back out
     // of that over half a second is exactly the "why is the jet enormous"
     // moment before the countdown, so a snap resets the lens too.
+    /* FOV is the single strongest cue for speed there is: a wider lens moves
+     * more of the world across more of the screen for the same distance
+     * covered. It opens with speed, again on reheat, and again into the
+     * extreme band — twenty-two degrees of it between cruise and Mach 25. */
     const fovTarget = m.fov + speed01 * 12 + boost * 13
-      + clamp01(params.machZoom ?? 0) * 9 + (params.fovBoost ?? 0);
+      + clamp01(params.machZoom ?? 0) * 9 + hot * 13 + (params.fovBoost ?? 0);
     const fovWanted = this.reducedMotion ? m.fov + speed01 * 4 : fovTarget;
     this.fov = snap ? fovWanted : damp(this.fov, fovWanted, 4.5, dt);
     if (Math.abs(this.camera.fov - this.fov) > 0.01) {

@@ -483,13 +483,18 @@ export class AircraftVisual {
     // nitrous green the moment the burner lights.
     const boost01 = clamp01(state.boost || 0);
     const mach01 = clamp01(state.mach01 ?? state.speed01 ?? 0);
+    /* The extreme band keeps the trail growing past the point `mach01`
+     * saturates. Above Mach 25 the exhaust is the widest, brightest thing on
+     * screen apart from the world going past — which is the point. */
+    const hot = clamp01(state.machExtreme ?? 0);
     const trailOpacity = state.alive
-      ? clamp01((state.speed01 - 0.22) * 1.5) * (0.055 + mach01 * 0.075 + boost01 * 0.26) : 0;
+      ? clamp01((state.speed01 - 0.22) * 1.5)
+        * (0.055 + mach01 * 0.075 + boost01 * 0.26 + hot * 0.20) : 0;
     for (const t of this.engineTrails) {
       this._wp.copy(t.anchor).applyQuaternion(state.quaternion).add(state.position);
       t.push(this._wp);
       t.setOpacity(damp(t.material.uniforms.uOpacity.value, trailOpacity, 6, dt));
-      t.setWidth(this.engineRadius * (0.24 + mach01 * 0.16 + boost01 * 0.34));
+      t.setWidth(this.engineRadius * (0.24 + mach01 * 0.16 + boost01 * 0.34 + hot * 0.30));
       // Nitrous burns green. The blend is smoothed by the burner spool, so the
       // ribbon washes from exhaust colour to green as the reheat lights.
       t.material.uniforms.uColor.value.lerpColors(t.baseColor, NITROUS_GREEN, boost01);
@@ -621,6 +626,8 @@ export class Player {
     this.boostMeter = 100;
     this.boosting = false;
     this.boostBlend = 0;
+    /** How far the Turbo Speed stage has lit, 0..1. See PHYSICS.turboSpool. */
+    this.turboBlend = 0;
     this.boostCooldown = 0;
     this.burner = 0;             // reheat spool state, 0..1
     this.health = this.maxHealth;
@@ -679,7 +686,11 @@ export class Player {
     this.damageScale = ab === 'ablative' ? 0.6 : 1;
     this.nearMissBonus = ab === 'predator' ? 1.4 : 1;
     this.scanRangeScale = ab === 'deepscan' ? 1.6 : 1;
-    this.turboBonus = ab === 'overcharge' ? 1.12 : 1;
+    /* Overcharge raises the reheat thrust FLOOR — the thrust left at the top
+     * of the envelope, where it is scarcest — rather than the ceiling, which
+     * Turbo Speed already takes every airframe to. It buys you the last few
+     * Mach sooner instead of a number nothing else can reach. */
+    this.turboBonus = ab === 'overcharge' ? 1.35 : 1;
     this.vectorTurn = ab === 'vector' ? 1.25 : 1;
     // Carrier trim: a stronger, faster-settling assisted turn.
     this.leanAssistScale = ab === 'trim' ? 1.3 : 1;
@@ -907,17 +918,23 @@ export class Player {
     }
     // Reheat lights fast and dies fast, but never instantly.
     this.burner = damp(this.burner, wantBoost ? 1 : 0, wantBoost ? 1 / PHYSICS.burnerLight : 4.5, dt);
-    this.boostBlend = damp(this.boostBlend, this.burner * 0.7 + (turbo ? 1 : 0) * 0.3, 5, dt);
+    /* The turbo stage LIGHTS, it does not switch on. Pressing NUM 2 used to
+     * put the whole extra stage into the thrust equation on that single frame,
+     * which is most of why the aircraft appeared to teleport to its ceiling. */
+    this.turboBlend = damp(this.turboBlend, turbo ? 1 : 0,
+      1 / (turbo ? PHYSICS.turboSpool : 1.2), dt);
+    this.boostBlend = damp(this.boostBlend, this.burner * 0.7 + this.turboBlend * 0.3, 5, dt);
 
-    /* Speed ceiling. The dry number is the airframe's own; nitrous adds a
-     * margin on top of it, and Turbo Speed (NUM 2) doubles that margin — which
-     * is what puts the Mach 30 ceiling at the end of the NUM 2 key rather than
-     * making it a separate number to keep in step by hand. */
+    /* Speed ceiling. The dry number is the airframe's own and nitrous adds a
+     * margin on top of it. Turbo Speed goes to the GAME's ceiling — Mach 30 —
+     * whatever the airframe: that is what the power is for, and the airframes
+     * still differ in their dry and nitrous ceilings and in how fast they get
+     * anywhere. */
     const scale = this.topSpeed / PHYSICS.maxSpeed;
-    const reheat = PHYSICS.boostSpeed - PHYSICS.maxSpeed;
+    const margin = PHYSICS.boostSpeed - PHYSICS.maxSpeed;
     let cap = this.topSpeed;
-    if (this.boosting) cap = (PHYSICS.maxSpeed + reheat * 0.94) * scale;
-    if (turbo) cap = (PHYSICS.maxSpeed + reheat * PHYSICS.turboBoost) * scale * this.turboBonus;
+    if (this.boosting) cap = (PHYSICS.maxSpeed + margin * 0.94) * scale;
+    if (turbo) cap = MACH.maxMs;
     cap *= lerp(1, 0.88, thin);
 
     /* --- sustained-throttle build ----------------------------------------
@@ -932,13 +949,24 @@ export class Player {
     const build = lerp(PHYSICS.thrustBuildLow, PHYSICS.thrustBuildHigh, this.thrustBuild);
 
     let thrust = this.accelPower * this.throttle * build;
-    // Nitrous. Turbo Speed doubles it — the same multiplier that doubles the
-    // ceiling above, so the power reads as one thing and not two.
-    const nitrous = turbo ? PHYSICS.turboBoost : 1;
-    thrust += PHYSICS.boostAccel * this.boostPower * this.burner * build * nitrous;
-    // Turbo dumps the reserve into the reheat stage whether or not the boost
-    // button is down, so it is a shove in its own right as well as a multiplier.
-    if (turbo) thrust += PHYSICS.boostAccel * this.boostPower * 1.35 * nitrous;
+
+    /* --- reheat, with a thrust lapse ---------------------------------------
+     * Reheat thrust falls away as the airframe closes on its own ceiling,
+     * toward `reheatLapseFloor` of its full value. That single term is what
+     * turns "press boost, arrive at top speed" into an acceleration you can
+     * feel: the first half of the range comes in a couple of seconds and the
+     * last tenth takes as long again, which is how a jet actually approaches
+     * the top of its envelope. The floor keeps the ceiling reachable rather
+     * than asymptotic — a top speed you cannot touch is a lie.
+     *
+     * Overcharge raises the floor rather than the ceiling: Turbo already takes
+     * every airframe to Mach 30, so the ability that used to add 12% to a
+     * ceiling now buys thrust where thrust is scarcest, and gets you there
+     * sooner instead. */
+    const lapse = lerp(1, PHYSICS.reheatLapseFloor * this.turboBonus,
+      Math.pow(clamp01(this.speed / Math.max(1, cap)), PHYSICS.reheatLapsePower));
+    const stage = this.burner * build + this.turboBlend * PHYSICS.turboThrust;
+    thrust += PHYSICS.boostAccel * this.boostPower * stage * lapse;
     // Gravity along the flight path: a dive is free speed, a climb costs it.
     // Power Flight all but cancels it, which is what makes it a save button.
     thrust += -this.forward.y * PHYSICS.pathGravity * (powerFlight ? 0.15 : 1);
@@ -1021,7 +1049,7 @@ export class Player {
     this.visual.update(dt, {
       position: this.position, quaternion: this.quaternion,
       throttle: this.throttle, boost: this.boostBlend, speed01: this.speed01,
-      mach01: this.mach01,
+      mach01: this.mach01, machExtreme: this.machExtreme,
       pitch: sc.pitch, roll: sc.roll, yaw: sc.lean, lean: sc.lean, alive: true,
       gLoad: this.gLoad, altitude: this.altitude,
       damage01: 1 - this.health / this.maxHealth,
@@ -1345,6 +1373,17 @@ export class Player {
   get speedKmh() { return MACH.kmhOf(this.speed); }
   /** 0..1 across the blur ramp — Mach 1 is nothing, Mach 15 is saturated. */
   get mach01() { return clamp01((this.mach - 1) / (MACH.blurMach - 1)); }
+  /**
+   * How far into the EXTREME band the airframe is: 0 below `shakeMach`, 1 at
+   * `extremeMach` and above. This is a separate channel from `mach01`, which
+   * saturates at the blur Mach and then has nothing left to say — and the top
+   * of this envelope is exactly where the presentation needs something left to
+   * say. Drives shake, the heavy blur, speed lines, chroma and the lens.
+   */
+  get machExtreme() {
+    return clamp01((this.mach - MACH.shakeMach)
+      / Math.max(0.001, MACH.extremeMach - MACH.shakeMach));
+  }
   get boost01() { return this.boostMeter / this.boostCapacity; }
 
   drainEvents() {

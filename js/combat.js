@@ -637,6 +637,11 @@ export class EnemyFighter extends AIRacer {
       let pull = clamp01(1 - r / Math.max(1, this.engageRange * 0.55));
       pull = Math.pow(pull, 1.6) * lerp(0.55, 0.98, this.aggression);
       if (this.uTurn > 0 || this.uTurnFlipped) pull = Math.min(1, pull * 1.35);
+      /* Held fire is only half the settle-in window. A squadron that converges
+       * on the player at full pursuit while forbidden to shoot simply arrives
+       * on top of them the moment it is cleared, which is the same ambush with
+       * a delay on it. They hold their spread instead. */
+      if (this._holdPursuit) pull *= COMBAT.engageHoldPursuit;
       tl = lerp(tl, player.pathOffsetLateral ?? tl, pull);
       tv = lerp(tv, player.pathOffsetVertical ?? tv, pull);
     }
@@ -699,6 +704,12 @@ export class EnemyFighter extends AIRacer {
    * is a hostile the player learns to ignore during it.
    */
   _fireControl(dt, player, combat, toPlayer, range) {
+    /* Weapons tight until the settle-in window expires. The seeker keeps
+     * running — a hostile that has to re-acquire from cold the instant it is
+     * cleared to fire would give the player a second free window it was never
+     * meant to have — but nothing leaves the rail. */
+    const held = combat.armTimer > 0;
+
     /* --- lock --------------------------------------------------------------
      * A hostile needs to hold the player in its seeker cone, exactly as the
      * player does, before a guided round will leave the rail. */
@@ -717,7 +728,7 @@ export class EnemyFighter extends AIRacer {
      * cone it will take a shot through is its own gun discipline, so a better
      * pilot opens up on a deflection angle a poor one would not attempt. */
     this.gunTimer -= dt * this.fireRate;
-    if (this.gunTimer <= 0 && inCone && range < this.gunOpenRange && cosAng > this.gunDisciplineCos) {
+    if (!held && this.gunTimer <= 0 && inCone && range < this.gunOpenRange && cosAng > this.gunDisciplineCos) {
       this.gunTimer = lerp(1.5, 0.30, this.accuracy) * this.rng.float(0.8, 1.3);
       const burst = 3 + Math.round(this.accuracy * 7);
       combat.enemyBurst(this, player, burst);
@@ -729,7 +740,7 @@ export class EnemyFighter extends AIRacer {
      * Without that filter they fire 56 km missiles from 80 km and every shot is
      * a guaranteed miss, which is indistinguishable from not shooting at all. */
     this.heavyTimer -= dt;
-    if (this.heavyTimer <= 0 && this.lockProgress >= 1 && range < this.engageRange
+    if (!held && this.heavyTimer <= 0 && this.lockProgress >= 1 && range < this.engageRange
         && this.rng.next() < this.heavyChance) {
       const usable = HEAVY_ORDER.filter((id) => (WEAPONS_BY_ID[id].range ?? 0) >= range);
       if (usable.length) {
@@ -763,6 +774,15 @@ export class CombatSystem {
      * more airframes in the sky than an early one, rather than being the same
      * fight with a bigger number on the objective. Everything else runs at 1. */
     this.pressure = opts.pressure ?? 1;
+    /* --- the settle-in window ----------------------------------------------
+     * Hostiles hold fire until this reaches zero. Spawning them seven to ten
+     * kilometres out is not by itself enough time to do anything with: they
+     * carry rounds rated for fifty kilometres, so without this the first
+     * missile is off the rail while the player is still stationary on the
+     * countdown. For these seconds they are visible, they manoeuvre and they
+     * close — they simply do not shoot. It is the difference between a fight
+     * starting and a fight ambushing you. */
+    this.armTimer = COMBAT.engageDelay;
     this.minEnemies = Math.min(COMBAT.hardCap, Math.round(COMBAT.minEnemies * this.pressure));
     this.maxEnemies = Math.min(COMBAT.hardCap, Math.round(COMBAT.maxEnemies * this.pressure));
 
@@ -937,33 +957,46 @@ export class CombatSystem {
     const jitterL = () => this.rng.float(-1400, 1400);
     const jitterV = () => this.rng.float(-900, 900);
 
+    /* ALWAYS AHEAD, always seven to ten kilometres out along the route.
+     *
+     * The formation slot's own along-track offset is applied on top and can
+     * run tens of kilometres back down the route for the later wings, so the
+     * result is clamped: whatever the shape asks for, no hostile is ever
+     * placed behind the player or nearer than the floor. Being bounced from
+     * behind before you have any speed is not a hard merge, it is a coin flip
+     * you lose. */
+    const ahead = (extra = 0) => clamp(
+      this.rng.float(COMBAT.spawnAheadMin, COMBAT.spawnAheadMax) + extra + off[2],
+      COMBAT.spawnAheadMin, COMBAT.spawnAheadMax * 3.2,
+    );
+
     // The pack being chased is always in front of you.
     if (this.speedFocus) {
       return {
         kind: 'lead',
-        along: 6000 + off[2], lateral: off[0] + jitterL(), vertical: off[1] + jitterV(),
+        along: ahead(), lateral: off[0] + jitterL(), vertical: off[1] + jitterV(),
       };
     }
 
     const t = COMBAT.approach;
     let r = this.rng.next() * (t.head + t.side + t.diagonal + t.vertical);
 
-    // HEAD-ON: well ahead and closing, the hardest merge in the game.
+    // HEAD-ON: dead ahead and closing, the hardest merge in the game.
     if ((r -= t.head) < 0) {
       return {
         kind: 'head',
-        along: this.rng.float(18000, 34000) + off[2],
+        along: ahead(1800),
         lateral: off[0] + this.rng.float(-3200, 3200),
         vertical: off[1] + this.rng.float(-1800, 1800),
       };
     }
 
-    // SIDE: ahead and out on a beam, inside missile reach from the first frame.
+    // SIDE: ahead and out on a beam, so the merge develops across your nose.
     if ((r -= t.side) < 0) {
       const s = this.rng.next() < 0.5 ? -1 : 1;
       return {
         kind: 'side',
-        along: this.rng.float(5000, 12000) + off[2],
+        along: ahead(),
         lateral: off[0] + s * this.rng.float(7000, 10000),
         vertical: off[1] + jitterV(),
       };
@@ -974,8 +1007,8 @@ export class CombatSystem {
       const s = this.rng.next() < 0.5 ? -1 : 1;
       return {
         kind: 'diagonal',
-        along: this.rng.float(9000, 20000) + off[2],
-        lateral: off[0] + s * this.rng.float(6000, 9000),
+        along: ahead(900),
+        lateral: off[0] + s * this.rng.float(4000, 8000),
         vertical: off[1] + this.rng.float(-2600, 2600),
       };
     }
@@ -984,7 +1017,7 @@ export class CombatSystem {
     const s = this.rng.next() < 0.5 ? -1 : 1;
     return {
       kind: 'vertical',
-      along: this.rng.float(4000, 11000) + off[2],
+      along: ahead(),
       lateral: off[0] + jitterL(),
       vertical: off[1] + s * this.rng.float(3500, 7000),
     };
@@ -1243,6 +1276,11 @@ export class CombatSystem {
   update(dt, player, input = {}) {
     this.gunCooldown = Math.max(0, this.gunCooldown - dt);
     this.heavyCooldown = Math.max(0, this.heavyCooldown - dt);
+    // The player's weapons are live from the first frame; only the hostiles wait.
+    if (this.armTimer > 0) {
+      this.armTimer = Math.max(0, this.armTimer - dt);
+      if (this.armTimer === 0) this.events.push({ type: 'weaponsFree' });
+    }
 
     if (player && player.alive) {
       this._updateLock(dt, player);
@@ -1321,7 +1359,9 @@ export class CombatSystem {
       for (let i = 0; i < live.length; i++) live[i].drawAllowed = i < COMBAT.enemyDrawBudget;
     }
 
+    const holding = this.armTimer > 0;
     for (const e of this.enemies) {
+      e._holdPursuit = holding;
       e.update(dt, player);
       if (e.alive) e.combatUpdate(dt, player, this);
     }

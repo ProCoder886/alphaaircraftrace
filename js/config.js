@@ -209,8 +209,17 @@ export const MACH = {
   /* Airframe buffet. Past this the whole picture starts trembling — a purely
    * presentational cue that you are into the part of the envelope the airframe
    * was not really built for, and it lands just under the Mach 24 redline. */
-  shakeMach: 23,               // Mach above which the screen shakes
-  shakeAmount: 0.42,           // shake magnitude at the Mach 30 ceiling
+  shakeMach: 23,               // Mach at which the airframe starts to complain
+  /* ---- the extreme band -------------------------------------------------
+   * Everything presentational — shake, motion blur, speed lines, chromatic
+   * aberration, the vignette, the lens — ramps in from `shakeMach` and is at
+   * MAXIMUM by `extremeMach`, then stays there. Above Mach 25 the picture is
+   * supposed to be barely holding together: that band is five Mach wide, it is
+   * where the airframe is past its thermal redline, and it should not look
+   * like cruising with a bigger number on the tape.
+   * -------------------------------------------------------------------- */
+  extremeMach: 25,             // Mach at and above which the presentation saturates
+  shakeAmount: 1.05,           // shake magnitude once past extremeMach
   /* ---- thermal limit ----------------------------------------------------
    * The airframe is cleared to Mach 24. Above it the intakes and the leading
    * edges start soaking heat faster than the fuel can carry it away, and the
@@ -311,7 +320,33 @@ export const PHYSICS = {
   spoolDown: 2.20,
   burnerLight: 0.55,           // s — afterburner light-off delay
   stallSink: 115,              // m/s of mush with no lift left
-  boostAccel: 52,
+  boostAccel: 58,
+  /* ---- how reheat actually accelerates -----------------------------------
+   * The old model had none of this and it showed: nitrous was a switch that
+   * put the aircraft at its ceiling in about three seconds, which reads as
+   * teleporting rather than accelerating. Two things fix it.
+   *
+   * THE LAPSE. Reheat thrust falls off as the airframe approaches its own
+   * ceiling — toward `reheatLapseFloor` of its sea-level value, on a curve of
+   * power `reheatLapsePower`. That is what a real engine does at the top of
+   * the envelope, and it is what turns a linear ramp into a wall into a long
+   * asymptotic approach: the first half of the speed range arrives in a couple
+   * of seconds, the last ten per cent takes as long again. The floor is set so
+   * the advertised ceiling stays REACHABLE — at Mach 30 the lapsed thrust
+   * still just exceeds drag — because a top speed you cannot touch is a lie.
+   *
+   * THE SPOOL. Turbo Speed used to be a step function: press NUM 2 and the
+   * whole extra stage was there on that frame. It now lights over
+   * `turboSpool` seconds like the reheat stage it is meant to be.
+   *
+   * Measured from cruise, with these numbers: nitrous reaches Mach 24 in about
+   * 13 seconds and Turbo reaches the Mach 30 ceiling in about 13, against
+   * roughly 3 before.
+   * -------------------------------------------------------------------- */
+  turboThrust: 1.2,            // turbo's extra thrust, as a multiple of boostAccel
+  reheatLapsePower: 2.8,       // how sharply thrust falls toward the ceiling
+  reheatLapseFloor: 0.34,      // fraction of reheat thrust left at the ceiling
+  turboSpool: 2.6,             // s for the turbo stage to light fully
   /* Nitrous burn rate. Halved: the meter used to empty in under four seconds
    * of held Space, which made the boost a tap rather than something you fly
    * on. At 13/s a full 100-unit meter is a little under eight seconds of
@@ -378,6 +413,79 @@ export const QUALITY_PRESETS = {
   },
 };
 export const QUALITY_ORDER = ['low', 'medium', 'high', 'ultra', 'extreme'];
+
+/* ===========================================================================
+ * RADAR
+ * ------------------------------------------------------------------------
+ * The radar is HEADING-UP: the player's nose always points at the top of the
+ * disc and the world turns underneath it.
+ *
+ * It used to be north-up with a rotating arrow, which is defensible on paper —
+ * the arrow really did point the way the aircraft was flying — and unreadable
+ * in practice. At the identity attitude the airframe's nose is world -Z, which
+ * plots at the BOTTOM of a north-up disc: so the arrow pointed down, and every
+ * hostile in front of you appeared below your own marker. Every player reads
+ * that as the arrow being backwards, and they are right to: a contact you can
+ * see through the canopy should not be at the bottom of the map.
+ *
+ * Heading-up removes the question. What is ahead is up, what is on your left
+ * is on the left, and the compass letters ride round the rim to their true
+ * bearings — which is what makes them worth having rather than decoration.
+ *
+ * `range` is a radius in metres. Combat needs a far bigger one than racing:
+ * hostiles are spread seven to ten kilometres apart and arrive from twenty
+ * out, so a 3.2 km disc showed an empty circle in the one mode that is
+ * entirely about knowing where they are.
+ * ======================================================================== */
+export const RADAR = {
+  raceRange: 3200,             // m — corridor racing, where the route is the point
+  combatRange: 26000,          // m — matches the distance hostiles are drawn at
+  /** Contacts past the edge are pinned to the rim rather than dropped. */
+  edgePin: true,
+  maxContacts: 90,             // drawn per frame; nearest first
+};
+
+/**
+ * Project a world-space offset onto the heading-up radar disc.
+ *
+ * @param dx        contact east of the player, in metres (world +X)
+ * @param dz        contact north of the player, in metres (world +Z)
+ * @param headingRad the player's heading, atan2(forward.x, forward.z)
+ * @param range     disc radius in metres
+ * @param R         disc radius in pixels
+ * @param out       receives {x, y, clamped} relative to the disc centre
+ */
+export function radarProject(dx, dz, headingRad, range, R, out = {}) {
+  /* Resolve the offset onto the aircraft's own axes, rather than rotating the
+   * plot by an angle whose sign is easy to get backwards — which is exactly
+   * how the old radar ended up mirrored.
+   *
+   * Heading is atan2(forward.x, forward.z), so the nose points along
+   * (sin h, cos h) in world (east, north) and the right wing along
+   * (cos h, -sin h). Project onto both and the answer is unambiguous: how far
+   * AHEAD the contact is, and how far to the RIGHT. */
+  const sh = Math.sin(headingRad), ch = Math.cos(headingRad);
+  const ahead = dx * sh + dz * ch;
+  const right = dx * ch - dz * sh;
+  let px = (right / range) * R;
+  let py = -(ahead / range) * R;      // screen +y is down, so ahead is -y
+  const d = Math.hypot(px, py);
+  out.clamped = d > R;
+  if (out.clamped && d > 0.0001) { px = (px / d) * R; py = (py / d) * R; }
+  out.x = px;
+  out.y = py;
+  out.dist = Math.hypot(dx, dz);
+  return out;
+}
+
+/**
+ * Where a compass bearing sits on the rim of a heading-up disc.
+ * Returns the on-screen angle in radians, measured from straight up, positive
+ * clockwise — which is what canvas rotation wants.
+ */
+export function radarBearing(bearingDeg, headingRad) {
+  return (bearingDeg * Math.PI / 180) - headingRad;
+}
 
 /* ===========================================================================
  * THE FRAME BAND
@@ -543,7 +651,7 @@ export const AIRCRAFT = [
     id: 'omega', name: 'OM-X OMEGA', class: 'Legendary Prototype',
     desc: 'An experimental core wrapped in an airframe that should not be flyable. Reheat measured in the wrong units. Reserved for pilots who have proven everything else.',
     stats: { speed: 1.00, accel: 0.96, handling: 0.82, boost: 1.00, durability: 0.74 },
-    ability: 'Overcharge — Turbo Overdrive grants an extra 12% top speed.',
+    ability: 'Overcharge — 35% more reheat thrust at the top of the envelope.',
     abilityKey: 'overcharge',
     unlock: { type: 'achievement', id: 'legend', label: 'Win a Legendary difficulty race' },
     colors: { primary: 0x14161b, secondary: 0x2b2f38, accent: 0xff7a18, emissive: 0xff9a2e, trail: 0xffb15a },
@@ -1070,11 +1178,32 @@ export const COMBAT = {
   /** Seconds after a kill before that slot is refilled. */
   respawnDelay: 3.5,
   /* ---- approach geometry ------------------------------------------------
-   * Hostiles do not all arrive from behind. The weights below are the shape of
-   * the threat: `head` puts them nose-to-nose closing at combined Mach 50-plus,
-   * which is the hardest merge in the game and the one the brief asks for.
+   * Hostiles ALWAYS arrive ahead of the player, never behind, and always
+   * between `spawnAheadMin` and `spawnAheadMax` along the route. Being bounced
+   * from behind before you have built any speed is not a hard merge, it is a
+   * coin flip you lose — and at Mach 25 closure a hostile that spawns behind
+   * you is on your tail before the countdown banner has faded.
+   *
+   * Seven to ten kilometres is the window. Nearer and there is no time to
+   * point the aircraft; further and the first minute of every sortie is spent
+   * flying toward an empty horizon. The formation spread is a further seven to
+   * ten kilometres ACROSS, so a wave arrives as a band in front of you rather
+   * than a point, and the geometry below decides where in that band.
    * -------------------------------------------------------------------- */
-  approach: { head: 0.34, rear: 0.20, side: 0.26, diagonal: 0.14, vertical: 0.06 },
+  approach: { head: 0.34, side: 0.26, diagonal: 0.24, vertical: 0.16 },
+  spawnAheadMin: 7000,         // m — closest a hostile may ever appear
+  spawnAheadMax: 10000,        // m — furthest
+  /* ---- the settle-in window ---------------------------------------------
+   * Hostiles hold fire for this long at the start of a sortie. Spawning them
+   * far enough away is not by itself enough time: they carry rounds rated for
+   * fifty kilometres, so without this the first missile is off the rail while
+   * the player is still at zero on the runway clock. For these seconds they
+   * are visible, they manoeuvre, they close — and they do not shoot. It is the
+   * difference between a fight starting and a fight ambushing you.
+   * -------------------------------------------------------------------- */
+  engageDelay: 22,             // s of held fire at the start of a run
+  /** Pursuit is this fraction of normal while the hold is running. */
+  engageHoldPursuit: 0.35,
   /** Enemy liveries — the recolours the same three airframes are issued in. */
   liveries: [
     0x2fd96b, 0x3aa0ff, 0xff5fb0, 0xffd63a, 0xff8a26, 0x1b1d22,
@@ -1699,7 +1828,7 @@ export const DEFAULT_SAVE = {
   selectedLocation: 'forest',
   /* `random` is not a weather state — it is the instruction to draw one from
    * the selected location's own pool at launch. It is the shipping default. */
-  selectedWeather: 'random',
+  selectedWeather: 'sunset',
   campaignProgress: 0,
   achievements: [],
   dailyState: { date: null, completed: false, best: 0 },
@@ -1755,23 +1884,34 @@ export const DEFAULTS = {
   difficulty: 'elite',
   /* Emerald Delta is the shipping venue: the widest corridors, the softest
    * terrain and the only weather pool with no state that takes the horizon
-   * away, so a first launch shows the game at its most readable. */
+   * away, so a first launch shows the game at its most readable.
+   *
+   * These are the defaults for every mode that flies the menu loadout —
+   * Battle, Endless, Endless Race, Quick, Survival, Time Attack, Free Flight.
+   * Campaign chapters and Story missions carry their OWN venue and weather,
+   * because a campaign where all nine chapters are the same place at the same
+   * time of day is not a campaign. */
   location: 'forest',
-  weather: 'random',
+  /* Sunset. Every venue can now fly it, so the default is honourable wherever
+   * the player takes it, and it is the state that shows the world best: a low
+   * sun rakes the terrain, throws long shadows off the structures, and lights
+   * reheat plumes and tracer against a sky that is not flat blue. */
+  weather: 'sunset',
   aircraft: 'raptor',
   /* ---- graphics ---------------------------------------------------------
    * The default quality is PLATFORM-DEPENDENT, so it is resolved rather than
    * fixed. A phone held in landscape is a deliberate, committed play session on
    * a panel with a high pixel density and a GPU that handles this scene well,
-   * so it opens at Extreme. Desktop opens at HIGH: the frame governor holds the
+   * so it opens at EXTREME. Desktop opens at HIGH: the frame governor holds the
    * 60-120 FPS band by moving the ladder underneath the preset, so a desktop no
    * longer has to be defended against with a conservative default — if the
    * machine cannot hold High, the governor sheds detail rather than the player
-   * having to. Portrait phones get the conservative preset — the game wants
-   * landscape and the player is most likely still rotating the device. */
+   * having to. Portrait gets Extreme as well now: the game is landscape-only
+   * and portrait shows a rotate prompt, so the preset chosen there is really
+   * the one the first landscape frame will be drawn at. */
   graphics: 'high',
   graphicsMobileLandscape: 'extreme',
-  graphicsMobilePortrait: 'low',
+  graphicsMobilePortrait: 'extreme',
   graphicsDesktop: 'high',
   /**
    * Resolve the opening graphics preset for the device that is actually running

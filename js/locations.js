@@ -119,9 +119,9 @@ export const LOCATIONS = [
     landmark: ['giantRiverBridge', 'deltaArch', 'riversideStadium', 'botanicalGarden',
       'hilltopMonument', 'terraceViaduct'],
     hazards: ['lowCloud', 'birdStrike'],
-    weather: ['clear', 'brightSun', 'partlyCloudy', 'floatingClouds', 'suspendedClouds',
-      'goldenHour', 'sunrise', 'dawn', 'overcast', 'cloudy'],
-    times: ['morning', 'noon', 'afternoon', 'goldenHour', 'sunrise'],
+    weather: ['sunset', 'clear', 'brightSun', 'partlyCloudy', 'floatingClouds',
+      'suspendedClouds', 'goldenHour', 'sunrise', 'dawn', 'overcast', 'cloudy'],
+    times: ['sunset', 'morning', 'noon', 'afternoon', 'goldenHour', 'sunrise'],
     accent: 0x7fdc6a, fogTint: 0xa9c4b4,
   }),
 
@@ -155,8 +155,8 @@ export const LOCATIONS = [
     landmark: ['glacierObservatory', 'iceArch', 'iceTunnel', 'seracGate', 'shelfWall'],
     hazards: ['iceSheet', 'whiteout', 'crosswind'],
     weather: ['snow', 'heavySnow', 'frozenFog', 'brightSun', 'overcast', 'darkClouds',
-      'fogBank', 'partlyCloudy', 'clear'],
-    times: ['morning', 'noon', 'dusk', 'afternoon'],
+      'fogBank', 'partlyCloudy', 'clear', 'sunset'],
+    times: ['morning', 'noon', 'dusk', 'afternoon', 'sunset'],
     accent: 0x9fe8ff, fogTint: 0xcfe3f2,
   }),
 
@@ -226,8 +226,8 @@ export const LOCATIONS = [
     landmark: ['karstSpire', 'canopyArch', 'ruinTemple', 'stiltDocks', 'archBridge', 'jungleZiggurat'],
     hazards: ['lowCloud', 'mist', 'canopyShear'],
     weather: ['fog', 'fogBank', 'cloudy', 'overcast', 'dawn', 'suspendedClouds',
-      'floatingClouds', 'goldenHour', 'sunrise', 'clear'],
-    times: ['sunrise', 'morning', 'noon', 'dawn'],
+      'floatingClouds', 'goldenHour', 'sunrise', 'clear', 'sunset'],
+    times: ['sunrise', 'morning', 'noon', 'dawn', 'sunset'],
     accent: 0x54e08a, fogTint: 0xa8c7ae,
   }),
 
@@ -264,7 +264,7 @@ export const LOCATIONS = [
     hazards: ['birdStrike', 'lowCloud'],
     weather: ['clear', 'brightSun', 'sunrise', 'dawn', 'goldenHour', 'sunset',
       'partlyCloudy', 'floatingClouds', 'suspendedClouds', 'overcast'],
-    times: ['sunrise', 'morning', 'noon', 'goldenHour', 'dawn'],
+    times: ['sunrise', 'morning', 'noon', 'goldenHour', 'dawn', 'sunset'],
     accent: 0xffd98a, fogTint: 0xcfd6b8,
   }),
   /* =======================================================================

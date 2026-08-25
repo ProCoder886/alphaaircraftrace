@@ -180,10 +180,18 @@
     <div class="hud-controls" id="hud-controls" aria-hidden="true"></div>
   </div>
 
-  <!-- top centre: compass -->
+  <!-- top centre: compass + the hostile count -->
   <div class="hud-compass">
     <div class="compass-strip" id="compass-strip"><div class="compass-tape" id="compass-tape"></div></div>
     <div class="compass-heading"><span id="hud-heading">000</span></div>
+    <!-- How many are still up there. Outside the weapons panel, because that
+         panel is closed by default and this is the number the whole mode is
+         about. Doubles as the settle-in countdown while hostiles hold fire. -->
+    <div class="hostile-count" id="hostile-count" aria-hidden="true">
+      <span class="hc-dot"></span>
+      <b class="hc-value" id="hostile-count-value">0</b>
+      <span class="hc-label" id="hostile-count-label">HOSTILES</span>
+    </div>
   </div>
 
   <!-- top right: timers -->
@@ -262,10 +270,11 @@
   <!-- bottom left: radar -->
   <div class="hud-bl">
     <div class="radar-wrap">
-      <canvas id="radar" width="260" height="260"></canvas>
-      <div class="radar-labels" aria-hidden="true">
-        <span class="rl n">N</span><span class="rl e">E</span><span class="rl s">S</span><span class="rl w">W</span>
-      </div>
+      <!-- The compass letters are drawn INTO the canvas by ui.js, not laid
+           around it: the radar is heading-up, so N/E/S/W ride round the rim as
+           you turn, and a label drawn by the same code as the plot cannot
+           drift out of step with it. -->
+      <canvas id="radar" width="280" height="280"></canvas>
     </div>
     <div class="alt-tape" id="alt-tape" aria-hidden="true"><div class="alt-tape-fill" id="alt-tape-fill"></div><span class="alt-tape-mark" id="alt-tape-mark"></span></div>
   </div>
