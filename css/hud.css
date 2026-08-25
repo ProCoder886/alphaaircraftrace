@@ -506,7 +506,7 @@ body.touch-mode .zoom-btn { width: 2.1em; height: 2.1em; font-size: 0.95em; }
  * ------------------------------------------------------------------------ */
 .hazard-strip {
   position: absolute; left: 50%; transform: translateX(-50%);
-  top: calc(max(14px, env(safe-area-inset-top)) + 6.2rem);
+  top: calc(max(14px, env(safe-area-inset-top)) + 6.2rem + var(--tc-drop, 0rem));
   display: none; align-items: center; gap: 9px;
   padding: 7px 20px 7px 15px; border-radius: 4px;
   border: 1.5px solid rgba(255, 78, 92, 0.85);
@@ -540,7 +540,7 @@ body.touch-mode .zoom-btn { width: 2.1em; height: 2.1em; font-size: 0.95em; }
  * ------------------------------------------------------------------------ */
 .overheat-strip {
   position: absolute; left: 50%; transform: translateX(-50%);
-  top: calc(max(14px, env(safe-area-inset-top)) + 3.1rem);
+  top: calc(max(14px, env(safe-area-inset-top)) + 3.1rem + var(--tc-drop, 0rem));
   display: none; align-items: center; gap: 9px;
   padding: 6px 16px 6px 12px; border-radius: 4px;
   border: 1.5px solid rgba(255, 150, 50, 0.8);
@@ -843,6 +843,13 @@ body.hud-hidden #mobile-controls { display: none !important; }
  * shows that countdown instead — the one time something matters more than the
  * count itself.
  * ------------------------------------------------------------------------ */
+/* The hostile badge takes a row of its own under the compass, and everything
+ * anchored below the compass — the overheat countdown, the terrain hazard —
+ * has to start that much lower or it lands on top of the badge. One variable,
+ * set by the same class that already decides whether the badge exists. */
+body { --tc-drop: 0rem; }
+body.combat-mode { --tc-drop: 1.9rem; }
+
 .hostile-count {
   display: none; align-items: center; gap: 7px;
   margin: 6px auto 0; width: max-content;
