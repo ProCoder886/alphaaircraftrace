@@ -266,6 +266,7 @@ export class UI {
       hostileCount: $('#hostile-count'),
       hostileValue: $('#hostile-count-value'),
       hostileLabel: $('#hostile-count-label'),
+      hostileHold: $('#hostile-count-hold'),
       brief: $('#hud-brief'),
       controls: $('#hud-controls'),
       brief2: $('#mission-brief'),
@@ -1553,6 +1554,7 @@ export class UI {
     this.dom.combat?.classList.remove('active');
     this.dom.lockRange?.classList.remove('active', 'locked', 'far');
     this.dom.hostileCount?.classList.remove('show', 'clear', 'hold');
+    if (this.dom.hostileHold) this.dom.hostileHold.hidden = true;
     this._hostileKey = null;
     if (this._tgtPool) for (const p of this._tgtPool) p.root.style.display = 'none';
   }
@@ -1569,15 +1571,25 @@ export class UI {
     const el = this.dom.hostileCount;
     if (!el) return;
     const hold = holdSeconds > 0;
-    // Ticks every frame; the text changes about once a second.
-    const key = hold ? `h${Math.ceil(holdSeconds)}` : `n${n}`;
+    const secs = Math.ceil(holdSeconds);
+    /* How many are left is the number the whole mode is about, so it stays the
+     * headline even while they are holding fire — the settle-in clock rides
+     * alongside it instead of taking its place, which is what hid the count
+     * for the first twenty seconds of every run. Ticks every frame; the text
+     * changes about once a second. */
+    const key = `${n}/${hold ? secs : 0}`;
     if (key === this._hostileKey) return;
     this._hostileKey = key;
     el.classList.add('show');
     el.classList.toggle('hold', hold);
     el.classList.toggle('clear', !hold && n === 0);
-    this.dom.hostileValue.textContent = hold ? `${Math.ceil(holdSeconds)}s` : String(n);
-    this.dom.hostileLabel.textContent = hold ? 'WEAPONS FREE IN' : (n === 1 ? 'HOSTILE' : 'HOSTILES');
+    this.dom.hostileValue.textContent = String(n);
+    this.dom.hostileLabel.textContent = n === 1 ? 'HOSTILE' : 'HOSTILES';
+    const chip = this.dom.hostileHold;
+    if (chip) {
+      chip.hidden = !hold;
+      if (hold) chip.textContent = `WEAPONS FREE IN ${secs}s`;
+    }
   }
 
   /**
@@ -1791,7 +1803,13 @@ export class UI {
     const ctx = this.radarCtx;
     if (!ctx) return;
     const W = this.dom.radar.width, H = this.dom.radar.height;
-    const cx = W / 2, cy = H / 2, R = W / 2 - 12;
+    /* The canvas backing store is deliberately bigger than the box it is drawn
+     * into, so the plot stays sharp. Everything measured in pixels below is
+     * therefore scaled by `k` — without it a "4 px" dot renders at two, and
+     * an 11 px label at six, which is how you end up with a radar nobody can
+     * read at a glance. */
+    const k = W / 152;
+    const cx = W / 2, cy = H / 2, R = W / 2 - 14 * k;
     const range = s.radarRange || RADAR.raceRange;
     const head = (s.heading || 0) * Math.PI / 180;
     const pt = this._radarPt || (this._radarPt = {});
@@ -1804,9 +1822,9 @@ export class UI {
 
     // Range rings and the nose/wing cross.
     ctx.strokeStyle = 'rgba(140,200,235,0.16)';
-    ctx.lineWidth = 1.4;
+    ctx.lineWidth = 1.4 * k;
     for (const f of [0.33, 0.66, 1.0]) { ctx.beginPath(); ctx.arc(cx, cy, R * f, 0, TAU); ctx.stroke(); }
-    ctx.setLineDash([3, 5]);
+    ctx.setLineDash([3 * k, 5 * k]);
     ctx.beginPath();
     ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R);
     ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy);
@@ -1821,7 +1839,7 @@ export class UI {
     // route ahead
     if (s.radarPath && s.radarPath.length > 1) {
       ctx.strokeStyle = 'rgba(57,245,255,0.45)';
-      ctx.lineWidth = 2.4;
+      ctx.lineWidth = 2.4 * k;
       ctx.beginPath();
       s.radarPath.forEach((p, i) => {
         const q = plot(p[0], p[1]);
@@ -1836,7 +1854,7 @@ export class UI {
       for (const o of s.radarObstacles) {
         const q = plot(o[0], o[1]);
         if (q.clamped) continue;
-        ctx.beginPath(); ctx.arc(cx + q.x, cy + q.y, 2, 0, TAU); ctx.fill();
+        ctx.beginPath(); ctx.arc(cx + q.x, cy + q.y, 2 * k, 0, TAU); ctx.fill();
       }
     }
     // traffic
@@ -1845,7 +1863,7 @@ export class UI {
       for (const o of s.radarTraffic) {
         const q = plot(o[0], o[1]);
         if (q.clamped) continue;
-        ctx.fillRect(cx + q.x - 2, cy + q.y - 2, 4, 4);
+        ctx.fillRect(cx + q.x - 2 * k, cy + q.y - 2 * k, 4 * k, 4 * k);
       }
     }
     // rivals — amber, and only in the racing modes that have them
@@ -1853,7 +1871,7 @@ export class UI {
       ctx.fillStyle = 'rgba(255,182,72,0.92)';
       for (const r of s.radarRivals) {
         const q = plot(r[0], r[1]);
-        ctx.beginPath(); ctx.arc(cx + q.x, cy + q.y, 4, 0, TAU); ctx.fill();
+        ctx.beginPath(); ctx.arc(cx + q.x, cy + q.y, 4 * k, 0, TAU); ctx.fill();
       }
     }
     /* HOSTILES — red, and the only thing on this display drawn at full
@@ -1872,7 +1890,7 @@ export class UI {
           ctx.rotate(Math.atan2(q.y, q.x) + Math.PI / 2);
           ctx.fillStyle = 'rgba(255,70,80,0.75)';
           ctx.beginPath();
-          ctx.moveTo(0, -3.4); ctx.lineTo(2.8, 2.2); ctx.lineTo(-2.8, 2.2);
+          ctx.moveTo(0, -5 * k); ctx.lineTo(4 * k, 3.2 * k); ctx.lineTo(-4 * k, 3.2 * k);
           ctx.closePath(); ctx.fill();
           ctx.restore();
           continue;
@@ -1881,14 +1899,14 @@ export class UI {
         const locked = !!e[3];
         ctx.fillStyle = locked ? '#fff' : '#ff3b46';
         ctx.shadowColor = locked ? 'rgba(255,255,255,0.9)' : 'rgba(255,59,70,0.8)';
-        ctx.shadowBlur = locked ? 9 : 5;
-        ctx.beginPath(); ctx.arc(x, y, locked ? 5 : 3.6, 0, TAU); ctx.fill();
+        ctx.shadowBlur = (locked ? 9 : 5) * k;
+        ctx.beginPath(); ctx.arc(x, y, (locked ? 5.4 : 4.0) * k, 0, TAU); ctx.fill();
         ctx.shadowBlur = 0;
         // Above or below you: a tick up or down off the contact.
-        const dy = clamp((e[2] || 0) / 900, -1, 1) * 6;
-        if (Math.abs(dy) > 1.2) {
+        const dy = clamp((e[2] || 0) / 900, -1, 1) * 7 * k;
+        if (Math.abs(dy) > 1.2 * k) {
           ctx.strokeStyle = locked ? '#fff' : 'rgba(255,59,70,0.85)';
-          ctx.lineWidth = 1.4;
+          ctx.lineWidth = 1.6 * k;
           ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y - dy); ctx.stroke();
         }
       }
@@ -1896,10 +1914,10 @@ export class UI {
     // checkpoints
     if (s.radarCheckpoints) {
       ctx.strokeStyle = 'rgba(157,255,74,0.95)';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2 * k;
       s.radarCheckpoints.forEach((p, i) => {
         const q = plot(p[0], p[1]);
-        ctx.beginPath(); ctx.arc(cx + q.x, cy + q.y, i === 0 ? 7 : 4.5, 0, TAU); ctx.stroke();
+        ctx.beginPath(); ctx.arc(cx + q.x, cy + q.y, (i === 0 ? 7 : 4.5) * k, 0, TAU); ctx.stroke();
         if (i === 0) { ctx.fillStyle = 'rgba(157,255,74,0.30)'; ctx.fill(); }
       });
     }
@@ -1913,20 +1931,20 @@ export class UI {
     const marks = [[0, 'N'], [90, 'E'], [180, 'S'], [270, 'W']];
     ctx.save();
     ctx.translate(cx, cy);
-    ctx.font = '700 11px system-ui, sans-serif';
+    ctx.font = `700 ${Math.round(11 * k)}px system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (const [deg, label] of marks) {
       const a = radarBearing(deg, head);
-      const lx = Math.sin(a) * (R + 7);
-      const ly = -Math.cos(a) * (R + 7);
+      const lx = Math.sin(a) * (R + 8 * k);
+      const ly = -Math.cos(a) * (R + 8 * k);
       ctx.fillStyle = deg === 0 ? 'rgba(157,255,74,0.95)' : 'rgba(200,235,255,0.62)';
       ctx.fillText(label, lx, ly);
       // A tick on the rim so the letter is anchored to a real bearing.
       ctx.strokeStyle = deg === 0 ? 'rgba(157,255,74,0.7)' : 'rgba(160,215,245,0.4)';
-      ctx.lineWidth = deg === 0 ? 2 : 1.3;
+      ctx.lineWidth = (deg === 0 ? 2 : 1.3) * k;
       ctx.beginPath();
-      ctx.moveTo(Math.sin(a) * (R - 5), -Math.cos(a) * (R - 5));
+      ctx.moveTo(Math.sin(a) * (R - 6 * k), -Math.cos(a) * (R - 6 * k));
       ctx.lineTo(Math.sin(a) * R, -Math.cos(a) * R);
       ctx.stroke();
     }
@@ -1939,21 +1957,21 @@ export class UI {
     ctx.save();
     ctx.translate(cx, cy);
     ctx.fillStyle = '#9dff4a';
-    ctx.shadowColor = 'rgba(157,255,74,0.9)'; ctx.shadowBlur = 8;
+    ctx.shadowColor = 'rgba(157,255,74,0.9)'; ctx.shadowBlur = 8 * k;
     ctx.beginPath();
-    ctx.moveTo(0, -10); ctx.lineTo(6.5, 8); ctx.lineTo(0, 4.5); ctx.lineTo(-6.5, 8);
+    ctx.moveTo(0, -11 * k); ctx.lineTo(7.5 * k, 9 * k); ctx.lineTo(0, 5 * k); ctx.lineTo(-7.5 * k, 9 * k);
     ctx.closePath(); ctx.fill();
     ctx.restore();
 
     // rim + range readout
     ctx.strokeStyle = 'rgba(160,215,245,0.32)';
-    ctx.lineWidth = 1.6;
+    ctx.lineWidth = 1.6 * k;
     ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.stroke();
-    ctx.font = '600 9px system-ui, sans-serif';
+    ctx.font = `600 ${Math.round(9.5 * k)}px system-ui, sans-serif`;
     ctx.textAlign = 'right';
     ctx.textBaseline = 'bottom';
     ctx.fillStyle = 'rgba(200,235,255,0.45)';
-    ctx.fillText(`${(range / 1000).toFixed(0)} km`, W - 4, H - 2);
+    ctx.fillText(`${(range / 1000).toFixed(0)} km`, W - 4 * k, H - 2 * k);
   }
 
   /* =====================================================================

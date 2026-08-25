@@ -863,6 +863,12 @@ body.hud-hidden #mobile-controls { display: none !important; }
   color: #ffd9dc; text-shadow: 0 0 10px rgba(255, 59, 70, 0.45);
 }
 .hc-label { font-size: 0.44rem; letter-spacing: 0.22em; color: rgba(255, 190, 195, 0.66); }
+/* The settle-in clock rides alongside the count rather than replacing it. */
+.hc-hold {
+  font-size: 0.44rem; letter-spacing: 0.2em; color: rgba(255, 228, 172, 0.94);
+  padding-left: 8px; border-left: 1px solid rgba(255, 182, 72, 0.38);
+}
+.hc-hold[hidden] { display: none; }
 /* Cleared the field: nothing left to shoot at. */
 .hostile-count.clear { border-color: rgba(157, 255, 74, 0.5); }
 .hostile-count.clear .hc-dot { background: var(--lime); box-shadow: 0 0 8px rgba(157, 255, 74, 0.9); }
