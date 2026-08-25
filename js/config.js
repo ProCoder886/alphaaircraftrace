@@ -380,6 +380,28 @@ export const QUALITY_PRESETS = {
 export const QUALITY_ORDER = ['low', 'medium', 'high', 'ultra', 'extreme'];
 
 /* ===========================================================================
+ * THE FRAME BAND
+ * ------------------------------------------------------------------------
+ * On desktop the game runs between 60 and 120 FPS at every quality level,
+ * including maximum, and it is the GOVERNOR that guarantees that rather than
+ * the preset. `min` is the floor the adaptive quality ladder defends — and,
+ * once the ladder has nothing left to shed, the floor the preset governor
+ * steps whole presets down to protect. `max` is the presentation ceiling: past
+ * it, frames are skipped rather than rendered, because a 240 Hz panel showing
+ * a game designed around 60 is burning the headroom the floor needs.
+ *
+ * `desktopFloor` is how far down the governor is allowed to go. It stops at
+ * Medium rather than Low: below that the world stops looking like this game,
+ * and a desktop that cannot hold Medium is a desktop where the honest answer
+ * is a lower resolution rather than a lower preset.
+ * ======================================================================== */
+export const FRAME_BAND = {
+  min: 60,                     // FPS — the floor the governor defends
+  max: 120,                    // FPS — the presentation ceiling
+  desktopFloor: 'medium',      // the lowest preset the governor will hold at
+};
+
+/* ===========================================================================
  * AIRCRAFT ROSTER
  * ------------------------------------------------------------------------
  * FIVE airframes: two flyable from the first launch, three earned.

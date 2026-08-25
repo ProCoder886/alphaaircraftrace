@@ -10,6 +10,7 @@ import * as THREE from 'three';
 import {
   AIRCRAFT, AIRCRAFT_BY_ID, BIOMES, BIOMES_BY_ID, MODES, DIFFICULTIES, WEATHER, TIME_OF_DAY,
   CAMPAIGN, STORY, STORY_BY_ID, OBJECTIVE_POOL, ACHIEVEMENTS, SCORE, CREDITS, POWERS, WORLD,
+  FRAME_BAND, QUALITY_PRESETS,
   DEFAULT_SAVE, STORAGE_KEY, LOADING_STAGES, DEFAULTS, MACH, COMBAT, WEAPONS_BY_ID,
   HEAVY_ORDER, GUN_ORDER, DEFAULT_BINDINGS,
   RNG, hashSeed, clamp, clamp01, lerp, damp, TAU,
@@ -228,8 +229,25 @@ export class Game {
       })
       || this.device.suggestedPreset
       || DEFAULTS.graphics;
-    this.quality = new AdaptiveQuality(this.perf, presetName);
+    /* The frame band. Desktop is held between 60 and 120 FPS at every quality
+     * level: the governor sheds detail — and, once the ladder runs out, whole
+     * presets — to hold the floor, and paces presentation to hold the ceiling.
+     * Mobile is left unpaced: the panel is 60 Hz, and the browser's own
+     * throttling serves the battery better than ours would. */
+    this.quality = new AdaptiveQuality(this.perf, presetName, {
+      maxFps: this.device.isMobile ? null : FRAME_BAND.max,
+      presetFloor: this.device.isMobile ? 'low' : FRAME_BAND.desktopFloor,
+    });
+    this.quality.targetFps = FRAME_BAND.min;
     this.quality.applyOverrides(this.save.data.settings);
+    this.quality.onPresetChange = (name, dir) => {
+      this.render?.applyQuality();
+      this.render?.resize();
+      this.ui.activePreset = name;
+      if (this.save.data.settings.showDebug) {
+        this.ui.toast(`GRAPHICS ${dir === 'down' ? 'HELD AT' : 'RESTORED TO'} ${QUALITY_PRESETS[name].label}`);
+      }
+    };
 
     this.input = new InputManager(this.save.data.settings.bindings);
     this.ui = new UI({ audio: this.audio, save: this.save, input: this.input, device: this.device });
@@ -1822,6 +1840,12 @@ export class Game {
   }
 
   tick(now) {
+    /* Presentation ceiling. On a 144 or 240 Hz panel there is nothing to gain
+     * from rendering four times as many frames as the game is designed around
+     * — it burns the GPU headroom the 60 FPS floor needs. Skip the whole tick
+     * rather than only the draw, so simulation and render stay in step and the
+     * next tick simply gets a larger delta. */
+    if (!this.quality.shouldPresent(now)) return;
     const dt = this.perf.begin(now);
     // Derived, never assigned from the individual transitions: pausing used to
     // disable input and only resuming re-enabled it, so Restart from the pause
@@ -1860,6 +1884,9 @@ export class Game {
     }
 
     if (this.state !== 'paused') {
+      // Resolution is the governor's strongest lever; this is where the ladder's
+      // pixel scalar actually reaches the drawing buffer.
+      this.render.syncResolution();
       this.render.update(dt, this._renderState());
       // Chunk building gets whatever is left of the frame after rendering,
       // never a fixed slice: on a machine that is already missing its target
@@ -2037,7 +2064,9 @@ export class Game {
     const lines = [
       `FPS        ${p.smoothFps.toFixed(1)} (p95 ${p.p95.toFixed(1)}ms)`,
       `Frame      ${p.frameTime.toFixed(2)}ms avg ${p.avgMs.toFixed(2)}`,
+      `Band       ${FRAME_BAND.min}-${this.quality.maxFps || '—'} fps`,
       `Quality    ${this.quality.statusLabel}`,
+      `Governor   ${this.quality.governed ? `holding ${this.quality.presetName} (asked ${this.quality.presetChoice})` : 'idle'}`,
       `Pixel      ${this.quality.effectivePixelRatio.toFixed(2)}`,
       `Draw calls ${p.info.drawCalls}`,
       `Triangles  ${(p.info.triangles / 1000).toFixed(1)}k`,
@@ -2171,6 +2200,8 @@ export class Game {
         this.quality.setPreset(value);
         this.quality.applyOverrides(s);
         this.render.applyQuality();
+        this.render.resize();
+        this.ui.activePreset = this.quality.presetName;
         if (this.world) this.render.setVenue(this.world.biome, this.world.weatherId, this.world.timeId);
         this.ui.toast(`Graphics: ${value.toUpperCase()}`);
         break;
@@ -2179,6 +2210,7 @@ export class Game {
       case 'reflections': case 'bloom': case 'motionBlur': case 'effects':
         this.quality.applyOverrides(s);
         this.render.applyQuality();
+        this.render.resize();
         if (this.world && (key === 'viewDistance' || key === 'weatherQuality')) {
           this.render.setVenue(this.world.biome, this.world.weatherId, this.world.timeId);
         }

@@ -83,8 +83,31 @@ ul { margin: 0; padding: 0; list-style: none; }
 canvas { display: block; }
 
 /* ---- viewport ---------------------------------------------------------- */
-#viewport { position: absolute; inset: 0; z-index: 0; background: #05080d; }
-#game-canvas { width: 100%; height: 100%; display: block; }
+/* ---------------------------------------------------------------------------
+ * HARDWARE ACCELERATION
+ * The WebGL context already asks for the discrete GPU by name and for a
+ * desynchronized swap chain (see renderer.js). This is the compositing half of
+ * the same problem: the 3D surface and the HUD are put on their own layers, so
+ * a HUD repaint — and the HUD repaints every frame — never invalidates the
+ * layer the game is drawn into, and `contain` stops a HUD reflow from being
+ * able to reach the canvas at all. On a machine holding 120 FPS that is the
+ * difference between compositing and re-rasterising sixty times a second.
+ * ------------------------------------------------------------------------ */
+#viewport {
+  position: absolute; inset: 0; z-index: 0; background: #05080d;
+  contain: layout paint;
+}
+#game-canvas {
+  width: 100%; height: 100%; display: block;
+  /* Its own compositor layer, and one the browser is told not to read back. */
+  will-change: transform;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+/* Layout and style containment only — NOT paint. The checkpoint chevrons and
+   the off-screen target markers deliberately sit at the very edge of the HUD,
+   and paint containment would clip them. */
+.hud { contain: layout style; }
 #vignette-overlay {
   position: absolute; inset: 0; pointer-events: none; z-index: 1;
   background: radial-gradient(ellipse at 50% 50%, transparent 52%, rgba(0, 0, 0, 0.34) 100%);

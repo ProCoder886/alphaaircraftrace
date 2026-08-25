@@ -3429,6 +3429,25 @@ export class RenderSystem {
     this.resize();
   }
 
+  /**
+   * Keep the drawing buffer in step with the live pixel ratio.
+   *
+   * Resolution is the single most effective lever the frame governor has, and
+   * it was the one lever that did nothing: the detail ladder has moved a
+   * `pixel` scalar from 1.00 down to 0.74 for as long as it has existed, and
+   * nothing ever re-sized the buffer to match it. Called once a frame, acts
+   * only when the ratio has actually moved — reallocating render targets is
+   * expensive enough that it must not happen on noise.
+   */
+  syncResolution() {
+    const want = this.quality.effectivePixelRatio;
+    const have = this._appliedPixelRatio ?? 0;
+    if (Math.abs(want - have) < 0.035) return false;
+    this._appliedPixelRatio = want;
+    this.resize();
+    return true;
+  }
+
   /* ---- sizing --------------------------------------------------------- */
   resize() {
     const w = Math.max(2, this.canvas.clientWidth || window.innerWidth);
@@ -3442,6 +3461,7 @@ export class RenderSystem {
     this.camera.updateProjectionMatrix();
     this.postfx.setSize(Math.round(w * pr), Math.round(h * pr));
     this.displaySize = { w, h };
+    this._appliedPixelRatio = pr;
   }
 
   /* ---- quality -------------------------------------------------------- */

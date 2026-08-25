@@ -1211,7 +1211,7 @@ export class UI {
 
     /* -- graphics -- */
     const gg = group('Graphics');
-    field(gg, 'Quality Preset', 'Chosen for your device on first run — Extreme on a landscape phone, Medium on desktop. The adaptive ladder eases detail down on its own if frames get tight.',
+    field(gg, 'Quality Preset', 'Chosen for your device on first run — Extreme on a landscape phone, High on desktop. This is a CEILING, not a promise: on desktop the frame governor holds 60-120 FPS at every setting, easing detail down and, if it has to, running a preset below the one you picked until there is headroom to climb back.',
       seg('graphics', QUALITY_ORDER.map((q) => [q, QUALITY_PRESETS[q].label]), this.activePreset));
     field(gg, 'Resolution Scale', 'Renders below native resolution to buy frame time.',
       slider('resolutionScale', 0.5, 1.5, 0.05, (v) => `${Math.round(v * 100)}%`));

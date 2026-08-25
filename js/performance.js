@@ -199,32 +199,155 @@ const LADDER = [
   { label: 'Minimum',         farParticles: 0.10, shadowInterval: 12, envInterval: 12.0, propDensity: 0.28, cloudDetail: 0.32, post: 0.45, lodBias: 0.46, pixel: 0.74 },
 ];
 
+/* ===========================================================================
+ * THE FRAME BAND
+ * ------------------------------------------------------------------------
+ * Desktop holds 60-120 FPS at every quality level, INCLUDING maximum, and the
+ * two halves of that are different problems.
+ *
+ * THE FLOOR is quality. The detail ladder above is the first defence, but it
+ * only moves within the chosen preset — and Extreme with the ladder at its
+ * bottom rung can still be more than a machine has. So when the ladder bottoms
+ * out and the frame rate is still short, the governor steps the EFFECTIVE
+ * preset down a rung: Extreme becomes Ultra, Ultra becomes High, and so on.
+ * The player's chosen preset is not overwritten — it stays as the ceiling the
+ * governor climbs back toward the moment there is headroom, so a machine that
+ * can hold Extreme does, and one that cannot gets a game that runs instead of
+ * a slideshow with the right label on it.
+ *
+ * THE CEILING is pacing. On a 144 or 240 Hz panel there is nothing to gain
+ * from rendering 240 frames of a game designed around 60 — it burns GPU
+ * headroom the floor needs and heats the machine for frames nobody can see.
+ * The governor holds presentation to `maxFps` by skipping whole ticks that
+ * arrive early: skipping the tick rather than just the draw keeps simulation
+ * and render in step, and the next tick simply gets a larger delta.
+ * ======================================================================== */
+
+/** How far under target the frame rate has to sit before the preset drops. */
+const PRESET_DROP_DEBT = 2.6;
+/** How long it has to be comfortable before the preset climbs back. */
+const PRESET_RISE_CREDIT = 12.0;
+
 export class AdaptiveQuality {
-  constructor(monitor, presetName = 'medium') {
+  constructor(monitor, presetName = 'medium', opts = {}) {
     this.monitor = monitor;
     this.enabled = true;
     this.targetFps = 60;
+    /* Presentation ceiling. Null means "do not pace" — the mobile path, where
+     * the panel is 60 Hz anyway and the battery is better served by the
+     * browser's own throttling than by ours. */
+    this.maxFps = opts.maxFps ?? null;
     this.level = 0;
     this.maxLevel = LADDER.length - 1;
     this.cooldown = 2.5;
     this.riseCredit = 0;
     this.dropDebt = 0;
+    /* Preset governor state. `presetChoice` is what the PLAYER picked and is
+     * never written by the governor; `presetName` is what is actually running. */
+    this.presetFloor = opts.presetFloor ?? 'low';
+    this.presetDebt = 0;
+    this.presetCredit = 0;
+    this.presetCooldown = 6;
     this.setPreset(presetName);
     /** Live values other systems read every frame. */
     this.scalars = { ...LADDER[0] };
     this.onChange = null;
+    /** Fired when the governor moves the effective preset. */
+    this.onPresetChange = null;
+    /* -Infinity, not 0: rAF timestamps start near zero on a fresh page, and a
+     * zero here makes the very first frame look "too early" and get skipped. */
+    this._lastPresent = -Infinity;
   }
 
-  setPreset(name) {
+  setPreset(name, fromGovernor = false) {
     this.presetName = QUALITY_ORDER.includes(name) ? name : 'medium';
+    if (!fromGovernor) {
+      this.presetChoice = this.presetName;
+      this.presetDebt = 0;
+      this.presetCredit = 0;
+      this.presetCooldown = 6;
+    }
     this.preset = { ...QUALITY_PRESETS[this.presetName] };
     this.level = 0;
     this.scalars = { ...LADDER[0] };
+    if (this._overrides) this.applyOverrides(this._overrides);
     return this.preset;
+  }
+
+  /** True while the governor is running below what the player asked for. */
+  get governed() { return this.presetName !== this.presetChoice; }
+
+  /**
+   * Should this frame be presented at all?
+   *
+   * The caller asks once per animation frame and skips the whole tick on
+   * false. Returning true also stamps the clock, so a caller that asks and
+   * then does not draw will pace one interval late — which is exactly the
+   * behaviour you want if the frame was skipped for another reason.
+   */
+  shouldPresent(now) {
+    if (!this.maxFps) return true;
+    /* A little under the true interval, because a strict one drops every other
+     * frame on a panel whose refresh is a hair off its nominal rate.
+     *
+     * Note what this can and cannot do. Presentation is locked to the display,
+     * so the achievable rates are the panel's refresh divided by an integer:
+     * a 240 Hz panel paces to 120, a 144 Hz panel to 72, and 120/90/75/60 Hz
+     * panels pass through untouched. Every one of those is inside the 60-120
+     * band, and an evenly-paced 72 is a far better frame than an uneven 120
+     * out of 144 would be. */
+    const min = 1000 / this.maxFps - 1.2;
+    if (now - this._lastPresent < min) return false;
+    this._lastPresent = now;
+    return true;
+  }
+
+  /**
+   * The preset half of the governor. Runs after the ladder, and only once the
+   * ladder has nothing left to give — dropping a whole preset while there are
+   * still particles to shed would be throwing away detail the machine could
+   * afford.
+   */
+  _governPreset(dt, avg, budget) {
+    if (!this.presetChoice) return false;
+    this.presetCooldown -= dt;
+
+    const order = QUALITY_ORDER;
+    const at = order.indexOf(this.presetName);
+    const wanted = order.indexOf(this.presetChoice);
+    const floor = Math.max(0, order.indexOf(this.presetFloor));
+
+    // Short of the floor with the ladder already at the bottom: shed a preset.
+    if (avg > budget * 1.10 && this.level >= this.maxLevel) this.presetDebt += dt;
+    else this.presetDebt = Math.max(0, this.presetDebt - dt * 0.6);
+
+    // Comfortable AND the ladder is back at the top: earn the preset back.
+    if (avg < budget * 0.72 && this.level === 0) this.presetCredit += dt;
+    else this.presetCredit = Math.max(0, this.presetCredit - dt * 0.5);
+
+    if (this.presetCooldown > 0) return false;
+
+    if (this.presetDebt > PRESET_DROP_DEBT && at > floor) {
+      this.presetDebt = 0; this.presetCredit = 0; this.presetCooldown = 8;
+      this.setPreset(order[at - 1], true);
+      this.onPresetChange?.(this.presetName, 'down');
+      return true;
+    }
+    if (this.presetCredit > PRESET_RISE_CREDIT && at < wanted) {
+      this.presetDebt = 0; this.presetCredit = 0; this.presetCooldown = 14;
+      this.setPreset(order[at + 1], true);
+      this.onPresetChange?.(this.presetName, 'up');
+      return true;
+    }
+    return false;
   }
 
   /** Per-setting user overrides from the Settings screen. */
   applyOverrides(s = {}) {
+    // Remembered, because the governor rebuilds `preset` from the table every
+    // time it moves a rung — and a player who turned shadows off did not mean
+    // "until the frame rate dips".
+    this._overrides = s;
     const p = this.preset;
     if (s.shadows === false) p.shadows = false;
     if (s.reflections === false) p.reflections = false;
@@ -276,6 +399,9 @@ export class AdaptiveQuality {
       this.scalars[key] = damp(this.scalars[key] ?? t[key], t[key], k, dt);
     }
     if (changed && this.onChange) this.onChange(this.level, t.label);
+    // The preset governor is the second line: it only acts once the ladder has
+    // run out, and its own change is reported through `onPresetChange`.
+    if (this._governPreset(dt, avg, budget)) return true;
     return changed;
   }
 
@@ -290,7 +416,11 @@ export class AdaptiveQuality {
   get cloudQuality() { return this.preset.cloudQuality * this.scalars.cloudDetail; }
   get envUpdateInterval() { return this.preset.envUpdateInterval * this.scalars.envInterval; }
   get postIntensity() { return this.scalars.post; }
-  get statusLabel() { return `${this.preset.label}${this.level ? ` · ${LADDER[this.level].label}` : ''}`; }
+  get statusLabel() {
+    const governed = this.governed
+      ? ` (held from ${QUALITY_PRESETS[this.presetChoice]?.label || this.presetChoice})` : '';
+    return `${this.preset.label}${governed}${this.level ? ` · ${LADDER[this.level].label}` : ''}`;
+  }
 }
 
 /* ===========================================================================

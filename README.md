@@ -1,17 +1,17 @@
 # ALPHA AIRCRAFT RACE 3D
 
-A high-speed aerial racing game that runs entirely in the browser. Every route,
-venue, cloud, texture, sound effect and piece of music is generated
-procedurally at runtime. Three of the thirteen airframes are modelled fighter
-jets loaded from `Assets/3d/aircraft/`; the other ten are lofted at runtime
-from parametric shape data, and every modelled jet keeps that procedural hull
-as its fallback.
+A high-speed aerial combat and racing game that runs entirely in the browser.
+Every route, venue, cloud, texture, sound effect and piece of music is
+generated procedurally at runtime. Three of the five airframes are modelled
+fighter jets loaded from `Assets/3d/aircraft/`; all five carry a procedural
+hull built from parametric shape data as their fallback.
 
 ```
-Endless Flight · Elite · Random venue          ← the defaults
-6 game modes · 17 venues · 13 airframes · 5 powers · 8-aircraft grids
-Four cameras including a true first-person view · route guidance chevrons
-Medium graphics by default, with an adaptive detail ladder underneath
+Endless Battle · Elite · Emerald Delta         ← the defaults
+9 game modes incl. 15-mission Story Mode · 10 venues · 5 airframes · 5 powers
+Mach 30 / 3000 km/h envelope · 100-strong hostile squadrons
+Chase and first-person cameras · route guidance chevrons
+High graphics on desktop, held between 60 and 120 FPS by the frame governor
 ```
 
 ---
@@ -47,11 +47,13 @@ Mobile play is landscape-only; portrait shows a rotate prompt.
 | `Q` / `E` | Lean left / right — slide sideways without changing heading |
 | `Shift` | Throttle up |
 | `X` | Air brake — slower means a harder turn, so this is a cornering tool |
-| `Space` | Boost |
-| `NUM 1–5` | Power Flight · Turbo Speed · Combat Maneuvers · Aerial Shield · Phase Shift |
+| `Space` | Nitrous boost — half the old burn rate, so it lasts |
+| `NUM 1–5` | Power Flight · **Turbo Speed (doubles nitrous)** · Combat Maneuvers · Aerial Shield · Phase Shift |
+| `LMB` / `RMB` | Guns / launch the armed heavy (needs a lock) |
+| `NUM 8` / `NUM 9` | Cycle gun · cycle heavy weapon |
 | `Esc` | Pause |
 | `F` | Fullscreen |
-| `C` / `V` | Cycle camera (chase / close / wide / first person) |
+| `C` | Toggle camera (chase / first person) |
 | `F8` | Debug overlay (FPS, seed, draw calls, world stats) |
 
 Gamepads and touch are supported. Everything is rebindable in Settings.
@@ -66,7 +68,10 @@ chain is genuinely faster than powering through it.
 
 | Mode | Shape |
 |---|---|
-| **Endless Flight** *(default)* | Infinite streamed route that escalates for as long as you survive |
+| **Endless Battle** *(default)* | Open airspace, no gates — a hundred hostile fighters, escalating waves |
+| **Story Mode** | Fifteen missions in three acts, ~30 minutes each, flown in order |
+| Endless Flight | Infinite streamed route that escalates for as long as you survive |
+| Endless Race | A hostile top-speed run — hold Mach and outrun the squadron |
 | Quick Race | One standalone race against a full grid over a fresh route |
 | Campaign | Nine chapters, each with its own venue, grid and objective |
 | Survival | Airspace closes in until the hull gives out |
@@ -109,6 +114,27 @@ tools/tripo/               Tripo3D asset generation pipeline
 
 ### Notable systems
 
+**Story Mode.** Fifteen missions in three acts, flown in order, each a full
+half-hour sortie rather than a lap. A mission is a *sequence* of five phases —
+a transit, a first contact, a skill phase, a hold, and a final clear — flown
+back to back without a loading screen, where the live phase is the only one
+that counts and clearing the last one clears the mission. Phase goals are
+cumulative against the same `metrics` object every other mode already fills in,
+so nothing needed a bespoke tracker and the HUD can show one honest bar. Every
+mission opens on a full-screen briefing: situation, intelligence, orders, all
+five phases with their how-to lines, and the venue, weather, difficulty, length
+and squadron pressure it will be flown at. `pressure` scales the squadron floor
+per mission, so mission 15 puts more airframes in the sky than mission 1 rather
+than being the same fight with a bigger number on the objective.
+
+**Venues.** Ten world *types*, not ten maps: each is a set of rules a fresh
+world is grown from, so the same venue twice is two different valleys. There is
+no water anywhere — what used to be hydrology is now `drainage`, and it
+describes the landform water would have cut (braided channels, scoured basins,
+the flats a delta leaves behind) laid down in dry bed material. Weather is
+rationed: exactly one cold venue and exactly one wet one, so a weather state
+says something about *where you are* rather than being reshuffled every launch.
+
 **Procedural route.** A seeded spline grown segment by segment from a table of
 22 modular segment types (sweepers, spirals, canyon runs, tower weaves,
 shortcuts, storm cells…). The generator samples the terrain heightfield while
@@ -130,14 +156,48 @@ their intelligence goes into choosing a line, defending it, avoiding obstacles
 and deciding when to spend boost. Eight archetypes with genuinely different
 behaviour, blended with the difficulty setting.
 
-**Airframes.** Ten aircraft are lofted at runtime from parametric shape data —
+**Hostiles.** A combat squadron is a hundred airframes, held at that floor as
+kills come in, arriving in eight formations at seven-to-ten-kilometre spacing.
+Keeping them there needs a separation term as well as a spread: every hostile
+is pursuing the same aircraft, so without one the whole wing converges into the
+saturated blob the spacing exists to prevent. Path space runs both ways for
+them — `pathDir` is the mechanism behind a committed two-second U-turn that
+rolls, pulls the nose through and reverses at the top — so a fighter that
+overshoots you comes back rather than disappearing down the route forever.
+Fourteen named manoeuvres including the full-axis rolls the player flies on Q
+and E. A hundred aircraft is a hundred cheap flight models and at most 28
+meshes: past 26 km a hostile is simulated, shoots and paints on the radar
+without being drawn.
+
+**Weapons.** Four guns on a 21-39 km ladder and four heavies on a 56-105 km
+one. The gun hit test is a swept segment rather than a point sample — a plasma
+bolt covers 93 m in a 60 Hz frame against a 30 m target, so testing only the
+round's new position stepped over most of the shots that should have connected.
+Heavy splash falls off quadratically, because a linear ramp over a kilometre of
+blast leaves half of it lethal and turns the whole airspace into one kill zone.
+Rounds the player did not launch are damage-scaled on the way in: the table is
+the player's arsenal, and a hundred aircraft firing it back is a coin flip
+rather than a fight.
+
+**Collision.** Colliders carry a shape, not just a radius. Boxes get oriented
+half-extents; anything genuinely a ring — a torus arch, an open-ended cylinder
+— is decomposed at build time into a chain of small boxes following the
+material, so the hole in an arch is a hole and you can fly through it. The
+narrow phase is a slab test against the box expanded by the aircraft's own
+radius: exact along the flight vector, no sampling, and therefore no tunnelling
+through a thin wall at Mach 30.
+
+**Airframes.** Five, not eleven: two flyable from the first launch and three
+earned. A hangar of eleven was a list rather than a choice — most of them
+differed by a few points on one stat and a paint job, and the ones that
+mattered were buried. Each is lofted at runtime from parametric shape data —
 superellipse fuselage sections, NACA-profile lifting surfaces, canards, canted
 tails, nacelles, flared nozzles, glass canopies — and merged down to about six
 draw calls each. Liveries, panel lines and roughness maps are painted to a
 canvas per airframe. Control surfaces are separate pivots that actuate with
 your input.
 
-Three more — FR-22 Raptor, FA-19 Falcon, MK-29 Warhawk — are modelled meshes,
+Three of the five — FR-22 Raptor, FA-19 Falcon, MK-29 Warhawk — are modelled meshes,
 decimated to ~115k triangles with a ~29k LOD for rivals and Draco-compressed.
 None of the three arrived axis-aligned, so each carries a solved quaternion in
 `config.js`: the direction an aircraft is thinnest is its "up", the mirror
@@ -161,17 +221,41 @@ gives about 14°/s at racing speed, which is unflyable in a corridor — but eve
 relationship above it is the real one, and the G-meter reads the true load
 factor.
 
+**The envelope.** Dry Mach 20, nitrous Mach 25, and Turbo Speed (`NUM 2`)
+doubles the nitrous — twice the shove and twice the margin it adds on top of
+the dry ceiling, which is what puts the Mach 30 / 3000 km/h ceiling at the end
+of one key instead of in a constant to keep in step by hand. Drag, not thrust,
+was tuned to open the band, so low-speed acceleration is untouched and top
+speed is still something you fly toward over a distance. The thermal redline is
+Mach 24, six Mach below the ceiling: cross it and the engine is on a one-minute
+clock, so the top of the envelope is somewhere you can live rather than a
+warning light. Nitrous burns at 13 units/second — a full meter is 7.7 seconds
+of reheat.
+
+**HUD.** The control legend and the weapons/objective block are *reference*,
+not instruments: worth reading for the first few runs and then permanently in
+front of the thing you are actually looking at. Both are closed by default on
+desktop and mobile, each behind its own big circular dial — green for controls,
+blue for weapons — with each panel framed in its dial's colour, so "blue dial,
+blue panel" is learned once and never read again. The choice is remembered.
+Target lock range has its own readout under the reticle, independent of the
+panel above it: green when the armed round can reach, red with the distance
+when it cannot, because that is the one combat number that must never be behind
+a toggle.
+
 **Route guidance.** A ladder of translucent chevrons laid down the middle of
 the corridor ahead, in a single instanced draw call. Green while you are on the
 line, amber as you drift, red once you are outside the corridor, with a pulse
 of brightness travelling away from you that crosses the bloom threshold — so
 the route glows rather than just being drawn.
 
-**Cameras.** Chase, close and wide are all chase rigs with speed-scaled
-distance and lag; first person is a rigid eye point in the airframe with the
-aircraft itself not drawn, which is the only way a first-person view works when
-the airframe is a single merged mesh. `C` cycles them and the live camera is
-named bottom-right.
+**Cameras.** Chase and first person, on one toggle. Chase is a speed-scaled rig
+that dollies in as the jet accelerates; first person is a rigid eye point in the
+airframe with the aircraft itself not drawn, which is the only way a first-person
+view works when the airframe is a single merged mesh. `C` toggles them and the
+live camera is named bottom-right. The pre-race framing sits back further than
+the flight framing and eases forward once you are moving, so a stationary jet is
+a jet you can see rather than one filling the screen.
 
 **Engine audio.** A turbofan, not an engine block: inharmonic blade-passing
 partials from the fan and compressor through a resonant bandpass, a broadband
@@ -194,11 +278,33 @@ oscillators plus band-passed noise driven continuously by speed, throttle,
 boost and hull damage — no sample crossfades. The score is a generative
 sequencer whose intensity tracks how the run is going.
 
-**Performance.** Adaptive quality is a ladder, not a switch: it sheds far
-particles, then shadow cadence, then reflection cadence, then far prop density,
-then cloud detail, then post intensity — in that order, easing between steps.
-Player aircraft fidelity, core lighting, HUD and input responsiveness are never
-touched.
+**Performance.** On desktop the game holds **60-120 FPS at every quality
+level, including maximum**, and the two halves of that are different problems.
+
+*The floor is quality.* Adaptive quality is a ladder, not a switch: it sheds
+far particles, then shadow cadence, then reflection cadence, then far prop
+density, then cloud detail, then post intensity, then resolution — in that
+order, easing between steps. Player aircraft fidelity, core lighting, HUD and
+input responsiveness are never touched. But the ladder only moves *within* the
+chosen preset, and Extreme at the bottom rung can still be more than a machine
+has. So when the ladder bottoms out and the frame rate is still short, the
+governor steps the **effective preset** down a rung — Extreme becomes Ultra,
+Ultra becomes High, down to a Medium floor. The player's choice is never
+overwritten; it stays as the ceiling the governor climbs back toward the moment
+there is headroom, so a machine that can hold Extreme does, and one that cannot
+gets a game that runs rather than a slideshow with the right label on it. The
+debug overlay (`F8`) names the running preset and what was asked for.
+
+*The ceiling is pacing.* On a 144 or 240 Hz panel there is nothing to gain from
+rendering four times as many frames as the game is designed around — it burns
+the GPU headroom the floor needs. Whole ticks that arrive early are skipped
+rather than just their draw, so simulation and render stay in step. Presentation
+is locked to the display, so the achievable rates are the panel's refresh over
+an integer: 240 Hz paces to 120, 144 Hz to 72, and 120/90/75/60 Hz pass through
+untouched. Every one of those is inside the band, and an evenly-paced 72 is a
+better frame than an uneven 120 out of 144 would be. Mobile is left unpaced —
+the panel is 60 Hz anyway and the browser's own throttling serves the battery
+better than ours would.
 
 Frame pacing matters as much as frame rate. `requestAnimationFrame` deltas
 jitter either side of the true refresh interval even on a machine comfortably
@@ -209,10 +315,13 @@ invented or lost. World streaming then gets whatever is left of the frame after
 rendering rather than a fixed slice — a fixed budget is what turns a tight
 frame into a dropped one.
 
-The context is requested as WebGL 2 with a high-performance GPU hint and a
-desynchronized swap chain, and tone mapping is AgX, which holds saturated
-highlights — reheat plumes, gate energy, sun discs — where ACES desaturates
-them towards grey.
+The context is requested as WebGL 2 with a high-performance GPU hint (which is
+what moves it onto the discrete GPU on a laptop) and a desynchronized swap
+chain. The canvas and the HUD sit on separate compositor layers with CSS
+containment between them, so a HUD repaint — and the HUD repaints every frame —
+never invalidates the layer the world is drawn into. Tone mapping is AgX, which
+holds saturated highlights — reheat plumes, gate energy, sun discs — where ACES
+desaturates them towards grey.
 
 ---
 
@@ -220,6 +329,8 @@ them towards grey.
 
 The three modelled jets live in `Assets/3d/aircraft/` and are listed both on
 their aircraft entries in `config.js` and in `Assets/3d/manifest.json`. They are
+also the airframes hostiles fly, so the enemy squadron keeps its full silhouette
+variety whatever the player has unlocked. They are
 optional in the strict sense: if a `.glb` fails to load, that airframe falls
 back to its procedural hull and the game boots normally.
 
@@ -248,6 +359,11 @@ This build ships with an empty manifest and runs on its procedural airframes.
 Progress, unlocks, records, statistics and settings are kept in this browser's
 `localStorage` under `alpha_aircraft_race_3d_save_v1`. Nothing is uploaded
 anywhere. Statistics → *Reset All Progress* clears it.
+
+A save that names content this build no longer has — an airframe that was cut,
+a venue that was renamed — is repaired once on load rather than defended against
+at every lookup, so an old save opens on the current roster instead of on
+`undefined`.
 
 ---
 
