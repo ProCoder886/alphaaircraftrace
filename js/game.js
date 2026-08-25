@@ -949,7 +949,7 @@ export class Game {
   _updateHazard(dt, player, world) {
     this._hazardScan = (this._hazardScan || 0) - dt;
     // Six seconds of flight, with a floor generous enough that the warning is
-    // still useful at low speed. At Mach 15 this is a 30 km scan, which sounds
+    // still useful at low speed. At Mach 22 this is a 30 km scan, which sounds
     // absurd until you notice the airframe crosses it in six seconds.
     const look = clamp(player.speed * 6, 3000, 22000);
 
@@ -981,7 +981,7 @@ export class Game {
     const d = this._hazardDist ?? Infinity;
     const active = d < look && d > 0;
     // Severity is time-to-impact, not distance: 2 km is nothing at Mach 3 and
-    // is half a second at Mach 18.
+    // is a third of a second at Mach 24.
     const tti = active ? d / Math.max(1, player.speed) : Infinity;
     this._hazardTTI = tti;
 
@@ -1007,8 +1007,11 @@ export class Game {
   }
 
   /**
-   * Thermal limit. Above Mach 18 the engine is on a one-minute clock: warn,
-   * count it down, and when it runs out take the aircraft apart. Backing off
+   * Thermal limit. Above the Mach 24 redline the engine is on a one-minute
+   * clock: warn, count it down, and when it runs out take the aircraft apart.
+   * The warning fires the moment you cross the redline, six Mach below the
+   * ceiling, so there is a whole band of the envelope where the airframe is
+   * loud, hot and legal before anything is actually at stake. Backing off
    * cools it, but at less than half the rate it heated, so the redline is a
    * budget spent across the whole run rather than a line you can hop over.
    *
@@ -1154,7 +1157,7 @@ export class Game {
     }
 
     /* High-Mach buffet. Past `shakeMach` the airframe starts to complain, and
-     * the shake is what sells the last three Mach as genuinely fast rather than
+     * the shake is what sells the last seven Mach as genuinely fast rather than
      * just a bigger number on the tape. It ramps in over the band shakeMach →
      * MACH.max instead of snapping on, so crossing the threshold reads as the
      * aircraft loading up rather than as a glitch. Re-applied every frame at low

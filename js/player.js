@@ -14,6 +14,7 @@
 
 import * as THREE from 'three';
 import { Afterburner } from './renderer.js';
+import { sweepCollider, colliderDistance, colliderEscape } from './world.js';
 import {
   PHYSICS, POWERS, WORLD, DEFAULT_BINDINGS, SCORE, MACH,
   clamp, clamp01, lerp, damp, shapeAxis,
@@ -908,9 +909,15 @@ export class Player {
     this.burner = damp(this.burner, wantBoost ? 1 : 0, wantBoost ? 1 / PHYSICS.burnerLight : 4.5, dt);
     this.boostBlend = damp(this.boostBlend, this.burner * 0.7 + (turbo ? 1 : 0) * 0.3, 5, dt);
 
+    /* Speed ceiling. The dry number is the airframe's own; nitrous adds a
+     * margin on top of it, and Turbo Speed (NUM 2) doubles that margin — which
+     * is what puts the Mach 30 ceiling at the end of the NUM 2 key rather than
+     * making it a separate number to keep in step by hand. */
+    const scale = this.topSpeed / PHYSICS.maxSpeed;
+    const reheat = PHYSICS.boostSpeed - PHYSICS.maxSpeed;
     let cap = this.topSpeed;
-    if (this.boosting) cap = PHYSICS.boostSpeed * (this.topSpeed / PHYSICS.maxSpeed) * 0.94;
-    if (turbo) cap = PHYSICS.boostSpeed * this.turboBonus * (this.topSpeed / PHYSICS.maxSpeed);
+    if (this.boosting) cap = (PHYSICS.maxSpeed + reheat * 0.94) * scale;
+    if (turbo) cap = (PHYSICS.maxSpeed + reheat * PHYSICS.turboBoost) * scale * this.turboBonus;
     cap *= lerp(1, 0.88, thin);
 
     /* --- sustained-throttle build ----------------------------------------
@@ -925,8 +932,13 @@ export class Player {
     const build = lerp(PHYSICS.thrustBuildLow, PHYSICS.thrustBuildHigh, this.thrustBuild);
 
     let thrust = this.accelPower * this.throttle * build;
-    thrust += PHYSICS.boostAccel * this.boostPower * this.burner * build;
-    if (turbo) thrust += PHYSICS.boostAccel * 1.35 * this.boostPower;
+    // Nitrous. Turbo Speed doubles it — the same multiplier that doubles the
+    // ceiling above, so the power reads as one thing and not two.
+    const nitrous = turbo ? PHYSICS.turboBoost : 1;
+    thrust += PHYSICS.boostAccel * this.boostPower * this.burner * build * nitrous;
+    // Turbo dumps the reserve into the reheat stage whether or not the boost
+    // button is down, so it is a shove in its own right as well as a multiplier.
+    if (turbo) thrust += PHYSICS.boostAccel * this.boostPower * 1.35 * nitrous;
     // Gravity along the flight path: a dive is free speed, a climb costs it.
     // Power Flight all but cancels it, which is what makes it a save button.
     thrust += -this.forward.y * PHYSICS.pathGravity * (powerFlight ? 0.15 : 1);
@@ -939,7 +951,7 @@ export class Player {
     const induced = powerFlight ? 0 : PHYSICS.inducedDrag * this.loadFactor * this.loadFactor / V;
     this.speed += (thrust - parasitic - induced) * dt;
     if (this.speed > cap) this.speed = damp(this.speed, cap, 2.4, dt);
-    // Mach 20 is the hard ceiling for every airframe in the game.
+    // MACH.max is the hard ceiling for every airframe in the game.
     this.speed = clamp(this.speed, PHYSICS.minSpeed * 0.55, MACH.maxMs);
 
     /* --- integrate ------------------------------------------------------ */
@@ -1120,25 +1132,24 @@ export class Player {
     if (segLen > 0.0001) segDir.divideScalar(segLen);
 
     for (const cbox of near) {
-      const hitR = cbox.radius + myR;
-      // Swept sphere vs sphere along this frame's travel.
-      _v2.subVectors(cbox.pos, segStart);
-      const t = clamp(_v2.dot(segDir), 0, segLen);
-      _v3.copy(segStart).addScaledVector(segDir, t);
-      const dist = _v3.distanceTo(cbox.pos);
-
-      if (dist < hitR) {
+      /* Narrow phase against the collider's real shape, not its bounding
+       * sphere. An arch, a gateway or the plaza between a twin-tower pair is
+       * open air the aircraft is entitled to fly through, and only actually
+       * touching the structure is a hit. */
+      const t = sweepCollider(cbox, segStart, segDir, segLen, myR, _v3);
+      if (t >= 0) {
         if (phase && cbox.soft) continue;
         if (this.collisionCooldown > 0) continue;
         this._impact(cbox, _v3, shield, difficulty);
         continue;
       }
       // Near miss — scored once per obstacle, and only when genuinely close.
-      const missR = hitR + 52;
-      if (dist < missR) {
+      _v3.copy(segStart).addScaledVector(segDir, segLen * 0.5);
+      const gap = colliderDistance(cbox, _v3) - myR;
+      if (gap < 52) {
         if (this.nearMissCache.has(cbox)) continue;
         this.nearMissCache.set(cbox, true);
-        const closeness = 1 - (dist - hitR) / 52;
+        const closeness = clamp01(1 - gap / 52);
         this.events.push({
           type: 'nearMiss',
           closeness,
@@ -1162,10 +1173,11 @@ export class Player {
     const dmgScale = (difficulty?.damageScale ?? 1) * this.damageScale;
     const damage = cbox.damage * dmgScale * (0.6 + this.speed / PHYSICS.maxSpeed * 0.9);
 
-    // Push out of the obstacle and bleed speed.
-    _v.subVectors(this.position, cbox.pos).normalize();
+    // Push out along the face actually struck, not away from the centre: a
+    // box's centre can be hundreds of metres from the wall you clipped.
+    const depth = colliderEscape(cbox, this.position, this.visual.span * 0.42, _v);
     if (!isFinite(_v.x)) _v.set(0, 1, 0);
-    this.position.addScaledVector(_v, (cbox.radius + this.visual.span * 0.42) - this.position.distanceTo(cbox.pos) + 2);
+    this.position.addScaledVector(_v, depth + 2);
     this.velocity.addScaledVector(_v, this.speed * PHYSICS.collisionBounce);
     this.speed *= cbox.soft ? 0.88 : 0.62;
 

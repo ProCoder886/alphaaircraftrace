@@ -30,6 +30,151 @@ const _m1 = new THREE.Matrix4();
 const _c1 = new THREE.Color();
 
 /* ===========================================================================
+ * COLLIDER SHAPES
+ * ------------------------------------------------------------------------
+ * A collider used to be one thing: a sphere. That is the right primitive for a
+ * boulder and completely the wrong one for architecture. A half-torus arch, a
+ * gateway, a twin-tower pair with a plaza between them and a hollow curtain
+ * wall all have a large, obvious hole in the middle, and a bounding sphere
+ * fills that hole with solid air — which is why an aircraft lined up perfectly
+ * through the opening still died half a kilometre short of it.
+ *
+ * Every collider therefore now carries a *shape* alongside the bounding sphere
+ * the broadphase still uses:
+ *
+ *   sphere  radius only               — rocks, debris, traffic, soft props
+ *   box     half-extents + rotation   — every slab, shaft, deck and wall
+ *
+ * and anything that is genuinely a ring — a torus arch, an open cylinder —
+ * is DECOMPOSED at build time into a chain of small boxes following the
+ * material, so the hole in the middle is hole. `radius` stays on every record
+ * as the broadphase bound, so chunk rejection, the radar and the forward
+ * hazard scan keep working unchanged.
+ *
+ * The narrow phase is a slab test against the box expanded by the aircraft's
+ * own radius (a Minkowski sum, rounded corners squared off). That is exact
+ * along the flight vector, needs no sampling, and therefore cannot tunnel
+ * through a thin wall at Mach 30.
+ * ======================================================================== */
+
+const _cbA = new THREE.Vector3();
+const _cbB = new THREE.Vector3();
+const _cbQ = new THREE.Quaternion();
+
+/**
+ * Build a box collider from a world-space centre, half-extents and rotation.
+ * `radius` is derived so the broadphase bound always encloses the box.
+ */
+export function boxCollider(pos, half, quat, props) {
+  return {
+    pos, radius: Math.hypot(half.x, half.y, half.z),
+    half, quat: quat ? quat.clone() : new THREE.Quaternion(),
+    object: null, spin: 0, hub: null, ...props,
+  };
+}
+
+/**
+ * Swept-sphere narrow phase.
+ *
+ * @param c        the collider record
+ * @param from     segment start (last frame's position)
+ * @param dir      normalised segment direction
+ * @param len      segment length
+ * @param r        the aircraft's own collision radius
+ * @param out      receives the contact point when a hit is reported
+ * @returns distance along the segment to first contact, or -1 for a miss
+ */
+export function sweepCollider(c, from, dir, len, r, out) {
+  if (!c.half) {
+    // --- sphere -----------------------------------------------------------
+    _cbA.subVectors(c.pos, from);
+    const t = clamp(_cbA.dot(dir), 0, len);
+    _cbB.copy(from).addScaledVector(dir, t);
+    const hitR = c.radius + r;
+    if (_cbB.distanceToSquared(c.pos) >= hitR * hitR) return -1;
+    out.copy(_cbB);
+    return t;
+  }
+
+  // --- oriented box, expanded by the aircraft radius -----------------------
+  _cbQ.copy(c.quat).invert();
+  _cbA.subVectors(from, c.pos).applyQuaternion(_cbQ);      // start in box space
+  _cbB.copy(dir).applyQuaternion(_cbQ);                    // direction in box space
+  const ex = c.half.x + r, ey = c.half.y + r, ez = c.half.z + r;
+
+  let tMin = 0, tMax = len;
+  const axis = (p, d, e) => {
+    if (Math.abs(d) < 1e-8) return p >= -e && p <= e;       // parallel: inside the slab?
+    const inv = 1 / d;
+    let t1 = (-e - p) * inv, t2 = (e - p) * inv;
+    if (t1 > t2) { const s = t1; t1 = t2; t2 = s; }
+    if (t1 > tMin) tMin = t1;
+    if (t2 < tMax) tMax = t2;
+    return tMax >= tMin;
+  };
+  if (!axis(_cbA.x, _cbB.x, ex)) return -1;
+  if (!axis(_cbA.y, _cbB.y, ey)) return -1;
+  if (!axis(_cbA.z, _cbB.z, ez)) return -1;
+  if (tMin > len || tMax < 0) return -1;
+
+  const t = Math.max(0, tMin);
+  out.copy(from).addScaledVector(dir, t);
+  return t;
+}
+
+/**
+ * Shortest distance from a point to the collider's surface. Negative inside.
+ * Used for the near-miss ring and the forward hazard scan, both of which want
+ * "how close did that actually come" rather than a yes/no.
+ */
+export function colliderDistance(c, point) {
+  if (!c.half) return point.distanceTo(c.pos) - c.radius;
+  _cbQ.copy(c.quat).invert();
+  _cbA.subVectors(point, c.pos).applyQuaternion(_cbQ);
+  const dx = Math.abs(_cbA.x) - c.half.x;
+  const dy = Math.abs(_cbA.y) - c.half.y;
+  const dz = Math.abs(_cbA.z) - c.half.z;
+  if (dx <= 0 && dy <= 0 && dz <= 0) return Math.max(dx, Math.max(dy, dz));
+  return Math.hypot(Math.max(dx, 0), Math.max(dy, 0), Math.max(dz, 0));
+}
+
+/**
+ * Separation vector that pushes a sphere of radius `r` out of the collider.
+ * Writes a unit normal into `outNormal` and returns the depth to travel.
+ */
+export function colliderEscape(c, point, r, outNormal) {
+  if (!c.half) {
+    outNormal.subVectors(point, c.pos);
+    const d = outNormal.length();
+    if (d < 1e-4) { outNormal.set(0, 1, 0); return c.radius + r; }
+    outNormal.divideScalar(d);
+    return Math.max(0, c.radius + r - d);
+  }
+  _cbQ.copy(c.quat).invert();
+  _cbA.subVectors(point, c.pos).applyQuaternion(_cbQ);
+  // Penetration on each axis of the expanded box; the shallowest one is the
+  // face the aircraft actually came through.
+  const px = c.half.x + r - Math.abs(_cbA.x);
+  const py = c.half.y + r - Math.abs(_cbA.y);
+  const pz = c.half.z + r - Math.abs(_cbA.z);
+  if (px <= 0 || py <= 0 || pz <= 0) {
+    // Already outside: push along the nearest-surface direction.
+    outNormal.set(
+      px <= 0 ? Math.sign(_cbA.x || 1) : 0,
+      py <= 0 ? Math.sign(_cbA.y || 1) : 0,
+      pz <= 0 ? Math.sign(_cbA.z || 1) : 0,
+    ).normalize().applyQuaternion(c.quat);
+    if (!Number.isFinite(outNormal.x)) outNormal.set(0, 1, 0);
+    return 0;
+  }
+  let depth = px, nx = Math.sign(_cbA.x || 1), ny = 0, nz = 0;
+  if (py < depth) { depth = py; nx = 0; ny = Math.sign(_cbA.y || 1); nz = 0; }
+  if (pz < depth) { depth = pz; nx = 0; ny = 0; nz = Math.sign(_cbA.z || 1); }
+  outNormal.set(nx, ny, nz).applyQuaternion(c.quat);
+  return depth;
+}
+
+/* ===========================================================================
  * TERRAIN FIELD
  * ======================================================================== */
 
@@ -51,6 +196,9 @@ export class TerrainField {
       low: new THREE.Color(biome.ground.low),
       rock: new THREE.Color(biome.ground.rock),
       water: new THREE.Color(biome.ground.water),
+      // Dry basin floor: the rock colour, drained of saturation and lifted,
+      // which is what a bed looks like once the water has gone.
+      bed: new THREE.Color(biome.ground.bed ?? biome.ground.rock),
     };
   }
 
@@ -105,8 +253,11 @@ export class TerrainField {
       out.g = lerp(out.g, 0.97, snow * (1 - slope * 0.55));
       out.b = lerp(out.b, 1.00, snow * (1 - slope * 0.55));
     }
+    // Basin floors. There is no standing water anywhere in the game, so the
+    // lowest ground reads as the dry bed it is — silt, gravel and pan salt —
+    // rather than being tinted toward a shoreline that does not exist.
     if (h < this.waterLevel + 26) {
-      out.lerp(c.water, clamp01((this.waterLevel + 26 - h) / 60) * 0.75);
+      out.lerp(c.bed, clamp01((this.waterLevel + 26 - h) / 60) * 0.7);
     }
     return out;
   }
@@ -420,24 +571,13 @@ export class TerrainMesh {
     this.active = new Map();
     this.buildQueue = [];
 
-    /* --- water ------------------------------------------------------------
-     * One plane centred on the camera, but the surface detail is analytic in
-     * the shader rather than a tiled texture, so it stays sharp at every
-     * distance and never blocks up into squares. The grid is only there so the
-     * plane has enough vertices to interpolate world position accurately
-     * across a hundred kilometres; the waves themselves are per-pixel. */
-    this.waterEnabled = field.biome.relief.water > 0.1;
-    if (this.waterEnabled) {
-      const g = new THREE.PlaneGeometry(1, 1, 24, 24).rotateX(-Math.PI / 2);
-      const deep = new THREE.Color(field.biome.ground.water);
-      // Shallows are the same water lifted and pushed toward green — the
-      // colour you get when there is a bottom close enough to scatter light.
-      const shallow = deep.clone().offsetHSL(-0.03, 0.06, 0.16);
-      this.water = new THREE.Mesh(g, materials.waterSurface(deep.getHex(), shallow.getHex()));
-      this.water.frustumCulled = false;
-      this.water.renderOrder = -5;
-      this.group.add(this.water);
-    }
+    /* --- no open water ----------------------------------------------------
+     * There are no seas, lakes, rivers or ponds anywhere in this build. The
+     * `waterLevel` on the terrain field survives as a BASIN FLOOR — the height
+     * the analytic heightfield is clamped at, which stops low ground running
+     * away into deep negative pits and gives every placement pass one shared
+     * "this is the bottom" line — but nothing is ever drawn on it. */
+    this.waterEnabled = false;
 
     if (field.biome.ceiling) {
       const g = new THREE.PlaneGeometry(1, 1, 24, 24).rotateX(Math.PI / 2);
@@ -556,11 +696,6 @@ export class TerrainMesh {
       built++;
     }
 
-    if (this.water) {
-      const s = this.baseSize * Math.pow(2, this.levels) * 3;
-      this.water.scale.set(s, 1, s);
-      this.water.position.set(focus.x, this.field.waterLevel, focus.z);
-    }
     if (this.ceiling) {
       const s = this.baseSize * 6;
       this.ceiling.scale.set(s, 1, s);
@@ -571,7 +706,6 @@ export class TerrainMesh {
   dispose() {
     for (const t of this.tiles) t.dispose();
     this.tiles.length = 0; this.pool.length = 0; this.active.clear();
-    this.water?.geometry.dispose();
     this.ceiling?.geometry.dispose();
     this.scene.remove(this.group);
   }
@@ -792,6 +926,32 @@ export const STRUCTURE_SPECS = {
 
 /** Fallback so a typo in a location's `styles` list degrades to a building. */
 const DEFAULT_SPEC = STRUCTURE_SPECS.house;
+
+/**
+ * Solid volumes per archetype, in the same normalised 1x1x1 space the geometry
+ * is built in (centred in XZ, base on y = 0), as `[cx, cy, cz, hx, hy, hz]`.
+ *
+ * Instanced buildings have no per-instance Object3D to walk, so their colliders
+ * come from this table rather than from the mesh. Anything not listed is solid
+ * through its whole box; the entries that ARE here are the archetypes with a
+ * genuine hole in them — the plaza between a twin-tower pair, the open corners
+ * of a cruciform church — and listing them is what lets an aircraft lined up on
+ * the gap actually fly through it instead of dying on a bounding volume.
+ */
+const STRUCTURE_PARTS = {
+  twin: [
+    [0, 0.04, 0, 0.50, 0.04, 0.45],     // podium
+    [-0.32, 0.54, 0, 0.18, 0.46, 0.45], // west shaft
+    [0.32, 0.54, 0, 0.18, 0.46, 0.45],  // east shaft
+    [0, 0.645, 0, 0.14, 0.03, 0.20],    // sky bridge
+  ],
+  spire: [
+    [0, 0.21, 0, 0.25, 0.21, 0.50],     // nave
+    [0, 0.17, 0, 0.50, 0.17, 0.21],     // transept
+    [0, 0.35, -0.36, 0.15, 0.35, 0.15], // tower
+    [0, 1.02, -0.36, 0.11, 0.17, 0.11], // steeple
+  ],
+};
 
 /**
  * Build one structure archetype as a merged geometry, normalised to a 1×1×1 box
@@ -1744,32 +1904,43 @@ export class World {
     const accent = this.materials.emissiveBasic(this.biome.accent);
     const ground = this.terrain.surface(pos.x, pos.z);
 
-    // Resolve the new per-location landmark ids to the original branches.
+    /* Resolve the per-location landmark ids to the archetype branches below.
+     * Every venue now carries at least one ARCH — a gate you can fly through
+     * rather than round, which is the single most readable landmark in a world
+     * this large, and the one that most needed the collider work under it. */
     const resolve = {
-      /* Emerald Basin */ giantRiverBridge: 'archBridge', mountainWaterfall: 'mesaArch',
+      /* Emerald Delta */ giantRiverBridge: 'archBridge', deltaArch: 'mesaArch',
       riversideStadium: 'generic', botanicalGarden: 'generic', hilltopMonument: 'generic',
+      terraceViaduct: 'archBridge',
       /* Glacier Reach */ glacierObservatory: 'beaconTower', iceArch: 'iceArch',
-      iceTunnel: 'generic', frozenWaterfall: 'mesaArch', shelfWall: 'citadel',
+      iceTunnel: 'generic', seracGate: 'iceArch', shelfWall: 'citadel',
       /* Ashfall Flats */ desertStatue: 'generic', abandonedMine: 'bunkerComplex',
-      oasis: 'generic', canyonBridge: 'skyBridge', desertPark: 'generic', mesaArch: 'mesaArch',
-      /* Verdant Delta */ karstSpire: 'megaSpire', deltaWaterfall: 'mesaArch',
-      ruinTemple: 'generic', boatDocks: 'generic', archBridge: 'archBridge',
+      wadiGate: 'mesaArch', canyonBridge: 'skyBridge', desertPark: 'generic',
+      mesaArch: 'mesaArch', solarTowerField: 'radarArray',
+      /* Verdant Canopy */ karstSpire: 'megaSpire', canopyArch: 'mesaArch',
+      ruinTemple: 'generic', stiltDocks: 'generic', archBridge: 'archBridge',
+      jungleZiggurat: 'bunkerComplex',
       /* Hollow Vale */ villageWindmill: 'windmillRidge', hilltopChurch: 'generic',
       countrysideStatue: 'generic', fairground: 'generic', ruralStadium: 'generic',
-      golfClubhouse: 'generic',
-      /* Drowned Flats */ floodBarrier: 'bunkerComplex', temporaryBridge: 'archBridge',
-      submergedTown: 'generic', pumpingStation: 'radarArray',
+      golfClubhouse: 'generic', stoneCircle: 'citadel',
+      /* Silt Pans */ floodBarrier: 'bunkerComplex', temporaryBridge: 'archBridge',
+      strandedTown: 'generic', pumpingStation: 'radarArray', pylonRun: 'radarArray',
       /* Meridian Sprawl */ cityStatue: 'generic', centralBankTower: 'ridgeTower',
       twinTowerComplex: 'generic', giantStadium: 'generic', flyoverExchange: 'generic',
-      skybridgeNetwork: 'skyBridge',
+      skybridgeNetwork: 'skyBridge', metroStation: 'generic', majorBridge: 'archBridge',
+      civicArch: 'mesaArch',
       /* Titan Range */ mountainStatue: 'generic', suspensionBridge: 'archBridge',
-      observatoryDome: 'beaconTower', valleyDam: 'bunkerComplex',
+      observatoryDome: 'beaconTower', largeObservatory: 'beaconTower',
+      mountainPark: 'generic', summitGate: 'mesaArch', cirqueArch: 'mesaArch',
       /* Citadel Siege */ giantCastle: 'citadel', curtainWall: 'citadel',
       gatehouse: 'bunkerComplex', siegeTower: 'megaSpire', fortifiedBridge: 'archBridge',
-      battlements: 'generic',
+      battlements: 'generic', keep: 'citadel', courtyardStatue: 'generic',
+      stormArch: 'mesaArch',
       /* Neon Megacity */ futuristicStatue: 'generic', megaAmusementPark: 'generic',
       observationTower: 'ridgeTower', twinTowerDistrict: 'generic',
-      neonSkyway: 'skyBridge', holoArcade: 'generic',
+      neonSkyway: 'skyBridge', holoArcade: 'generic', concertComplex: 'generic',
+      megaSpire: 'megaSpire', skyBridge: 'skyBridge', holoArray: 'radarArray',
+      neonGate: 'mesaArch',
     };
     const resolved = resolve[kind] || 'generic';
 
@@ -1917,28 +2088,119 @@ export class World {
    * @param minR  smallest mesh worth colliding with, in metres
    * @param maxN  cap on colliders taken from this structure (largest first)
    */
-  _registerStructureColliders(chunk, root, minR = 20, maxN = 40, type = 'structure') {
+  /**
+   * Solid volumes for one placed instance of a structure archetype.
+   *
+   * `baseY` is where the geometry's y = 0 sits in the world, and w/h/d are the
+   * scale it was placed at, so the boxes land exactly on the drawn building.
+   */
+  _addStructureBoxes(chunk, arch, wx, baseY, wz, w, h, d, yaw, type = 'building', damage = 48) {
+    const parts = STRUCTURE_PARTS[arch] || [[0, 0.5, 0, 0.5, 0.5, 0.5]];
+    const quat = _q1.setFromAxisAngle(_v3.set(0, 1, 0), yaw);
+    const props = { damage, type, kind: 'structure', soft: false };
+    for (const [cx, cy, cz, hx, hy, hz] of parts) {
+      const off = _v2.set(cx * w, 0, cz * d).applyQuaternion(quat);
+      chunk.addCollider(boxCollider(
+        new THREE.Vector3(wx + off.x, baseY + cy * h, wz + off.z),
+        new THREE.Vector3(Math.max(2, hx * w), Math.max(2, hy * h), Math.max(2, hz * d)),
+        quat, props,
+      ));
+    }
+  }
+
+  _registerStructureColliders(chunk, root, minR = 20, maxN = 96, type = 'structure') {
     root.updateMatrixWorld(true);
     const found = [];
+    const props = { damage: 52, type, kind: 'structure', soft: false };
+
     root.traverse((n) => {
       if (!n.isMesh || !n.geometry) return;
-      if (!n.geometry.boundingSphere) n.geometry.computeBoundingSphere();
-      const bs = n.geometry.boundingSphere;
-      if (!bs) return;
-      const c = bs.center.clone().applyMatrix4(n.matrixWorld);
-      // Uniform-ish scale is the norm here; take the largest axis so a stretched
-      // slab is never under-covered.
-      const sc = _v1.setFromMatrixScale(n.matrixWorld);
-      const r = bs.radius * Math.max(sc.x, sc.y, sc.z) * 0.72;
+      const geo = n.geometry;
+      const par = geo.parameters || {};
+      const scale = new THREE.Vector3().setFromMatrixScale(n.matrixWorld);
+      const quat = new THREE.Quaternion().setFromRotationMatrix(
+        _m1.copy(n.matrixWorld).scale(_v1.set(1 / (scale.x || 1), 1 / (scale.y || 1), 1 / (scale.z || 1))));
+      const s = Math.max(scale.x, Math.max(scale.y, scale.z));
+
+      /* --- rings ---------------------------------------------------------
+       * An arch, a gateway or a halo is a piece of material bent round a hole.
+       * Follow the material with a chain of boxes and the hole is genuinely a
+       * hole — which is the entire point of building an arch. */
+      if (geo.type === 'TorusGeometry') {
+        const R = (par.radius ?? 1) * s;
+        const tube = (par.tube ?? 1) * s;
+        const arc = par.arc ?? TAU;
+        if (R < minR * 0.5) return;
+        const steps = clamp(Math.round((arc * R) / Math.max(6, tube * 2.0)), 4, 32);
+        for (let i = 0; i < steps; i++) {
+          const a0 = (i / steps) * arc, a1 = ((i + 1) / steps) * arc;
+          const am = (a0 + a1) * 0.5;
+          // A torus lies in its own XY plane; the tube runs round Z = 0.
+          const seg = R * (a1 - a0) * 0.5 + tube * 0.25;
+          const local = _v2.set(Math.cos(am) * R, Math.sin(am) * R, 0);
+          // Local +X points out along the radius, local +Y runs along the arc.
+          const spin = _q1.setFromAxisAngle(_v3.set(0, 0, 1), am);
+          found.push({
+            c: local.clone().applyQuaternion(quat).add(_v1.setFromMatrixPosition(n.matrixWorld)),
+            half: new THREE.Vector3(tube, seg, tube),
+            quat: quat.clone().multiply(spin),
+            r: Math.hypot(tube, seg, tube),
+          });
+        }
+        return;
+      }
+
+      /* --- open shells ---------------------------------------------------
+       * A curtain wall or a ring of stone is a cylinder with no caps and
+       * nothing inside it. One collider per facet leaves the courtyard open. */
+      if (geo.type === 'CylinderGeometry' && par.openEnded) {
+        const rTop = (par.radiusTop ?? 1) * s;
+        const rBot = (par.radiusBottom ?? 1) * s;
+        const R = Math.max(rTop, rBot);
+        const hgt = (par.height ?? 1) * scale.y * 0.5;
+        if (R < minR) return;
+        const facets = clamp(par.radialSegments || 12, 6, 20);
+        const wallT = Math.max(6, R * 0.06);
+        const centre = _v1.setFromMatrixPosition(n.matrixWorld).clone();
+        for (let i = 0; i < facets; i++) {
+          const a = (i / facets) * TAU;
+          const local = _v2.set(Math.cos(a) * R, 0, Math.sin(a) * R);
+          const spin = _q1.setFromAxisAngle(_v3.set(0, 1, 0), -a);
+          const seg = (TAU * R) / facets * 0.55;
+          found.push({
+            c: local.clone().applyQuaternion(quat).add(centre),
+            half: new THREE.Vector3(wallT, hgt, seg),
+            quat: quat.clone().multiply(spin),
+            r: Math.hypot(wallT, hgt, seg),
+          });
+        }
+        return;
+      }
+
+      /* --- everything else: an oriented box round the real geometry -------
+       * A bounding sphere over a 500 m slab is a 250 m ball of empty air on
+       * every side of it. The box is what the building actually occupies. */
+      if (!geo.boundingBox) geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      if (!bb) return;
+      const half = new THREE.Vector3(
+        (bb.max.x - bb.min.x) * 0.5 * scale.x,
+        (bb.max.y - bb.min.y) * 0.5 * scale.y,
+        (bb.max.z - bb.min.z) * 0.5 * scale.z,
+      );
+      const r = half.length();
       if (r < minR) return;
-      found.push({ c, r });
+      const centre = new THREE.Vector3(
+        (bb.max.x + bb.min.x) * 0.5, (bb.max.y + bb.min.y) * 0.5, (bb.max.z + bb.min.z) * 0.5,
+      ).applyMatrix4(n.matrixWorld);
+      found.push({ c: centre, half, quat, r });
     });
+
     found.sort((a, b) => b.r - a.r);
     for (const f of found.slice(0, maxN)) {
-      chunk.addCollider({
-        pos: f.c, radius: f.r, damage: 52, type, kind: 'structure', soft: false,
-        object: null, spin: 0, hub: null,
-      });
+      chunk.addCollider(f.half
+        ? boxCollider(f.c, f.half, f.quat, props)
+        : { pos: f.c, radius: f.r, object: null, spin: 0, hub: null, ...props });
     }
   }
 
@@ -1949,9 +2211,9 @@ export class World {
    * scheduler can time-slice a chunk build across several frames instead of
    * dropping one. They run in dependency order from `buildChunk`:
    *
-   *   hydrology -> roads -> civil -> venues -> traffic -> scatter
+   *   drainage -> roads -> civil -> venues -> traffic -> scatter
    *
-   * Water is placed first because roads bridge it, roads are placed before
+   * Drainage is placed first because roads bridge it, roads are placed before
    * buildings because settlement follows the road, and scatter runs last so
    * vegetation can be rejected against everything already standing.
    *
@@ -2003,38 +2265,38 @@ export class World {
    * fork the way a real drainage network does rather than running as one line.
    */
   _riverField(wx, wz) {
-    const h = this.biome.hydrology || {};
-    const s = 0.00019 / Math.max(0.3, h.rivers || 1);
+    const h = this.biome.drainage || {};
+    const s = 0.00019 / Math.max(0.3, h.channels || 1);
     // ridged2 peaks along ridges; inverting gives valleys to put water in.
     return 1 - ridged2(wx * s, wz * s, this.seed + 4409, 3);
   }
 
   /**
-   * Rivers, lakes, basins, waterfalls, flood plane and ice.
+   * Drainage: dry channels and dry basins. There is no water in this game.
    *
-   * Water is drawn as flat discs and ribbons sitting slightly above the terrain
-   * surface rather than as a carved heightfield: `TerrainField` is a pure
-   * function shared with the AI and the route builder, so carving into it here
-   * would desynchronise every other system from the mesh. Placing water on top
-   * costs one transparent plane and stays consistent everywhere.
+   * The beds are drawn as flat ribbons and discs sitting slightly above the
+   * terrain surface rather than as a carved heightfield: `TerrainField` is a
+   * pure function shared with the AI and the route builder, so carving into it
+   * here would desynchronise every other system from the mesh.
    */
   *_buildHydrology(chunk, cx, cz, extent, rng) {
-    const hyd = this.biome.hydrology || {};
+    const dr = this.biome.drainage || {};
     const d = this.quality.propDensity;
-    const frozen = !!hyd.frozen;
-    const dry = !!hyd.dry;
 
-    const waterMat = frozen
-      ? this.materials.structure(0xcfe3ee, 0.1, 0.22)
-      : this.materials.water(this.biome.ground.water);
+    /* Every channel and basin in the game is DRY. What the drainage pass lays
+     * down is the landform — braided beds, scoured basins, the flats a delta
+     * leaves behind — in bed material, with no water surface of any kind. That
+     * keeps the terrain reading as a real catchment (and keeps the roads
+     * bridging the places a road would bridge) with nothing to fly into. */
     const bedMat = this.materials.rock(
-      new THREE.Color(this.biome.ground.rock).offsetHSL(0, -0.06, dry ? 0.12 : -0.10).getHex());
+      new THREE.Color(this.biome.ground.bed ?? this.biome.ground.rock)
+        .offsetHSL(0, -0.06, 0.10).getHex());
 
     /* --- river ribbons ---------------------------------------------------
      * Walk the river field looking for channel crossings and lay a quad strip
      * along each. A dry location gets the bed material and no water, which is
      * exactly what a wadi looks like from the air. */
-    const riverCount = Math.round(6 * (hyd.rivers || 0) * clamp01(d + 0.35));
+    const riverCount = Math.round(6 * (dr.channels || 0) * clamp01(d + 0.35));
     for (let i = 0; i < riverCount; i++) {
       const startX = rng.float(-extent, extent);
       const startZ = rng.float(-extent, extent);
@@ -2062,10 +2324,10 @@ export class World {
         pts.push({ x: px, z: pz, h: this.terrain.height(cx + px, cz + pz) });
       }
       if (pts.length < 4) continue;
-      const width = rng.float(34, 110) * (0.6 + (hyd.rivers || 1) * 0.5);
+      const width = rng.float(34, 110) * (0.6 + (dr.channels || 1) * 0.5);
       const ribbon = this._ribbonGeometry(pts, width, 4);
       if (!ribbon) continue;
-      const mesh = new THREE.Mesh(ribbon, dry ? bedMat : waterMat);
+      const mesh = new THREE.Mesh(ribbon, bedMat);
       mesh.position.set(cx, 0, cz);
       mesh.renderOrder = -1;
       chunk.group.add(mesh);
@@ -2073,38 +2335,22 @@ export class World {
       chunk.riverPaths = chunk.riverPaths || [];
       chunk.riverPaths.push({ pts, width });
 
-      /* Waterfalls: where the channel drops hard between two samples, hang a
-       * vertical sheet down the step. Only where the location has them. */
-      if (!dry && (hyd.waterfalls || 0) > 0) {
-        for (let k = 1; k < pts.length; k++) {
-          const drop = pts[k - 1].h - pts[k].h;
-          if (drop < 90 || rng.next() > (hyd.waterfalls || 0) * 0.5) continue;
-          const fall = new THREE.PlaneGeometry(width * 0.9, drop);
-          const fm = new THREE.Mesh(fall, waterMat);
-          const ang = Math.atan2(pts[k].x - pts[k - 1].x, pts[k].z - pts[k - 1].z);
-          fm.rotation.y = ang + Math.PI / 2;
-          fm.position.set(cx + pts[k].x, pts[k].h + drop / 2, cz + pts[k].z);
-          chunk.group.add(fm);
-          chunk.disposables.push(fall);
-          break; // one hero fall per river reads better than a staircase
-        }
-      }
       if (i % 2 === 1) yield;
     }
     yield;
 
-    /* --- lakes, ponds and basins ----------------------------------------
-     * ENHANCED 5X: More water bodies for varied terrain.
-     * Placed in terrain depressions found by sampling: a candidate is a lake if
-     * the ground around it is higher than the centre in every direction. */
-    const lakeCount = Math.round(25 * ((hyd.lakes || 0) + (hyd.basins || 0) * 0.6) * clamp01(d + 0.3));
+    /* --- dry basins -------------------------------------------------------
+     * The pans a lake would have left. Found the same way — a depression whose
+     * rim sits above its centre on every side — and floored with bed material
+     * so the landscape still has the shapes drainage carves into it. */
+    const lakeCount = Math.round(25 * ((dr.basins || 0) + (dr.bowls || 0) * 0.6) * clamp01(d + 0.3));
     for (let i = 0; i < lakeCount; i++) {
       const x = rng.float(-extent, extent), z = rng.float(-extent, extent);
       const wx = cx + x, wz = cz + z;
       const h = this.terrain.height(wx, wz);
       if (h < this.terrain.waterLevel) continue;
       if (this.terrain.slope(wx, wz, 120) > 0.14) continue;
-      const r = rng.float(120, 480) * (0.7 + (hyd.lakes || 0.5));
+      const r = rng.float(120, 480) * (0.7 + (dr.basins || 0.5));
       // Depression test: the rim has to sit above the centre on all four sides.
       let rim = 0;
       for (let a = 0; a < 4; a++) {
@@ -2114,7 +2360,7 @@ export class World {
       if (rim < 3) continue;
       const geo = new THREE.CircleGeometry(r, 22);
       geo.rotateX(-Math.PI / 2);
-      const mesh = new THREE.Mesh(geo, dry ? bedMat : waterMat);
+      const mesh = new THREE.Mesh(geo, bedMat);
       mesh.position.set(wx, h + 3, wz);
       chunk.group.add(mesh);
       chunk.disposables.push(geo);
@@ -2123,19 +2369,6 @@ export class World {
     }
     yield;
 
-    /* --- standing flood water -------------------------------------------
-     * Drowned Flats. One large plane a few metres above the low ground, so the
-     * landscape reads as a lowland under water rather than a lake next to it. */
-    if ((hyd.flood || 0) > 0.5) {
-      const size = extent * 2.4;
-      const geo = new THREE.PlaneGeometry(size, size, 1, 1);
-      geo.rotateX(-Math.PI / 2);
-      const mesh = new THREE.Mesh(geo, waterMat);
-      mesh.position.set(cx, this.terrain.waterLevel + 34 * (hyd.flood || 1), cz);
-      mesh.renderOrder = -2;
-      chunk.group.add(mesh);
-      chunk.disposables.push(geo);
-    }
   }
 
   /**
@@ -2221,8 +2454,10 @@ export class World {
       let bridged = 0;
       for (const p of pts) {
         const ground = this.terrain.height(p.wx, p.wz);
-        const overWater = ground < this.terrain.waterLevel + 6;
-        if (overWater) { p.h = Math.max(p.h, this.terrain.waterLevel + 28); bridged++; }
+        // Basin floors get bridged rather than dipped into, the same way a
+        // real road crosses a wash instead of dropping down through it.
+        const overBasin = ground < this.terrain.waterLevel + 6;
+        if (overBasin) { p.h = Math.max(p.h, this.terrain.waterLevel + 28); bridged++; }
         if (elevated) p.h = Math.max(p.h, ground + 42);
       }
 
@@ -2351,6 +2586,8 @@ export class World {
 
       const tall = ['tower', 'glass', 'twin'].includes(spec.arch);
       // Water-edge kinds want the shoreline; everything else wants dry, flat land.
+      // Docks and stilt houses belong on the edge of a basin — the vernacular
+      // survives the water going away, which is exactly what a dry dock is.
       const wantsWater = kind === 'dock' || kind === 'stiltHouse';
 
       this._addInstanced(chunk, cx, cz, geo, mat, count, (i, m) => {
@@ -2384,23 +2621,16 @@ export class World {
         const bh = Math.max(6, spec.h * hScale);
         const bd = spec.d * wScale * rng.float(0.9, 1.12);
 
-        m.makeRotationY(Math.round(rng.float(0, 8)) * (Math.PI / 4));
+        const yaw = Math.round(rng.float(0, 8)) * (Math.PI / 4);
+        m.makeRotationY(yaw);
         m.scale(_v1.set(bw, bh, bd));
         m.setPosition(x, h - 1, z);
 
         /* Colliders. Derived from the spec, not from the mesh, because these are
-         * instances — there is no per-instance object to walk. Tall shafts get a
-         * stack up the height so the whole building is solid rather than one
-         * ball of air near the roof. */
-        const cr = Math.max(bw, bd) * 0.52;
-        const spans = clamp(Math.round(bh / (cr * 1.8)), 1, 5);
-        for (let k = 0; k < spans; k++) {
-          chunk.addCollider({
-            pos: new THREE.Vector3(wx, h + bh * ((k + 0.5) / spans), wz),
-            radius: cr, damage: 48, type: 'building', kind: 'structure',
-            soft: false, object: null, spin: 0, hub: null,
-          });
-        }
+         * instances — there is no per-instance object to walk. One oriented box
+         * per solid volume: a tower is exactly as wide as it looks, and an
+         * archetype with a gap in it keeps the gap. */
+        this._addStructureBoxes(chunk, spec.arch, wx, h - 1, wz, bw, bh, bd, yaw);
         return true;
       });
 
@@ -2461,7 +2691,7 @@ export class World {
       const g = this._buildVenue(kind, cx + px, cz + pz, rng);
       if (!g) continue;
       chunk.group.add(g);
-      this._registerStructureColliders(chunk, g, 22, 40, 'venue');
+      this._registerStructureColliders(chunk, g, 22, 96, 'venue');
       if (g.userData.spinners) chunk.animated.push({ spinners: g.userData.spinners });
       for (const geo of g.userData.geos || []) chunk.disposables.push(geo);
       yield;
@@ -3117,7 +3347,7 @@ export class World {
       const lm = this._buildLandmark(rng.pick(this.biome.landmark),
         s.pos.clone().addScaledVector(s.right, side * rng.float(900, 2600)), rng);
       chunk.group.add(lm);
-      this._registerStructureColliders(chunk, lm, 26, 52, 'landmark');
+      this._registerStructureColliders(chunk, lm, 26, 128, 'landmark');
       if (lm.userData.spinners) chunk.animated.push({ spinners: lm.userData.spinners });
       // A landmark that resolved to a venue owns per-instance geometry that
       // nothing else will free, because it is not flagged `shared`.
@@ -3316,11 +3546,15 @@ export class World {
       _v2.subVectors(c.pos, from);
       const t = _v2.dot(dir);                       // distance along the heading
       if (t < 0 || t > bestT) return;
-      // Perpendicular miss distance from the flight line.
+      // Broadphase: could the flight line come near the bounding sphere at all?
       const perp2 = _v2.lengthSq() - t * t;
       const hit = c.radius + clearance;
       if (perp2 > hit * hit) return;
-      bestT = t; best = c;
+      // Narrow phase against the real shape, so an arch the aircraft is lined
+      // up to fly straight through never raises a collision warning.
+      const st = sweepCollider(c, from, dir, bestT, clearance, _v3);
+      if (st < 0) return;
+      bestT = st; best = c;
     };
     for (const chunk of this.chunks.values()) {
       // Reject a chunk unless the swept segment could reach it at all.

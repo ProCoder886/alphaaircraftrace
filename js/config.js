@@ -190,34 +190,39 @@ export const WORLD = {
  * threshold in the game read Mach, so the whole envelope moves together if
  * this number is ever retuned.
  *
- *   stall  ~Mach 2.1   cruise ~Mach 9   dry max ~Mach 14
- *   reheat ~Mach 18    turbo overdrive  Mach 20 (hard ceiling)
+ *   stall  ~Mach 2.1   cruise ~Mach 9   dry max ~Mach 20
+ *   nitrous ~Mach 25   turbo overdrive  Mach 30 (hard ceiling)
  *
  * The readout scale is deliberately NOT real-world Mach. At the true 1234.8
  * km/h per Mach the speed tape spent the whole race in five and six figures,
  * which is unreadable at a glance and drowns the digit that actually changes.
- * One Mach reads as 100 km/h instead, so the ceiling lands on a round Mach 20
- * / 2000 km/h and the number moves in hundreds. This is a DISPLAY scale only:
+ * One Mach reads as 100 km/h instead, so the ceiling lands on a round Mach 30
+ * / 3000 km/h and the number moves in hundreds. This is a DISPLAY scale only:
  * `msPerMach` is untouched, so the flight model, the terrain scale and every
- * threshold in the game fly exactly as they did before.
+ * threshold in the game keep the same relationship to the world.
  * ======================================================================== */
 export const MACH = {
   kmh: 100,                    // km/h shown per Mach — display scale, see above
   msPerMach: 35,               // simulated m/s per Mach
-  max: 20,                     // absolute ceiling for player and enemies
-  blurMach: 15,                // Mach at which motion blur and trails saturate
+  max: 30,                     // absolute ceiling for player and enemies — 3000 km/h
+  blurMach: 22,                // Mach at which motion blur and trails saturate
   /* Airframe buffet. Past this the whole picture starts trembling — a purely
    * presentational cue that you are into the part of the envelope the airframe
-   * was not really built for, and it lands just under the Mach 18 redline. */
-  shakeMach: 17,               // Mach above which the screen shakes
-  shakeAmount: 0.42,           // shake magnitude at the Mach 20 ceiling
+   * was not really built for, and it lands just under the Mach 24 redline. */
+  shakeMach: 23,               // Mach above which the screen shakes
+  shakeAmount: 0.42,           // shake magnitude at the Mach 30 ceiling
   /* ---- thermal limit ----------------------------------------------------
-   * The airframe is cleared to Mach 18. Above it the intakes and the leading
+   * The airframe is cleared to Mach 24. Above it the intakes and the leading
    * edges start soaking heat faster than the fuel can carry it away, and the
    * engine has exactly one minute of that before it lets go. Dropping back
    * below the limit cools it again, but slowly — a dozen short excursions add
-   * up the same way one long one does. */
-  redline: 18,                 // Mach — sustained above this and the engine cooks
+   * up the same way one long one does.
+   *
+   * The redline sits SIX Mach below the ceiling, not two: the top of the
+   * envelope is now a place you can genuinely live in, and the warning is the
+   * price of staying there rather than a light that comes on the moment the
+   * aircraft does what it was built to do. */
+  redline: 24,                 // Mach — sustained above this and the engine cooks
   overheatTime: 60,            // s above the redline before the engine explodes
   coolRate: 0.45,              // heat bled per second below the redline, relative
   get maxMs() { return this.msPerMach * this.max; },
@@ -232,8 +237,15 @@ export const PHYSICS = {
   // Speeds are stored in game units (m/s) internally; MACH converts for display.
   minSpeed: 74,                // Mach 2.1 — stall floor, engine holds you up
   cruiseSpeed: 320,            // Mach 9.1
-  maxSpeed: 500,               // Mach 14.3 — dry thrust ceiling
-  boostSpeed: 640,             // Mach 18.3 on reheat, Mach 20 with Turbo stacked
+  maxSpeed: 700,               // Mach 20 — dry thrust ceiling
+  boostSpeed: 875,             // Mach 25 on nitrous alone
+  /* ---- Turbo Speed (NUM 2) ----------------------------------------------
+   * The power doubles the nitrous, and it does it in both places nitrous acts:
+   * twice the shove out of the reheat stage, and twice the margin it adds on
+   * top of the dry ceiling. Dry Mach 20 + 2 x the Mach 5 reheat margin is the
+   * Mach 30 / 3000 km/h ceiling, so the top of the envelope is exactly what
+   * this multiplier says it is rather than a separate number to keep in step. */
+  turboBoost: 2.0,
   /* ---- acceleration -----------------------------------------------------
    * Thrust and drag are deliberately scaled DOWN TOGETHER by 5x. Cutting
    * thrust alone would also cut the terminal speed — the top of the envelope
@@ -244,7 +256,13 @@ export const PHYSICS = {
    * few seconds of the countdown.
    * -------------------------------------------------------------------- */
   baseThrust: 29,              // m/s^2 at full throttle
-  dragCoefficient: 0.000084,
+  /* Drag, not thrust, is what was retuned to open the envelope up to Mach 30.
+   * Terminal speed is sqrt(thrust / k), so lowering k raises the top of the
+   * band while leaving low-speed acceleration — where drag is negligible —
+   * exactly where it was. Raising thrust instead would have made the airframe
+   * leap off the line, which is the thing the 5x scale-down above exists to
+   * prevent. Speed is still something you fly toward over a distance. */
+  dragCoefficient: 0.000064,
   /* Gravity for the ENERGY trade — climbing costs speed, diving buys it.
    * This is deliberately NOT `flightG`. That number is a scaled gravity tuned
    * to produce flyable turn rates inside a corridor, and at 46 m/s² it is now
@@ -294,7 +312,12 @@ export const PHYSICS = {
   burnerLight: 0.55,           // s — afterburner light-off delay
   stallSink: 115,              // m/s of mush with no lift left
   boostAccel: 52,
-  boostDrain: 26,              // boost units per second (meter is 0..100)
+  /* Nitrous burn rate. Halved: the meter used to empty in under four seconds
+   * of held Space, which made the boost a tap rather than something you fly
+   * on. At 13/s a full 100-unit meter is a little under eight seconds of
+   * continuous reheat, and Turbo Speed does NOT burn it faster — the power
+   * doubles what the nitrous does, not what it costs. */
+  boostDrain: 13,              // boost units per second (meter is 0..100)
   boostRegen: 11,
   boostRegenDelay: 0.85,
   turbulenceScale: 1.0,
@@ -437,7 +460,7 @@ export const AIRCRAFT = [
     id: 'warhawk', name: 'MK-29 WARHAWK', class: 'Heavy Interceptor',
     desc: 'A big twin-engine interceptor built around two enormous powerplants. It does not turn so much as re-aim, but nothing on the grid accelerates through the top of the range like it does.',
     stats: { speed: 0.94, accel: 0.90, handling: 0.66, boost: 0.92, durability: 0.82 },
-    ability: 'Ram Intakes — boost recharges 35% faster above Mach 11.',
+    ability: 'Ram Intakes — boost recharges 35% faster above Mach 16.',
     abilityKey: 'ramair',
     unlock: { type: 'default' },
     colors: { primary: 0x9aa3ad, secondary: 0x353c45, accent: 0x7fb8e8, emissive: 0xbfe0ff, trail: 0xbcd8f2 },
@@ -463,7 +486,7 @@ export const AIRCRAFT = [
     id: 'talon', name: 'SR-9 TALON', class: 'Speed Specialist',
     desc: 'A fuselage wrapped around two oversized reheat cores. Devastating on the long sky-highways, punishing in the canyon work.',
     stats: { speed: 0.95, accel: 0.84, handling: 0.44, boost: 0.86, durability: 0.48 },
-    ability: 'Ram Air — boost recharges 35% faster above Mach 11.',
+    ability: 'Ram Air — boost recharges 35% faster above Mach 16.',
     abilityKey: 'ramair',
     unlock: { type: 'credits', cost: 4500 },
     colors: { primary: 0xc41f2e, secondary: 0x14161a, accent: 0xff5a3c, emissive: 0xff7a2a, trail: 0xff8a3a },
@@ -659,7 +682,7 @@ export const WEATHER = {
   sunset:       { name: 'Sunset',         cloud: 0.45, fog: 0.55, vis: 0.90, precip: null,  precipRate: 0,    wind: 0.30, turb: 0.25, lightning: 0,    sat: 1.14, exposure: 1.02, time: 'sunset' },
   dusk:         { name: 'Dusk',           cloud: 0.52, fog: 0.62, vis: 0.84, precip: null,  precipRate: 0,    wind: 0.30, turb: 0.28, lightning: 0,    sat: 1.02, exposure: 1.10, time: 'dusk' },
   night:        { name: 'Night',          cloud: 0.42, fog: 0.55, vis: 0.80, precip: null,  precipRate: 0,    wind: 0.32, turb: 0.30, lightning: 0,    sat: 0.94, exposure: 1.18, time: 'night' },
-  neonNight:    { name: 'Neon Night',     cloud: 0.62, fog: 0.80, vis: 0.66, precip: 'rain', precipRate: 0.45, wind: 0.40, turb: 0.38, lightning: 0,    sat: 1.22, exposure: 1.22, time: 'night', tint: 0x5a3aff, wet: 0.85, neon: 1 },
+  neonNight:    { name: 'Neon Night',     cloud: 0.62, fog: 0.86, vis: 0.64, precip: null,   precipRate: 0,    wind: 0.40, turb: 0.38, lightning: 0,    sat: 1.22, exposure: 1.22, time: 'night', tint: 0x5a3aff, wet: 0, neon: 1 },
 };
 export const WEATHER_IDS = Object.keys(WEATHER);
 
@@ -843,28 +866,28 @@ export const MODES = {
     gameOver: [
       'Hull destroyed by enemy fire',
       'Ground impact, or collision with a building or structure',
-      'Engine overheat — 60 seconds above Mach 18',
+      'Engine overheat — 60 seconds above Mach 24',
       'Shot down while stalled below Mach 2',
       'Leaving the combat airspace for more than 20 seconds',
     ],
   },
   endlessrace: {
     id: 'endlessrace', name: 'ENDLESS RACE', tag: 'NEW',
-    desc: 'A hostile top-speed run. The same full weapon set as Battle, but the clock is the enemy — hold Mach, fly the manoeuvres and out-run a squadron that tops out at Mach 20 alongside you.',
+    desc: 'A hostile top-speed run. The same full weapon set as Battle, but the clock is the enemy — hold Mach, fly the manoeuvres and out-run a squadron that tops out at Mach 30 alongside you.',
     hasLaps: false, hasRivals: true, hasTimer: false, escalates: true, failOnDamage: true,
     combat: true, speedFocus: true, primary: 'distance',
     // Aerobatics are not optional here — these are dealt before the random draw.
     mandatory: ['rolls', 'loops', 'turns', 'machhold'],
     objectives: [
-      'Hold Mach 15 or above — speed is scored every second',
+      'Hold Mach 22 or above — speed is scored every second',
       'Complete the mandatory manoeuvre set: rolls, loops, flips and hard turns',
-      'Stay ahead of the enemy squadron — they also reach Mach 20',
+      'Stay ahead of the enemy squadron — they also reach Mach 30',
       'Shoot down pursuers that close inside gun range',
     ],
     gameOver: [
       'Hull destroyed by enemy fire',
       'Ground impact, or collision with a building or structure',
-      'Engine overheat — 60 seconds above Mach 18',
+      'Engine overheat — 60 seconds above Mach 24',
       'Dropping below Mach 4 for more than 12 seconds',
       'Falling more than 6 km behind the lead enemy',
     ],
@@ -965,7 +988,7 @@ export const GUN_ORDER = ['gun', 'minigun', 'heavygun', 'plasma'];
 
 export const COMBAT = {
   /* ---- targeting --------------------------------------------------------
-   * The seeker is deliberately generous. At Mach 15 a 26° cone and a 5 km
+   * The seeker is deliberately generous. At Mach 22 a 26° cone and a 5 km
    * range means a target crosses the whole envelope in under a second, so a
    * lock could barely be acquired before it broke — and a lock you cannot hold
    * is a weapon you cannot use. The cone is wider, the range far longer, and
@@ -980,7 +1003,7 @@ export const COMBAT = {
   lockTime: 0.55,              // s of continuous tracking to acquire
   lockDecay: 0.8,              // how fast a broken lock bleeds away
   /* ---- gunnery ----------------------------------------------------------
-   * A lead-pursuit assist on the cannons. Solving deflection by eye at Mach 15
+   * A lead-pursuit assist on the cannons. Solving deflection by eye at Mach 22
    * closure is not a skill test, it is a lottery: the lead angle is tens of
    * degrees and changes faster than a human can track. The assist only bites
    * once the pipper is already near the target, so aiming still matters. */
@@ -1003,7 +1026,7 @@ export const COMBAT = {
   respawnDelay: 3.5,
   /* ---- approach geometry ------------------------------------------------
    * Hostiles do not all arrive from behind. The weights below are the shape of
-   * the threat: `head` puts them nose-to-nose closing at combined Mach 30-plus,
+   * the threat: `head` puts them nose-to-nose closing at combined Mach 50-plus,
    * which is the hardest merge in the game and the one the brief asks for.
    * -------------------------------------------------------------------- */
   approach: { head: 0.34, rear: 0.20, side: 0.26, diagonal: 0.14, vertical: 0.06 },
@@ -1020,13 +1043,13 @@ export const COMBAT = {
 
 export const CAMPAIGN = [
   { id: 1, name: 'FIRST LIGHT',      biome: 'village',  weather: 'sunrise',      diff: 'normal', laps: 1, goal: { type: 'position', value: 3 }, reward: 1200, desc: 'A shakedown run over the vale. Finish on the podium.' },
-  { id: 2, name: 'CANOPY RUN',       biome: 'forest',   weather: 'lightRain',    diff: 'normal', laps: 2, goal: { type: 'position', value: 2 }, reward: 1600, desc: 'Wet air over the basin. Second or better.' },
+  { id: 2, name: 'CHANNEL RUN',      biome: 'forest',   weather: 'overcast',     diff: 'normal', laps: 2, goal: { type: 'position', value: 2 }, reward: 1600, desc: 'Down the delta beds under a low ceiling. Second or better.' },
   { id: 3, name: 'GLASS CANYONS',    biome: 'city',     weather: 'sunset',       diff: 'hard',   laps: 2, goal: { type: 'position', value: 2 }, reward: 2200, desc: 'Between the towers at golden hour.' },
   { id: 4, name: 'DRY THUNDER',      biome: 'desert',   weather: 'dustStorm',    diff: 'hard',   laps: 2, goal: { type: 'position', value: 1 }, reward: 3000, desc: 'Zero visibility across the flats. Win it.' },
   { id: 5, name: 'WHITE SILENCE',    biome: 'ice',      weather: 'heavySnow',    diff: 'elite',  laps: 2, goal: { type: 'position', value: 2 }, reward: 3800, desc: 'Whiteout over the glacier shelf.' },
   { id: 6, name: 'THE CITADEL',      biome: 'fortress', weather: 'thunderstorm', diff: 'elite',  laps: 2, goal: { type: 'position', value: 1 }, reward: 5000, desc: 'Boss race. The circuit\'s oldest venue, at its worst.', boss: true },
-  { id: 7, name: 'CRIMSON LINE',     biome: 'redstone', weather: 'sunset',       diff: 'master', laps: 2, goal: { type: 'position', value: 1 }, reward: 6400, desc: 'Live conduits and mesa narrows.' },
-  { id: 8, name: 'SPIRE ASCENT',     biome: 'tower',    weather: 'storm',        diff: 'master', laps: 2, goal: { type: 'position', value: 1 }, reward: 8000, desc: 'Vertical racing around kilometre-tall structures.' },
+  { id: 7, name: 'SALT LINE',        biome: 'mudwater', weather: 'goldenHour',   diff: 'master', laps: 2, goal: { type: 'position', value: 1 }, reward: 6400, desc: 'Barrage walls and pylon runs across the pans.' },
+  { id: 8, name: 'SPIRE ASCENT',     biome: 'mountain', weather: 'fog',          diff: 'master', laps: 2, goal: { type: 'position', value: 1 }, reward: 8000, desc: 'Vertical racing through kilometre-deep passes.' },
   { id: 9, name: 'ALPHA FINAL',      biome: 'neon',     weather: 'neonNight',    diff: 'legendary', laps: 3, goal: { type: 'position', value: 1 }, reward: 15000, desc: 'The championship decider. Everything you have.', boss: true },
 ];
 
@@ -1040,7 +1063,7 @@ export const OBJECTIVE_POOL = [
   { id: 'rings',     text: (v) => `Pass through ${v} race rings`,                 metric: 'rings',      values: [25, 45, 70, 100],           reward: 0.9, modes: ['endless', 'survival', 'free', 'timeattack', 'quick'] },
   { id: 'nearmiss',  text: (v) => `Score ${v} near misses`,                       metric: 'nearMisses', values: [10, 20, 35, 55],            reward: 1.2, modes: ['endless', 'survival', 'quick', 'campaign'] },
   { id: 'overtake',  text: (v) => `Overtake ${v} rival aircraft`,                 metric: 'overtakes',  values: [5, 10, 18, 28],             reward: 1.3, modes: ['endless', 'survival', 'quick', 'campaign'] },
-  { id: 'topspeed',  text: (v) => `Reach Mach ${v}`,                              metric: 'topMach',    values: [8, 12, 15, 18],             reward: 1.1, modes: ['endless', 'survival', 'free', 'timeattack', 'quick', 'endlessrace'] },
+  { id: 'topspeed',  text: (v) => `Reach Mach ${v}`,                              metric: 'topMach',    values: [12, 18, 23, 28],            reward: 1.1, modes: ['endless', 'survival', 'free', 'timeattack', 'quick', 'endlessrace'] },
   /* ---- combat (Endless Battle / Endless Race) ---- */
   { id: 'kills',     text: (v) => `Shoot down ${v} enemy fighters`,               metric: 'kills',      values: [4, 9, 16, 26],              reward: 1.5, modes: ['battle', 'endlessrace'] },
   { id: 'missiles',  text: (v) => `Land ${v} guided-weapon hits`,                 metric: 'missiles',   values: [3, 7, 12, 20],              reward: 1.4, modes: ['battle', 'endlessrace'] },
@@ -1050,7 +1073,7 @@ export const OBJECTIVE_POOL = [
   { id: 'rolls',     text: (v) => `Complete ${v} full aileron rolls`,             metric: 'rolls',      values: [3, 6, 11, 18],              reward: 1.2, modes: ['endlessrace', 'battle', 'free'] },
   { id: 'loops',     text: (v) => `Fly ${v} complete loops`,                      metric: 'loops',      values: [2, 4, 7, 11],               reward: 1.4, modes: ['endlessrace', 'battle', 'free'] },
   { id: 'turns',     text: (v) => `Pull ${v} hard turns above 6 G`,               metric: 'turns',      values: [6, 12, 20, 32],             reward: 1.2, modes: ['endlessrace', 'battle'] },
-  { id: 'machhold',  text: (v) => `Hold Mach 15+ for ${v} seconds`,               metric: 'machTime',   values: [20, 45, 80, 130],           reward: 1.5, modes: ['endlessrace'] },
+  { id: 'machhold',  text: (v) => `Hold Mach 22+ for ${v} seconds`,               metric: 'machTime',   values: [20, 45, 80, 130],           reward: 1.5, modes: ['endlessrace'] },
   { id: 'survive',   text: (v) => `Survive ${Math.round(v / 60)} minutes`,        metric: 'time',       values: [180, 300, 480, 720],        reward: 1.25, modes: ['endless', 'survival'] },
   { id: 'combo',     text: (v) => `Build a x${v} combo`,                          metric: 'maxCombo',   values: [8, 14, 22, 32],             reward: 1.15, modes: ['endless', 'survival', 'quick'] },
   { id: 'clean',     text: (v) => `Clear ${v} checkpoints without a collision`,   metric: 'cleanStreak', values: [6, 10, 16, 24],            reward: 1.4, modes: ['endless', 'survival', 'timeattack', 'quick', 'campaign'] },
@@ -1070,8 +1093,8 @@ export const ACHIEVEMENTS = [
   { id: 'firstflight', name: 'First Flight',       desc: 'Complete your first run.',                       check: (s) => s.totalRuns >= 1,             reward: 500 },
   { id: 'centurion',   name: 'Centurion',          desc: 'Clear 100 checkpoints in total.',                check: (s) => s.totalCheckpoints >= 100,    reward: 800 },
   { id: 'marathon',    name: 'Long Haul',          desc: 'Fly 250 km across all runs.',                    check: (s) => s.totalDistance >= 250000,    reward: 1200 },
-  { id: 'sonic',       name: 'Sonic',              desc: 'Reach Mach 15.',                                 check: (s) => (s.bestMach || 0) >= 15,      reward: 1000 },
-  { id: 'mach20',      name: 'Terminal Velocity',  desc: 'Touch the Mach 20 ceiling.',                     check: (s) => (s.bestMach || 0) >= 19.9,    reward: 3000 },
+  { id: 'sonic',       name: 'Sonic',              desc: 'Reach Mach 20.',                                 check: (s) => (s.bestMach || 0) >= 20,      reward: 1000 },
+  { id: 'mach20',      name: 'Terminal Velocity',  desc: 'Touch the Mach 30 ceiling.',                     check: (s) => (s.bestMach || 0) >= 29.8,    reward: 3000 },
   { id: 'acesuit',     name: 'Ace',                desc: 'Shoot down 5 enemy fighters in one sortie.',     check: (s) => (s.bestKills || 0) >= 5,      reward: 1500 },
   { id: 'topgun',      name: 'Top Gun',            desc: 'Shoot down 100 enemy fighters in total.',        check: (s) => (s.totalKills || 0) >= 100,   reward: 4000 },
   { id: 'threader',    name: 'Needle Threader',    desc: 'Record 250 near misses.',                        check: (s) => s.totalNearMisses >= 250,     reward: 1400 },
@@ -1218,7 +1241,7 @@ export const SCORE = {
   kill: 1400,
   killAssist: 300,
   manoeuvre: 260,             // a completed roll, loop or flip
-  machHoldPerSec: 45,         // scored per second at Mach 15+
+  machHoldPerSec: 45,         // scored per second at Mach 22+
 };
 
 export const CREDITS = { perScore: 0.045, perObjective: 350, dailyBonus: 900, podium: [900, 550, 320] };
@@ -1237,7 +1260,7 @@ export const DEFAULT_SAVE = {
   selectedAircraft: 'raptor',
   selectedMode: 'battle',
   selectedDifficulty: 'elite',
-  selectedLocation: 'random',
+  selectedLocation: 'forest',
   /* `random` is not a weather state — it is the instruction to draw one from
    * the selected location's own pool at launch. It is the shipping default. */
   selectedWeather: 'random',
@@ -1288,21 +1311,26 @@ export const DEFAULT_SAVE = {
 export const DEFAULTS = {
   mode: 'battle',
   difficulty: 'elite',
-  location: 'random',
+  /* Emerald Delta is the shipping venue: the widest corridors, the softest
+   * terrain and the only weather pool with no state that takes the horizon
+   * away, so a first launch shows the game at its most readable. */
+  location: 'forest',
   weather: 'random',
   aircraft: 'raptor',
   /* ---- graphics ---------------------------------------------------------
    * The default quality is PLATFORM-DEPENDENT, so it is resolved rather than
    * fixed. A phone held in landscape is a deliberate, committed play session on
    * a panel with a high pixel density and a GPU that handles this scene well,
-   * so it opens at Extreme. Desktop covers everything from a gaming tower to
-   * onboard graphics in a laptop, so it opens at Medium and invites a change.
-   * Portrait phones get the conservative preset — the game wants landscape and
-   * the player is most likely still rotating the device. */
-  graphics: 'medium',
+   * so it opens at Extreme. Desktop opens at HIGH: the frame governor holds the
+   * 60-120 FPS band by moving the ladder underneath the preset, so a desktop no
+   * longer has to be defended against with a conservative default — if the
+   * machine cannot hold High, the governor sheds detail rather than the player
+   * having to. Portrait phones get the conservative preset — the game wants
+   * landscape and the player is most likely still rotating the device. */
+  graphics: 'high',
   graphicsMobileLandscape: 'extreme',
   graphicsMobilePortrait: 'low',
-  graphicsDesktop: 'medium',
+  graphicsDesktop: 'high',
   /**
    * Resolve the opening graphics preset for the device that is actually running
    * the game. Kept here beside the values it chooses between so there is one
