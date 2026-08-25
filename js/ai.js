@@ -16,7 +16,7 @@ import * as THREE from 'three';
 import { AircraftVisual } from './player.js';
 import { mergeGeometriesSafe } from './renderer.js';
 import {
-  AIRCRAFT, AIRCRAFT_BY_ID, PHYSICS, RNG,
+  AIRCRAFT, AIRCRAFT_BY_ID, PHYSICS, MACH, RNG,
   clamp, clamp01, lerp, damp, smoothstep, TAU,
 } from './config.js';
 
@@ -120,6 +120,12 @@ export class AIRacer {
     this.health = this.maxHealth;
 
     // Path-space state.
+    /* Which way along the route this aircraft is flying. Racers are always +1
+     * — a race has a direction. A hostile can set it to -1 and fly the route
+     * BACKWARDS, which is the whole mechanism behind the U-turn: an aircraft
+     * that can only ever increase its distance-along can overshoot the player
+     * and then never see them again. */
+    this.pathDir = 1;
     this.distanceAlong = 0;
     this.lateral = 0;
     this.vertical = 0;
@@ -157,9 +163,22 @@ export class AIRacer {
     this._sample = {};
     this.distanceToPlayer = 0;
     this.visible = true;
+    /* How far off the route centre line this aircraft may sit, and how far away
+     * it is still worth drawing. Both are overridden by the combat subclass:
+     * a racer belongs in the corridor and is only ever a few hundred metres
+     * from it, while a hostile in open airspace belongs kilometres away and
+     * has to stay drawn out there for the spread to read at all. `null` means
+     * "derive it from the corridor", which is what a racer wants. */
+    this.offsetCap = null;
+    this.drawRange = 9000;
+    /* Set false by the combat director when this aircraft is over the mesh
+     * budget for the frame. The aircraft still flies, shoots and paints on the
+     * radar; it is simply not worth six draw calls at this distance. */
+    this.drawAllowed = true;
   }
 
   spawn(distance, lateral, vertical) {
+    this.pathDir = 1;
     this.distanceAlong = distance;
     this.lateral = this.targetLateral = lateral;
     this.vertical = this.targetVertical = vertical;
@@ -178,8 +197,9 @@ export class AIRacer {
   /** Curvature of the route ahead — used to decide cornering speed. */
   _curvatureAhead(lookahead) {
     const p = this.world.path;
-    const a = p.sample(this.distanceAlong + lookahead * 0.25, {});
-    const b = p.sample(this.distanceAlong + lookahead, {});
+    const look = lookahead * this.pathDir;      // "ahead" is whichever way we fly
+    const a = p.sample(this.distanceAlong + look * 0.25, {});
+    const b = p.sample(this.distanceAlong + look, {});
     return 1 - clamp01(a.tangent.dot(b.tangent));
   }
 
@@ -187,7 +207,7 @@ export class AIRacer {
   _chooseLine(dt, player, timeScale) {
     const arch = this.arch;
     const path = this.world.path;
-    const look = 380 + this.speed * 1.5;
+    const look = (380 + this.speed * 1.5) * this.pathDir;
     const s = path.sample(this.distanceAlong + look, this._sample);
     const radius = s.radius;
 
@@ -201,8 +221,18 @@ export class AIRacer {
     let tl = wander * radius * lerp(0.12, 0.46, arch.lineWander) * (1 - this.skill * 0.35);
     let tv = Math.sin(this.distanceAlong * 0.0011 + this.lineSeed * 1.7) * radius * 0.18;
 
+    /* Station keeping. A racer has none — it flies the corridor. A combat
+     * aircraft has a slot several kilometres off the centre line, and holding
+     * it is the whole reason a formation is a formation: without this the
+     * corridor clamp at the bottom of this method pulls a squadron spread over
+     * eight kilometres back onto the racing line within a second of spawning,
+     * and the spread might as well not exist. */
+    const station = this._station?.(dt, player);
+    if (station) { tl = station.lateral; tv = station.vertical; }
+
     // 2. Aim for the next gate centre — good pilots line up early.
-    const cp = this.world.checkpointList.find((c) => c.node.dist > this.distanceAlong - 60);
+    const cp = station ? null
+      : this.world.checkpointList.find((c) => c.node.dist > this.distanceAlong - 60);
     if (cp) {
       const d = cp.node.dist - this.distanceAlong;
       if (d > 0 && d < 1600) {
@@ -213,8 +243,9 @@ export class AIRacer {
       }
     }
 
-    // 3. Grab nearby rings when it is cheap to do so.
-    if (this.skill > 0.45) {
+    // 3. Grab nearby rings when it is cheap to do so. A hostile has no interest
+    //    in the race furniture — it is here for the player.
+    if (!station && this.skill > 0.45) {
       const rings = this.world.ringsNear(this.position3, 520);
       let best = null, bestScore = -Infinity;
       for (const r of rings) {
@@ -249,7 +280,8 @@ export class AIRacer {
     }
 
     // 5. Rivalry: block if defending, or pick the opposite side to overtake.
-    if (player && player.alive) {
+    //    Racing behaviour; a hostile does its own pursuit in `_station`.
+    if (!station && player && player.alive) {
       const gap = player.distanceAlong - this.distanceAlong;
       this.blockTimer -= dt;
       if (gap < -40 && gap > -650 && this.rng.next() < arch.blockChance * 0.02) {
@@ -291,8 +323,10 @@ export class AIRacer {
       }
     }
 
-    // Clamp inside the corridor with a small margin.
-    const maxOff = radius * 0.92;
+    /* Clamp. A racer is held inside the corridor with a small margin; an
+     * aircraft with its own `offsetCap` — a hostile in open airspace — is held
+     * inside that instead, because there is no corridor to respect in a fight. */
+    const maxOff = this.offsetCap ?? radius * 0.92;
     const mag = Math.hypot(tl, tv);
     if (mag > maxOff) { tl *= maxOff / mag; tv *= maxOff / mag; }
     // Backstop. This class is subclassed from another module, so an archetype
@@ -371,14 +405,20 @@ export class AIRacer {
     if (this.boosting) cap *= 1.22;
     if (this.turboTime > 0) cap *= 1.32;
     if (this.stunned > 0) cap *= 0.45;
-    cap = clamp(cap, PHYSICS.minSpeed, PHYSICS.boostSpeed);
+    /* The ceiling is the envelope's, not the reheat number's. Capping rivals
+     * and hostiles at `boostSpeed` while the player can reach Mach 30 means
+     * nothing on the grid can ever catch you once you are past Mach 25, which
+     * turns every pursuit into a formality. */
+    cap = clamp(cap, PHYSICS.minSpeed, MACH.maxMs);
     // Approach the target speed at a rate set by the airframe's acceleration —
     // heavy frames visibly take longer to wind back up out of a corner.
     const rate = this.speed < cap ? (this.accel / 165) : 1.7;
-    this.speed = clamp(damp(this.speed, cap, rate, sdt), PHYSICS.minSpeed * 0.6, PHYSICS.boostSpeed * 1.05);
+    this.speed = clamp(damp(this.speed, cap, rate, sdt), PHYSICS.minSpeed * 0.6, MACH.maxMs);
 
     /* --- integrate along the route ------------------------------------- */
-    this.distanceAlong += this.speed * sdt;
+    this.distanceAlong += this.speed * sdt * this.pathDir;
+    // Flying backwards off the start of the route is not a place; turn around.
+    if (this.distanceAlong < 0) { this.distanceAlong = 0; this.pathDir = 1; }
     path.ensure(this.distanceAlong + 3000);
 
     // Lateral/vertical tracking with a rate limit — this is what produces
@@ -395,7 +435,7 @@ export class AIRacer {
     // below can ratchet `vertical` upward every frame until it overflows, and
     // an infinite offset multiplied by a zero basis component yields NaN.
     const s0 = path.sample(this.distanceAlong, this._sample);
-    const offCap = s0.radius * 2.5;
+    const offCap = this.offsetCap ?? s0.radius * 2.5;
     this.lateral = clamp(this.lateral, -offCap, offCap);
     this.vertical = clamp(this.vertical, -offCap, offCap * 1.6);
 
@@ -417,7 +457,7 @@ export class AIRacer {
     /* --- orientation ---------------------------------------------------- */
     this.velocity.subVectors(this.position3, this.prevPosition).divideScalar(Math.max(1e-4, sdt));
     _v.copy(this.velocity);
-    if (_v.lengthSq() < 1) _v.copy(s.tangent).multiplyScalar(this.speed);
+    if (_v.lengthSq() < 1) _v.copy(s.tangent).multiplyScalar(this.speed * this.pathDir);
     _v.normalize();
     // Bank into the lateral movement.
     const bankTarget = clamp(-this.lateralVel / maxRate, -1, 1) * 0.95
@@ -437,7 +477,7 @@ export class AIRacer {
     this.distanceToPlayer = player ? this.position3.distanceTo(player.position) : 1e9;
 
     /* --- visual + LOD ---------------------------------------------------- */
-    const show = this.distanceToPlayer < 9000;
+    const show = this.drawAllowed && this.distanceToPlayer < this.drawRange;
     if (show !== this.visible) { this.visible = show; this.visual.setVisible(show); }
     if (show) {
       this.visual.update(sdt, {

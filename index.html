@@ -110,6 +110,47 @@
   </div>
 </section>
 
+<!-- ═══════════════════════ STORY MISSION BRIEFING ═══════════════════════
+     Shown before every Story mission launches. A mission is half an hour long
+     and has five phases in a fixed order, so walking into one without knowing
+     what it wants is not a challenge, it is a waste of half an hour. -->
+<section id="mission-brief" class="screen" aria-label="Mission briefing">
+  <div class="brief-shell">
+    <header class="brief-head">
+      <div class="brief-act"><span id="brief-act">ACT I · THE DELTA</span></div>
+      <div class="brief-title">
+        <span class="brief-no" id="brief-no">01</span>
+        <h2 id="brief-name">FIRST LIGHT</h2>
+      </div>
+      <p class="brief-tagline" id="brief-tagline"></p>
+    </header>
+    <div class="brief-body scroll-area">
+      <div class="brief-cols">
+        <div class="brief-col">
+          <h3>SITUATION</h3>
+          <p id="brief-situation"></p>
+          <h3>INTELLIGENCE</h3>
+          <p id="brief-intel"></p>
+          <h3>ORDERS</h3>
+          <p class="brief-orders" id="brief-orders"></p>
+        </div>
+        <div class="brief-col">
+          <h3>MISSION PHASES</h3>
+          <ol class="brief-phases" id="brief-phases"></ol>
+          <div class="brief-facts" id="brief-facts"></div>
+        </div>
+      </div>
+    </div>
+    <footer class="brief-foot">
+      <button class="btn btn-ghost" id="brief-back" type="button">Back to hangar</button>
+      <button class="btn btn-primary btn-launch" id="brief-launch" type="button">
+        <span class="launch-label">LAUNCH MISSION</span>
+        <span class="launch-sub" id="brief-sub"></span>
+      </button>
+    </footer>
+  </div>
+</section>
+
 <!-- ═══════════════════════════════ HUD ══════════════════════════════════ -->
 <div id="hud" class="hud" aria-hidden="true">
 
@@ -288,6 +329,15 @@
       <div class="obj-head"><span class="obj-tag" id="obj-tag">OBJECTIVE</span><span class="obj-mode" id="obj-mode"></span></div>
       <div class="obj-text" id="obj-text">—</div>
       <div class="obj-bar"><div class="obj-bar-fill" id="obj-bar-fill"></div></div>
+      <!-- Story phases carry a line of how-to. It survives the objective card
+           being closed, because a hint you cannot see is not a hint. -->
+      <div class="obj-hint" id="obj-hint" aria-hidden="true"></div>
+    </div>
+    <!-- Phase banner: which phase of the mission is live, always on screen. -->
+    <div class="story-strip" id="story-strip" aria-hidden="true">
+      <span class="story-mission" id="story-mission"></span>
+      <span class="story-phase" id="story-phase"></span>
+      <div class="story-pips" id="story-pips"></div>
     </div>
   </div>
 

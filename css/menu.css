@@ -438,3 +438,79 @@
   .sum-row em { display: none; }
   .panel-head.sub { margin: 11px 0 7px; }
 }
+
+/* ═══════════════════════ STORY MISSION BRIEFING ══════════════════════════
+ * A full screen rather than a modal. Fifteen missions of half an hour each is
+ * the longest thing in the game, and the briefing is the only chance to say
+ * what the next half hour is for — a dialog box would undersell it.
+ * ---------------------------------------------------------------------- */
+#mission-brief {
+  align-items: center; justify-content: center;
+  background: rgba(3, 6, 11, 0.86);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+.brief-shell {
+  width: min(1180px, 94vw); max-height: 92vh;
+  display: flex; flex-direction: column;
+  border: 1px solid rgba(120, 210, 255, 0.22); border-radius: 6px;
+  background: linear-gradient(180deg, rgba(8, 16, 26, 0.96), rgba(4, 9, 16, 0.97));
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+.brief-head {
+  padding: 22px 30px 16px;
+  border-bottom: 1px solid rgba(120, 210, 255, 0.16);
+  background: linear-gradient(180deg, rgba(255, 182, 72, 0.07), transparent);
+}
+.brief-act { font-size: 0.62rem; letter-spacing: 0.34em; color: var(--amber); }
+.brief-title { display: flex; align-items: baseline; gap: 14px; margin-top: 6px; }
+.brief-no {
+  font-family: var(--font-num); font-size: 2.1rem; line-height: 1;
+  color: rgba(255, 214, 150, 0.42);
+}
+.brief-title h2 { margin: 0; font-size: 1.9rem; letter-spacing: 0.10em; color: #eafdff; }
+.brief-tagline { margin: 8px 0 0; font-size: 0.86rem; color: rgba(210, 238, 255, 0.62); font-style: italic; }
+
+.brief-body { padding: 20px 30px; overflow-y: auto; }
+.brief-cols { display: grid; grid-template-columns: 1.05fr 1fr; gap: 30px; }
+@media (max-width: 900px) { .brief-cols { grid-template-columns: 1fr; gap: 18px; } }
+.brief-col h3 {
+  margin: 0 0 6px; font-size: 0.6rem; letter-spacing: 0.28em;
+  color: rgba(120, 210, 255, 0.85);
+}
+.brief-col h3:not(:first-child) { margin-top: 18px; }
+.brief-col p { margin: 0; font-size: 0.86rem; line-height: 1.6; color: rgba(224, 242, 255, 0.86); }
+.brief-orders { color: #ffd89a !important; font-weight: 600; }
+
+.brief-phases { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; }
+.brief-phase b { display: block; font-size: 0.86rem; color: #eafdff; font-weight: 600; }
+.brief-phase i {
+  display: block; margin-top: 2px; font-size: 0.74rem; line-height: 1.45;
+  color: rgba(200, 232, 255, 0.55);
+}
+.brief-facts {
+  margin-top: 20px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;
+}
+.brief-facts .fact {
+  padding: 7px 10px; border-radius: 4px;
+  border: 1px solid rgba(120, 210, 255, 0.16); background: rgba(10, 20, 32, 0.6);
+}
+.brief-facts .fact i {
+  display: block; font-style: normal; font-size: 0.5rem; letter-spacing: 0.2em;
+  color: rgba(200, 232, 255, 0.45);
+}
+.brief-facts .fact b { font-size: 0.8rem; color: #dff2ff; font-weight: 500; }
+
+.brief-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 16px 30px 20px; border-top: 1px solid rgba(120, 210, 255, 0.16);
+}
+#brief-launch { min-width: 300px; }
+
+/* Act headers in the Story panel. */
+.act-block { margin-bottom: 22px; }
+.act-head { margin-bottom: 10px; }
+.act-head b {
+  display: block; font-size: 0.72rem; letter-spacing: 0.26em; color: var(--amber);
+}
+.act-head span { font-size: 0.76rem; color: rgba(200, 232, 255, 0.5); }

@@ -244,15 +244,67 @@ export class WeaponGuide {
  * ======================================================================== */
 
 /** Formation offsets in (lateral, vertical, distance) path space. */
+/* ===========================================================================
+ * FORMATIONS
+ * ------------------------------------------------------------------------
+ * Slot offsets as [lateral, vertical, along] in metres.
+ *
+ * These used to be measured in HUNDREDS of metres, which at Mach 22 closure
+ * put an entire four-ship inside a single second of flight — the squadron read
+ * as one saturated blob, every missile that killed one killed the pair beside
+ * it, and there was no geometry to fly against because there was no space
+ * between them. The lateral figures below are now SEVEN TO TEN KILOMETRES:
+ * far enough apart that each hostile is its own engagement, that killing one
+ * does not collapse the wing, and that turning to face one exposes you to
+ * another. That spacing is also what makes the new weapon reach mean
+ * something — a 56 km missile is only interesting if the target is a long way
+ * away.
+ *
+ * Eight formations, not four, and they are drawn per wave, so a squadron
+ * arrives with a shape you have to read rather than a wall you memorise.
+ * ======================================================================== */
 const FORMATIONS = {
-  // Classic finger-four: two pairs stepped back and out.
-  finger: [[0, 0, 0], [90, 25, -110], [-95, -20, -120], [185, 45, -240]],
-  // Line abreast — a wall the player has to break through.
-  line: [[0, 0, 0], [150, 0, -20], [-150, 0, -20], [300, 10, -40]],
-  // Trail — a queue, each covering the one ahead.
-  trail: [[0, 0, 0], [20, -30, -180], [-20, 30, -360], [30, -50, -540]],
-  // Pincer — split high and low, converging.
-  pincer: [[0, 120, -60], [0, -120, -60], [200, 60, -140], [-200, -60, -140]],
+  /* Finger-four at combat spread: two pairs stepped back and out. */
+  finger: [
+    [0, 0, 0], [7400, 900, -3200], [-7800, -700, -3600], [15200, 1600, -7400],
+    [-15600, -1400, -7800], [22000, 500, -11000],
+  ],
+  /* Line abreast — a wall eight kilometres wide, no way through the middle. */
+  line: [
+    [0, 0, 0], [8000, 0, -600], [-8000, 0, -600], [16000, 400, -1200],
+    [-16000, -400, -1200], [24000, 0, -1800],
+  ],
+  /* Trail — a queue, each covering the one ahead, strung down the route. */
+  trail: [
+    [0, 0, 0], [900, -1100, -8000], [-900, 1200, -16000], [1200, -1500, -24000],
+    [-1200, 1400, -32000], [0, 0, -40000],
+  ],
+  /* Pincer — split high and low, converging on the merge. */
+  pincer: [
+    [0, 4200, -3000], [0, -4200, -3000], [8600, 2600, -7000], [-8600, -2600, -7000],
+    [17000, 3400, -12000], [-17000, -3400, -12000],
+  ],
+  /* Box — four corners of a ten-kilometre cube, and you are inside it. */
+  box: [
+    [7500, 3600, 4000], [-7500, 3600, 4000], [7500, -3600, -4000], [-7500, -3600, -4000],
+    [9500, 0, 0], [-9500, 0, 0],
+  ],
+  /* Wall — a vertical curtain: same ground track, stacked through the block. */
+  wall: [
+    [0, 0, 0], [1800, 5200, -900], [-1800, -5200, -900], [3600, 10000, -1800],
+    [-3600, -10000, -1800], [0, 15000, -2600],
+  ],
+  /* Echelon — a diagonal stair, so the whole wing has a shot down the line. */
+  echelon: [
+    [0, 0, 0], [7200, 1800, -5400], [14400, 3600, -10800], [21600, 5400, -16200],
+    [28800, 7200, -21600], [36000, 9000, -27000],
+  ],
+  /* Encirclement — six bearings on a nine-kilometre ring, every direction at
+   * once. The one the brief calls the hardest merge in the game. */
+  ring: [
+    [9000, 0, 0], [4500, 3000, -7800], [-4500, 3000, -7800],
+    [-9000, 0, 0], [-4500, -3000, 7800], [4500, -3000, 7800],
+  ],
 };
 const FORMATION_IDS = Object.keys(FORMATIONS);
 
@@ -294,8 +346,13 @@ export class EnemyFighter extends AIRacer {
     this.accuracy = clamp01(lerp(0.40, 0.95, D.aiSkill) + tier * 0.22);
     this.fireRate = lerp(0.85, 2.30, D.aiAggression) * (1 + tier * 0.6);
     this.heavyChance = clamp01(lerp(0.40, 0.95, D.aiAggression) + tier * 0.25);
-    this.engageRange = lerp(7000, 13000, D.aiSkill) * (1 + tier * 0.2);
-    this.gunOpenRange = lerp(1500, 2400, D.aiSkill);
+    /* The engagement envelope follows the weapons and the spacing. Hostiles
+     * now sit seven to ten kilometres apart and carry rounds rated for fifty,
+     * so a thirteen-kilometre engage range meant most of the squadron was
+     * outside its own firing window for the whole sortie — which reads as a
+     * squadron that will not fight. */
+    this.engageRange = lerp(24000, 48000, D.aiSkill) * (1 + tier * 0.2);
+    this.gunOpenRange = lerp(5000, 9000, D.aiSkill);
     this.evasion = clamp01(lerp(0.25, 0.85, D.aiSkill) + tier * 0.2);
     // Gun discipline: a poor pilot needs the pipper almost on the target, a good
     // one will take a deflection shot. This is the cone, in cosine.
@@ -307,19 +364,56 @@ export class EnemyFighter extends AIRacer {
     this.manoeuvre = 0;              // seconds left in the current manoeuvre
     this.manoeuvreKind = null;
     this.manoeuvreTimer = this.rng.float(3, 10);
+    /* --- the reversal ------------------------------------------------------
+     * `uTurn` counts down a committed 180. Nothing else may interrupt it: a
+     * half-finished reversal is an aircraft flying sideways. `uTurnCooldown`
+     * stops a hostile that is merely holding station from flip-flopping. */
+    this.uTurn = 0;
+    this.uTurnCooldown = this.rng.float(1.5, 5.0);
+    this.uTurnFlipped = false;
     this.formationSlot = opts.slot || 0;
     this.formationId = opts.formation || 'finger';
     this.tier = opts.tier || 0;
 
     // Top speed for a hostile is the same envelope the player flies. In the
-    // speed-focused mode they are allowed all the way to the Mach 20 ceiling.
+    // speed-focused mode they are allowed all the way to the Mach 30 ceiling.
     this.topSpeed = Math.min(MACH.maxMs, this.topSpeed * (opts.speedFocus ? 1.42 : 1.0));
+
+    /* A hostile is not a racer and does not belong in the corridor. The
+     * corridor cap would pull a formation spread over seven kilometres back
+     * onto the centre line within a second of spawning, which is exactly the
+     * saturated blob the spread exists to prevent. */
+    this.offsetCap = 90000;
+    this.drawRange = COMBAT.enemyDrawRange;
+    /* The slot this fighter holds, in path space. Written by `spawn` and read
+     * every frame by `_station` below. */
+    this.stationLateral = 0;
+    this.stationVertical = 0;
+    this._stationOut = { lateral: 0, vertical: 0 };
   }
 
   /** Slot offset for this fighter inside its formation. */
+  /**
+   * Slot offset for this fighter inside its formation.
+   *
+   * A squadron of a hundred does not fit in a six-slot table, so slots past
+   * the end of it repeat the shape one element further out and one element
+   * further back, alternating sides. The result is a squadron that keeps
+   * getting wider instead of stacking a dozen aircraft on the same point —
+   * which is the whole reason the spacing was raised in the first place.
+   */
   formationOffset() {
     const f = FORMATIONS[this.formationId] || FORMATIONS.finger;
-    return f[this.formationSlot % f.length];
+    const base = f[this.formationSlot % f.length];
+    const wing = Math.floor(this.formationSlot / f.length);
+    if (!wing) return base;
+    const side = wing % 2 ? 1 : -1;
+    const step = Math.ceil(wing / 2);
+    return [
+      base[0] + side * step * 11000,
+      base[1] + side * step * 1500,
+      base[2] - step * 9500,
+    ];
   }
 
   /**
@@ -333,9 +427,57 @@ export class EnemyFighter extends AIRacer {
     const range = toPlayer.length();
     this.rangeToPlayer = range;
 
+    /* --- the U-turn --------------------------------------------------------
+     * A hostile flies the route in path space, and path space only ran one
+     * way: distance-along could increase and nothing else. A fighter that
+     * overshot the player on the merge therefore flew off down the route
+     * forever and the fight decayed into a tail chase against whatever had not
+     * yet passed you. That is the single biggest thing wrong with the old
+     * squadron, and the fix is that a hostile can now reverse.
+     *
+     * The reversal is a COMMITTED manoeuvre, not a sign flip: it takes a
+     * couple of seconds, it rolls the airframe most of the way inverted, it
+     * pulls the nose through the vertical, and the direction actually changes
+     * halfway through — so what the player sees is a fighter pulling round
+     * onto them, not a model that suddenly faces the other way. */
+    this.uTurnCooldown = Math.max(0, this.uTurnCooldown - dt);
+    if (this.uTurn > 0) {
+      this.uTurn -= dt;
+      const s = this._uTurnSign;
+      // Hard roll and a big pull: this is the most visible thing a hostile does.
+      this.rollBias = s * 6.4;
+      this.targetLateral += s * 900 * dt;
+      this.targetVertical += (this.uTurn > this._uTurnHalf ? 420 : -300) * dt;
+      // The flip lands at the top of the pull, where a real reversal happens.
+      if (!this.uTurnFlipped && this.uTurn <= this._uTurnHalf) {
+        this.uTurnFlipped = true;
+        this.pathDir = -this.pathDir;
+      }
+      if (this.uTurn <= 0) {
+        this.uTurn = 0;
+        this.uTurnCooldown = this.rng.float(5, 11);
+      }
+    } else if (this.uTurnCooldown <= 0 && player.alive) {
+      /* Turn back when the player is a long way behind you on the route and
+       * you are still flying away from them — or, flying backwards, when they
+       * have got a long way ahead again. The threshold is generous because a
+       * hostile at Mach 25 covers a kilometre in a second and a hair trigger
+       * would have the whole squadron pirouetting on the spot. */
+      const gap = (player.distanceAlong - this.distanceAlong) * this.pathDir;
+      if (gap < -this._uTurnGap()) {
+        this.uTurn = this.rng.float(1.9, 2.8);
+        this._uTurnHalf = this.uTurn * 0.5;
+        this.uTurnFlipped = false;
+        this._uTurnSign = this.rng.next() < 0.5 ? -1 : 1;
+        this.manoeuvre = 0;                  // a reversal outranks everything
+        this.manoeuvreTimer = this.rng.float(1.5, 3.5);
+      }
+    }
+
     /* --- manoeuvres --------------------------------------------------------
      * Hostiles do not fly straight lines. They break, barrel-roll and yo-yo,
      * and the better the pilot the more often and the more committed. */
+    if (this.uTurn > 0) return this._fireControl(dt, player, combat, toPlayer, range);
     this.manoeuvreTimer -= dt;
     if (this.manoeuvre > 0) {
       this.manoeuvre -= dt;
@@ -344,17 +486,31 @@ export class EnemyFighter extends AIRacer {
       /* The move is chosen for the geometry it is actually in. Knife-fight
        * range gets defensive and rolling moves; the merge gets a break turn or
        * a high-G barrel roll; long range gets repositioning. */
-      const kinds = range < 1200
-        ? ['break', 'barrel', 'scissors', 'rollLeft', 'rollRight', 'splitS']
-        : range < 4000
-          ? ['barrel', 'yoyo', 'rollLeft', 'rollRight', 'highYoyo', 'break']
-          : ['yoyo', 'climb', 'barrel', 'immelmann'];
+      /* The menu is chosen for the geometry the fighter is actually in.
+       * Knife-fight range gets defensive and rolling moves, the merge gets a
+       * break turn or a high-G barrel roll, and long range gets repositioning
+       * — plus, at every range, the full-axis rolls the PLAYER flies on Q and
+       * E, so a hostile rotating right through 360 degrees is something you
+       * see them do rather than something only you can do. */
+      const kinds = range < 2500
+        ? ['break', 'barrel', 'scissors', 'aileronLeft', 'aileronRight', 'splitS',
+           'rollLeft', 'rollRight', 'defensiveSpiral', 'jink']
+        : range < 9000
+          ? ['barrel', 'yoyo', 'rollLeft', 'rollRight', 'highYoyo', 'break',
+             'aileronLeft', 'aileronRight', 'lowYoyo', 'jink']
+          : ['yoyo', 'climb', 'barrel', 'immelmann', 'aileronLeft', 'aileronRight',
+             'chandelle', 'dive'];
       this.manoeuvreKind = kinds[this.rng.int(0, kinds.length - 1)];
       this.manoeuvre = this.rng.float(1.1, 2.4);
       this._manoeuvreSign = this.rng.next() < 0.5 ? -1 : 1;
       // A roll is a visible, committed thing — the airframe actually rotates.
-      if (this.manoeuvreKind === 'rollLeft') this._manoeuvreSign = -1;
-      if (this.manoeuvreKind === 'rollRight') this._manoeuvreSign = 1;
+      if (this.manoeuvreKind === 'rollLeft' || this.manoeuvreKind === 'aileronLeft') this._manoeuvreSign = -1;
+      if (this.manoeuvreKind === 'rollRight' || this.manoeuvreKind === 'aileronRight') this._manoeuvreSign = 1;
+      // A full-axis roll is timed to complete a whole revolution.
+      if (this.manoeuvreKind === 'aileronLeft' || this.manoeuvreKind === 'aileronRight') {
+        this.manoeuvre = this.rng.float(1.4, 2.0);
+        this._rollTotal = this.manoeuvre;
+      }
     }
     if (this.manoeuvre > 0) {
       const s = this._manoeuvreSign;
@@ -399,6 +555,41 @@ export class EnemyFighter extends AIRacer {
           this.targetVertical += 240 * dt;
           this.targetLateral -= s * 160 * dt;
           break;
+        /* --- full-axis rolls -------------------------------------------
+         * The Q and E roll the player flies: the airframe rotates all the way
+         * round its own nose. `rollBias` is fed a continuously advancing angle
+         * rather than a constant, so the model actually revolves through 360
+         * degrees over the manoeuvre instead of holding a steep bank. */
+        case 'aileronLeft':
+        case 'aileronRight': {
+          const done = 1 - clamp01(this.manoeuvre / Math.max(0.01, this._rollTotal || 1));
+          this.rollBias = s * done * TAU;
+          this.targetLateral += s * 60 * dt;
+          break;
+        }
+        case 'lowYoyo':                      // unload, dive, cut the corner
+          this.targetVertical -= 260 * dt;
+          this.targetLateral += s * 210 * dt;
+          this.rollBias = s * 2.2;
+          break;
+        case 'chandelle':                    // climbing reversal, bleeding speed
+          this.rollBias = s * 3.6;
+          this.targetVertical += 300 * dt;
+          this.targetLateral += s * 240 * dt;
+          break;
+        case 'defensiveSpiral':              // corkscrew down and away
+          this.rollBias = s * 5.0;
+          this.targetVertical -= 200 * dt;
+          this.targetLateral = Math.sin(phase * 1.3) * 260 * s;
+          break;
+        case 'jink':                         // hard random displacement
+          this.targetLateral += s * 520 * dt;
+          this.targetVertical += (this.rng.next() - 0.5) * 460 * dt;
+          this.rollBias = s * 3.0;
+          break;
+        case 'dive':                          // trade height for closure
+          this.targetVertical -= 340 * dt;
+          break;
         default: break;
       }
     } else {
@@ -406,6 +597,105 @@ export class EnemyFighter extends AIRacer {
       this.rollBias = (this.rollBias || 0) * Math.max(0, 1 - dt * 3);
     }
 
+    return this._fireControl(dt, player, combat, toPlayer, range);
+  }
+
+  /** Remember where this fighter was placed — that offset is its station. */
+  spawn(distance, lateral, vertical) {
+    super.spawn(distance, lateral, vertical);
+    this.stationLateral = lateral;
+    this.stationVertical = vertical;
+  }
+
+  /**
+   * Where this fighter wants to be, in path-space offsets.
+   *
+   * Returning a station is what tells the racing brain in ai.js that this
+   * aircraft is NOT racing: it skips the gate line, the ring grabbing and the
+   * blocking, and it clamps to the fighter's own `offsetCap` instead of the
+   * corridor. What is left is the part a hostile still wants — obstacle
+   * avoidance and terrain clearance — with a pursuit line on top.
+   *
+   * The line itself is the formation slot, drifting slowly so a squadron is
+   * not a rigid lattice, blended toward the player as the merge develops. Far
+   * out it holds the spread; close in it is on you.
+   */
+  _station(dt, player) {
+    this._wander = (this._wander || 0) + dt;
+    let tl = this.stationLateral + Math.sin(this._wander * 0.19 + this.lineSeed) * 640;
+    let tv = this.stationVertical + Math.cos(this._wander * 0.15 + this.lineSeed * 1.7) * 380;
+
+    if (player && player.alive) {
+      /* Pursuit. Nothing at forty kilometres, everything inside a couple —
+       * so the formation reads as a formation on the approach and as a
+       * dogfight once it arrives. A reversing fighter pulls harder still: it
+       * has just spent two seconds turning round to do exactly this. */
+      const r = this.rangeToPlayer ?? this.distanceToPlayer ?? 1e9;
+      let pull = clamp01(1 - r / Math.max(1, this.engageRange * 0.55));
+      pull = Math.pow(pull, 1.6) * lerp(0.55, 0.98, this.aggression);
+      if (this.uTurn > 0 || this.uTurnFlipped) pull = Math.min(1, pull * 1.35);
+      tl = lerp(tl, player.pathOffsetLateral ?? tl, pull);
+      tv = lerp(tv, player.pathOffsetVertical ?? tv, pull);
+    }
+
+    /* --- separation --------------------------------------------------------
+     * Everything above pulls every hostile toward the same aircraft, so
+     * without this the squadron converges into one point and the whole spread
+     * is decorative. Push off anyone inside `spreadMin`, ignore anyone past
+     * `spreadMax`, and check a rotating handful of peers per frame rather than
+     * all of them — the force changes far more slowly than the frame rate. */
+    const peers = this.peers;
+    if (peers && peers.length > 1) {
+      const n = peers.length;
+      const step = Math.max(1, Math.ceil(n / COMBAT.spreadSamples));
+      let i = (this._spreadCursor = ((this._spreadCursor || 0) + 1) % step);
+      let pushL = 0, pushV = 0;
+      for (; i < n; i += step) {
+        const o = peers[i];
+        if (o === this || !o.alive) continue;
+        const dl = this.lateral - o.lateral;
+        const dv = this.vertical - o.vertical;
+        const da = this.distanceAlong - o.distanceAlong;
+        // Horizontal separation is what the brief is about; along-track
+        // distance already separates them without any help from here.
+        const d = Math.hypot(dl, da);
+        if (d > COMBAT.spreadMax) continue;
+        const want = COMBAT.spreadMin;
+        if (d >= want) continue;
+        const force = (want - d) * COMBAT.spreadForce;
+        if (d < 1) { pushL += force; continue; }
+        pushL += (dl / d) * force;
+        pushV += Math.sign(dv || 1) * force * 0.10;
+      }
+      tl += pushL * dt;
+      tv += pushV * dt;
+    }
+
+    const out = this._stationOut;
+    out.lateral = tl;
+    out.vertical = tv;
+    return out;
+  }
+
+  /**
+   * How far the player has to get behind before this fighter turns back.
+   *
+   * Scaled off the engagement envelope rather than a fixed number: a hostile
+   * that can shoot at forty kilometres has no reason to reverse at five, and
+   * one that cannot has every reason to. The aggressive difficulties turn
+   * sooner, which is most of what makes them feel like they are hunting you.
+   */
+  _uTurnGap() {
+    return lerp(9000, 4200, this.difficulty.aiAggression) + this.engageRange * 0.22;
+  }
+
+  /**
+   * Lock, guns and heavy weapons. Split out of `combatUpdate` so a fighter
+   * pulling through a reversal is still a fighter that shoots at you — a
+   * hostile that goes quiet for the two seconds of its most visible manoeuvre
+   * is a hostile the player learns to ignore during it.
+   */
+  _fireControl(dt, player, combat, toPlayer, range) {
     /* --- lock --------------------------------------------------------------
      * A hostile needs to hold the player in its seeker cone, exactly as the
      * player does, before a guided round will leave the rail. */
@@ -433,7 +723,7 @@ export class EnemyFighter extends AIRacer {
     /* --- heavy weapons -----------------------------------------------------
      * A hostile picks a weapon it can actually reach with: the round has to be
      * rated for the current range, exactly as the player's launch gate demands.
-     * Without that filter they fire 8 km missiles from 12 km and every shot is
+     * Without that filter they fire 56 km missiles from 80 km and every shot is
      * a guaranteed miss, which is indistinguishable from not shooting at all. */
     this.heavyTimer -= dt;
     if (this.heavyTimer <= 0 && this.lockProgress >= 1 && range < this.engageRange
@@ -466,6 +756,12 @@ export class CombatSystem {
     this.difficulty = difficulty;
     this.rng = new RNG(`${world.seed}:combat`);
     this.speedFocus = !!opts.speedFocus;
+    /* Squadron pressure. Story missions set this so a late one genuinely puts
+     * more airframes in the sky than an early one, rather than being the same
+     * fight with a bigger number on the objective. Everything else runs at 1. */
+    this.pressure = opts.pressure ?? 1;
+    this.minEnemies = Math.round(COMBAT.minEnemies * this.pressure);
+    this.maxEnemies = Math.round(COMBAT.maxEnemies * this.pressure);
 
     this.tracers = new TracerBatch(render.scene);
     this.heavies = new HeavyBatch(render.scene);
@@ -584,14 +880,17 @@ export class CombatSystem {
   spawnWave(playerDistance, specs) {
     this.wave++;
     const D = this.difficulty;
-    // Formation discipline arrives with experience: early waves fly loose
-    // pairs, later ones fly a proper four-ship.
-    const formation = FORMATION_IDS[Math.min(FORMATION_IDS.length - 1,
-      Math.floor(this.wave / 2)) % FORMATION_IDS.length];
+    /* Formation discipline arrives with experience: the first waves fly the
+     * loose shapes, and the demanding ones — the box you are inside, the ring
+     * that comes from every bearing — unlock as the fight escalates. Within
+     * whatever is unlocked the draw is random, so a wave is a shape you have
+     * to read on arrival rather than a rota you memorise. */
+    const unlocked = Math.min(FORMATION_IDS.length, 3 + Math.floor(this.wave / 2));
+    const formation = FORMATION_IDS[this.rng.int(0, unlocked - 1)];
     const live = this.enemies.filter((e) => e.alive).length;
     // Top back up to the floor, plus a slow climb above it as waves stack.
-    const target = Math.min(COMBAT.maxEnemies,
-      COMBAT.minEnemies + Math.floor(this.wave * 0.5) + Math.round(D.aiSkill * 2));
+    const target = Math.min(this.maxEnemies,
+      this.minEnemies + Math.floor(this.wave * 0.5) + Math.round(D.aiSkill * 2));
     const count = Math.max(0, target - live);
 
     for (let i = 0; i < count; i++) {
@@ -606,6 +905,7 @@ export class CombatSystem {
       const a = this._approach(off);
       e.approach = a.kind;
       e.spawn(playerDistance + a.along, a.lateral, a.vertical);
+      e.peers = this.enemies;
       this.enemies.push(e);
     }
     this.events.push({ type: 'wave', wave: this.wave, count, formation });
@@ -628,59 +928,62 @@ export class CombatSystem {
    * @returns {{kind:string, along:number, lateral:number, vertical:number}}
    */
   _approach(off) {
-    const jitterL = () => this.rng.float(-90, 90);
-    const jitterV = () => this.rng.float(-60, 60);
-    
-    // ALWAYS spawn ahead in combat modes - no rear attacks at start
+    /* Jitter is measured against the SPACING, not against the old hundreds of
+     * metres: a formation eight kilometres wide with 90 m of scatter on it is
+     * a formation with no scatter on it. */
+    const jitterL = () => this.rng.float(-1400, 1400);
+    const jitterV = () => this.rng.float(-900, 900);
+
+    // The pack being chased is always in front of you.
     if (this.speedFocus) {
       return {
         kind: 'lead',
-        along: 1400 + off[2], lateral: off[0] + jitterL(), vertical: off[1] + jitterV(),
+        along: 6000 + off[2], lateral: off[0] + jitterL(), vertical: off[1] + jitterV(),
       };
     }
-    
+
     const t = COMBAT.approach;
     let r = this.rng.next() * (t.head + t.side + t.diagonal + t.vertical);
-    
-    // HEAD-ON: Far ahead, random lateral/vertical spread
+
+    // HEAD-ON: well ahead and closing, the hardest merge in the game.
     if ((r -= t.head) < 0) {
       return {
         kind: 'head',
-        along: this.rng.float(4200, 7000) + off[2],
-        lateral: off[0] + this.rng.float(-260, 260), 
-        vertical: off[1] + this.rng.float(-180, 180),
+        along: this.rng.float(18000, 34000) + off[2],
+        lateral: off[0] + this.rng.float(-3200, 3200),
+        vertical: off[1] + this.rng.float(-1800, 1800),
       };
     }
-    
-    // SIDE: Ahead and to the side, random direction
+
+    // SIDE: ahead and out on a beam, inside missile reach from the first frame.
     if ((r -= t.side) < 0) {
       const s = this.rng.next() < 0.5 ? -1 : 1;
       return {
         kind: 'side',
-        along: this.rng.float(800, 1600) + off[2],  // Always ahead
-        lateral: off[0] + s * this.rng.float(900, 1800), 
+        along: this.rng.float(5000, 12000) + off[2],
+        lateral: off[0] + s * this.rng.float(7000, 10000),
         vertical: off[1] + jitterV(),
       };
     }
-    
-    // DIAGONAL: Ahead and diagonal approach
+
+    // DIAGONAL: ahead and offset, the classic cut-off geometry.
     if ((r -= t.diagonal) < 0) {
       const s = this.rng.next() < 0.5 ? -1 : 1;
       return {
         kind: 'diagonal',
-        along: this.rng.float(1800, 3600) + off[2],
-        lateral: off[0] + s * this.rng.float(700, 1500),
-        vertical: off[1] + this.rng.float(-320, 320),
+        along: this.rng.float(9000, 20000) + off[2],
+        lateral: off[0] + s * this.rng.float(6000, 9000),
+        vertical: off[1] + this.rng.float(-2600, 2600),
       };
     }
-    
-    // VERTICAL: Ahead and above/below
+
+    // VERTICAL: ahead and stacked above or below.
     const s = this.rng.next() < 0.5 ? -1 : 1;
     return {
       kind: 'vertical',
-      along: this.rng.float(600, 1800) + off[2],  // Always ahead
-      lateral: off[0] + jitterL(), 
-      vertical: off[1] + s * this.rng.float(600, 1200),
+      along: this.rng.float(4000, 11000) + off[2],
+      lateral: off[0] + jitterL(),
+      vertical: off[1] + s * this.rng.float(3500, 7000),
     };
   }
 
@@ -700,7 +1003,7 @@ export class CombatSystem {
   topUp(dt, playerDistance, specs) {
     if (!specs || !specs.length) return 0;
     const live = this.enemies.filter((e) => e.alive).length;
-    if (live >= COMBAT.minEnemies) { this._respawnTimer = COMBAT.respawnDelay; return 0; }
+    if (live >= this.minEnemies) { this._respawnTimer = COMBAT.respawnDelay; return 0; }
 
     this._respawnTimer -= dt;
     if (this._respawnTimer > 0) return 0;
@@ -709,18 +1012,20 @@ export class CombatSystem {
     // Replace a couple at a time — a whole squadron appearing at once reads as
     // a spawn, a trickle of reinforcements reads as a fight that keeps going.
     const D = this.difficulty;
-    const join = Math.min(3, COMBAT.minEnemies - live);
+    const join = Math.min(3, this.minEnemies - live);
     for (let i = 0; i < join; i++) {
       const spec = specs[this.rng.int(0, specs.length - 1)];
       const arch = ENEMY_ARCHETYPES[this.rng.int(0, ENEMY_ARCHETYPES.length - 1)];
       const livery = COMBAT.liveries[this.rng.int(0, COMBAT.liveries.length - 1)];
       const e = new EnemyFighter(this.render, this.world, spec, arch, D,
         this._nextIndex++, this.world.seed, {
-          livery, slot: i, formation: 'finger', tier: this.wave, speedFocus: this.speedFocus,
+          livery, slot: this._nextIndex, formation: FORMATION_IDS[this.rng.int(0, FORMATION_IDS.length - 1)],
+          tier: this.wave, speedFocus: this.speedFocus,
         });
       const a = this._approach(e.formationOffset());
       e.approach = a.kind;
       e.spawn(playerDistance + a.along, a.lateral, a.vertical);
+      e.peers = this.enemies;
       this.enemies.push(e);
     }
     this.events.push({ type: 'reinforce', count: join });
@@ -986,6 +1291,25 @@ export class CombatSystem {
   }
 
   _updateEnemies(dt, player) {
+    /* --- mesh budget -------------------------------------------------------
+     * A hundred hostiles is a hundred flight models, which is nothing, and a
+     * hundred AIRCRAFT, which is not: six draw calls, a trail ribbon and an
+     * afterburner each. Decide up front which ones are worth drawing —
+     * nearest first, capped — and let the rest fly, shoot and paint on the
+     * radar without geometry. The player cannot tell, because at 26 km a
+     * fighter is a pixel; the frame rate can. */
+    if (player) {
+      const live = this._drawScratch || (this._drawScratch = []);
+      live.length = 0;
+      for (const e of this.enemies) {
+        if (!e.alive) { e.drawAllowed = true; continue; }
+        e._drawKey = e.position3.distanceToSquared(player.position);
+        live.push(e);
+      }
+      live.sort((a, b) => a._drawKey - b._drawKey);
+      for (let i = 0; i < live.length; i++) live[i].drawAllowed = i < COMBAT.enemyDrawBudget;
+    }
+
     for (const e of this.enemies) {
       e.update(dt, player);
       if (e.alive) e.combatUpdate(dt, player, this);
@@ -1052,19 +1376,26 @@ export class CombatSystem {
       }
       if (w.gravity) s.vel.y -= w.gravity * dt;
 
+      _v.copy(s.pos);                       // where the round was before this step
       s.pos.addScaledVector(s.vel, dt);
       if (!w.guided && !w.gravity) s.dir.copy(s.vel).normalize();
       s.life -= dt;
 
-      /* --- hits ---------------------------------------------------------- */
+      /* --- hits ------------------------------------------------------------
+       * Swept, not sampled. A plasma bolt covers 93 m in a 60 Hz frame and a
+       * fighter is a 30 m sphere, so a point test at the round's new position
+       * steps clean over two thirds of the shots that should have connected —
+       * which is exactly what "the guns do not hit anything" was. The test
+       * below is the round's whole path this frame against the target sphere,
+       * so a hit is a hit at any frame rate and any muzzle velocity. */
       let hit = null;
       if (s.fromPlayer) {
         for (const e of this.enemies) {
           if (!e.alive) continue;
-          if (s.pos.distanceToSquared(e.position3) < w.radius * w.radius) { hit = e; break; }
+          if (this._sweepHit(_v, s.pos, e.position3, w.radius)) { hit = e; break; }
         }
       } else if (player && player.alive) {
-        if (s.pos.distanceToSquared(player.position) < w.radius * w.radius) hit = player;
+        if (this._sweepHit(_v, s.pos, player.position, w.radius)) hit = player;
       }
 
       // A fused round (the grenade) goes off on its timer even if it misses.
@@ -1137,6 +1468,23 @@ export class CombatSystem {
     this.heavies.end();
   }
 
+  /**
+   * Did a round travelling `from` -> `to` this frame pass within `r` of `at`?
+   *
+   * Closest approach of a point to a segment, which is the correct question
+   * for a projectile: "was it ever inside the target" rather than "is it
+   * inside the target right now, on this particular frame boundary".
+   */
+  _sweepHit(from, to, at, r) {
+    _v2.subVectors(to, from);
+    const len2 = _v2.lengthSq();
+    if (len2 < 1e-6) return from.distanceToSquared(at) < r * r;
+    _v3.subVectors(at, from);
+    const t = clamp(_v3.dot(_v2) / len2, 0, 1);
+    _v3.copy(from).addScaledVector(_v2, t);
+    return _v3.distanceToSquared(at) < r * r;
+  }
+
   _hitGround(s) {
     const g = this.world.terrainHeight(s.pos.x, s.pos.z);
     return s.pos.y <= g + 2;
@@ -1144,7 +1492,14 @@ export class CombatSystem {
 
   _detonate(s, hit, player, ground = false) {
     const w = s.weapon;
-    const blast = w.blast || 0;
+    /* The WEAPONS table is the player's arsenal and it is enormous. Hostiles
+     * fire from the same table, so their rounds are scaled on the way in —
+     * see COMBAT.enemyWeaponScale. Everything else about the round, including
+     * the fireball, is identical: the hit looks the same, it just does not end
+     * the run on the first merge. */
+    const mine = !!s.fromPlayer;
+    const dmg = w.damage * (mine ? 1 : COMBAT.enemyWeaponScale);
+    const blast = (w.blast || 0) * (mine ? 1 : COMBAT.enemyBlastScale);
     if (w.tracer) {
       // A cannon strike is a spark shower, not a fireball.
       this.render.vfx.sparkBurst(s.pos, s.dir, 14, 0xffd27a);
@@ -1193,7 +1548,7 @@ export class CombatSystem {
         this.render.postfx.flash(0.62 * near, 0xffb570);
         this.render.rig.addShake(1.9 * near, 16);
       }
-      this.audio?.play('explosion', { volume: clamp01(0.6 + w.damage / 110) });
+      this.audio?.play('explosion', { volume: clamp01(0.6 + dmg / 400) });
     }
 
     const apply = (victim, amount) => {
@@ -1212,17 +1567,23 @@ export class CombatSystem {
       }
     };
 
-    if (hit) apply(hit, w.damage);
-    // Splash: everything inside the blast radius takes falloff damage.
+    if (hit) apply(hit, dmg);
+    /* Splash: everything inside the blast radius takes falloff damage.
+     * The falloff is QUADRATIC, not linear. These warheads now clear a
+     * kilometre and a linear ramp over that distance leaves half of it still
+     * doing lethal damage — the whole airspace becomes one kill zone and
+     * position stops meaning anything. Squaring it keeps the core devastating
+     * and lets the edge of the blast be the edge of the blast. */
     if (blast > 0) {
-      const victims = s.fromPlayer ? this.enemies : (player ? [player] : []);
+      const victims = mine ? this.enemies : (player ? [player] : []);
       for (const v of victims) {
         if (v === hit) continue;
         if (v.alive === false) continue;
         const p = v.position3 || v.position;
         const d = s.pos.distanceTo(p);
         if (d > blast) continue;
-        apply(v, w.damage * (1 - d / blast) * 0.6);
+        const falloff = 1 - d / blast;
+        apply(v, dmg * falloff * falloff * 0.6);
       }
     }
   }

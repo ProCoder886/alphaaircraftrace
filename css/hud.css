@@ -799,3 +799,41 @@ body.hud-hidden #mobile-controls { display: none !important; }
   .hud-combat { padding: 3px 7px; gap: 6px; }
   .tgt { width: 3.2rem; height: 3.2rem; }
 }
+
+/* ---------------------------------------------------------------------------
+ * STORY MODE — phase banner and per-phase hint
+ * A mission runs half an hour with five phases in a fixed order. Which phase
+ * is live, and how many are left, is the one thing that has to stay on screen
+ * for all of it — so it lives outside the objective card, which the pilot is
+ * free to close.
+ * ------------------------------------------------------------------------ */
+.story-strip {
+  display: none; align-items: center; gap: 10px;
+  margin: 6px auto 0; width: max-content; max-width: 100%;
+  padding: 4px 12px 5px; border-radius: 999px;
+  border: 1px solid rgba(255, 182, 72, 0.36);
+  background: linear-gradient(180deg, rgba(30, 22, 8, 0.72), rgba(10, 8, 4, 0.55));
+  box-shadow: 0 0 16px rgba(255, 182, 72, 0.12) inset;
+  backdrop-filter: blur(4px);
+}
+.story-strip.show { display: flex; }
+.story-mission { font-size: 0.5rem; letter-spacing: 0.16em; color: #ffd89a; white-space: nowrap; }
+.story-phase {
+  font-family: var(--font-num); font-size: 0.56rem; letter-spacing: 0.10em;
+  color: #fff2d6; padding-left: 10px; border-left: 1px solid rgba(255, 182, 72, 0.28);
+  white-space: nowrap;
+}
+.story-pips { display: flex; gap: 4px; padding-left: 8px; border-left: 1px solid rgba(255, 182, 72, 0.28); }
+.story-pips i {
+  width: 7px; height: 7px; border-radius: 50%;
+  border: 1px solid rgba(255, 214, 150, 0.45); background: transparent;
+}
+.story-pips i.done { background: rgba(157, 255, 74, 0.85); border-color: rgba(157, 255, 74, 0.9); }
+.story-pips i.live { background: var(--amber); border-color: var(--amber); box-shadow: 0 0 8px rgba(255, 182, 72, 0.8); }
+
+.obj-hint {
+  display: none; margin-top: 5px; padding-top: 5px;
+  border-top: 1px dashed rgba(200, 230, 255, 0.18);
+  font-size: 0.6em; line-height: 1.35; color: rgba(200, 232, 255, 0.62);
+}
+.obj-hint.show { display: block; }

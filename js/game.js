@@ -9,7 +9,7 @@
 import * as THREE from 'three';
 import {
   AIRCRAFT, AIRCRAFT_BY_ID, BIOMES, BIOMES_BY_ID, MODES, DIFFICULTIES, WEATHER, TIME_OF_DAY,
-  CAMPAIGN, OBJECTIVE_POOL, ACHIEVEMENTS, SCORE, CREDITS, POWERS, WORLD,
+  CAMPAIGN, STORY, STORY_BY_ID, OBJECTIVE_POOL, ACHIEVEMENTS, SCORE, CREDITS, POWERS, WORLD,
   DEFAULT_SAVE, STORAGE_KEY, LOADING_STAGES, DEFAULTS, MACH, COMBAT, WEAPONS_BY_ID,
   HEAVY_ORDER, GUN_ORDER, DEFAULT_BINDINGS,
   RNG, hashSeed, clamp, clamp01, lerp, damp, TAU,
@@ -633,6 +633,7 @@ export class Game {
       ...venue, seed, mode, difficulty, spec, rng,
       daily: overrides.daily || null,
       campaign: overrides.campaign || null,
+      story: overrides.story || null,
       laps: overrides.laps || mode.laps || 1,
     };
 
@@ -669,7 +670,7 @@ export class Game {
       if (this.combat) { this.combat.dispose(); this.combat = null; }
       if (mode.combat) {
         this.combat = new CombatSystem(this.render, this.world, this.audio, difficulty,
-          { speedFocus: !!mode.speedFocus });
+          { speedFocus: !!mode.speedFocus, pressure: this.runConfig.story?.pressure ?? 1 });
         this._enemySpecs = AIRCRAFT.filter((a) => a.model);
         this.combat.spawnWave(300, this._enemySpecs);
       }
@@ -697,6 +698,12 @@ export class Game {
     this.ui.buildControlLegend(!!mode.combat);
     this.ui.setModeBrief(mode);
     if (!mode.combat) this.ui.clearCombatHud();
+    if (this.runConfig.story) {
+      this.ui.setStoryPhase(this.runConfig.story, 0, this.objectives.length);
+      this.ui.setStoryHint(this.objectives[0]?.hint || '');
+    } else {
+      this.ui.clearStoryHud();
+    }
     this.ui.setCamera(this.render.rig.mode.name);
     this._startCountdown();
   }
@@ -704,10 +711,21 @@ export class Game {
   _beginRun() {
     const cfg = this.runConfig;
     this.metrics = this._blankMetrics();
-    this.objectives = cfg.daily
-      ? [{ ...cfg.daily.objective, def: cfg.daily.objective.def, complete: false, reward: 2, text: cfg.daily.objective.label }]
-      : rollObjectives(cfg.rng, cfg.mode, cfg.difficulty, cfg.mode.combat ? 4 : 3);
+    /* A Story mission brings its own objectives — the phases, in order — so
+     * the random draw is skipped entirely. Everything downstream (the HUD
+     * card, the results screen, the credit award) reads the same shape, so
+     * nothing else has to know which kind of run this is. */
+    this.objectives = cfg.story
+      ? cfg.story.phases.map((ph) => ({
+        id: ph.id, text: ph.text, metric: ph.metric, value: ph.value,
+        hint: ph.hint, complete: false, reward: 1.2,
+      }))
+      : cfg.daily
+        ? [{ ...cfg.daily.objective, def: cfg.daily.objective.def, complete: false, reward: 2, text: cfg.daily.objective.label }]
+        : rollObjectives(cfg.rng, cfg.mode, cfg.difficulty, cfg.mode.combat ? 4 : 3);
     this.objectiveIndex = 0;
+    this.storyPhase = 0;
+    this.storyDone = false;
     this.score = 0;
     this.combo = 1;
     this.comboSteps = 0;
@@ -882,14 +900,17 @@ export class Game {
 
     /* --- objectives ------------------------------------------------------ */
     this.metrics.position = this.director?.playerPosition ?? 1;
-    for (const o of this.objectives) {
-      if (o.complete) continue;
-      if (objectiveProgress(o, this.metrics) >= 1) {
-        o.complete = true;
-        this.score += 1200 * o.reward * this.combo;
-        this.audio.play('objective');
-        this.ui.notify('OBJECTIVE COMPLETE', 'good');
-        this.ui.banner('OBJECTIVE COMPLETE', o.text);
+    if (cfg.story) { if (this._updateStory(dt, cfg)) return; }
+    else {
+      for (const o of this.objectives) {
+        if (o.complete) continue;
+        if (objectiveProgress(o, this.metrics) >= 1) {
+          o.complete = true;
+          this.score += 1200 * o.reward * this.combo;
+          this.audio.play('objective');
+          this.ui.notify('OBJECTIVE COMPLETE', 'good');
+          this.ui.banner('OBJECTIVE COMPLETE', o.text);
+        }
       }
     }
 
@@ -1040,6 +1061,54 @@ export class Game {
       this._hazardLevel = 0;
       this._hazardBeep = 0;
     }
+  }
+
+  /* =====================================================================
+   * STORY MODE
+   * ================================================================== */
+
+  /**
+   * Advance the mission one phase at a time.
+   *
+   * Every other mode holds a handful of objectives that all tick at once and
+   * are done whenever they are done. A mission is a SEQUENCE: the phase that
+   * is live is the only one that counts, clearing it announces the next one,
+   * and clearing the last one clears the mission. That ordering is the whole
+   * difference between a list of targets and a sortie with a shape.
+   *
+   * Phase goals are cumulative against the run's own metrics, so the HUD can
+   * show one honest bar and the player never has to hold a running total in
+   * their head.
+   *
+   * @returns true once the run has ended, so the caller stops the frame.
+   */
+  _updateStory(dt, cfg) {
+    if (this.storyDone) return false;
+    const phase = this.objectives[this.storyPhase];
+    if (!phase) return false;
+    this.ui.setStoryPhase(cfg.story, this.storyPhase, this.objectives.length);
+    if (objectiveProgress(phase, this.metrics) < 1) return false;
+
+    phase.complete = true;
+    this.score += 2400 * phase.reward * this.combo;
+    this.audio.play('objective');
+    this.storyPhase++;
+
+    const next = this.objectives[this.storyPhase];
+    if (next) {
+      this.ui.notify(`PHASE ${phase.id} COMPLETE`, 'good');
+      this.ui.banner(`PHASE ${this.storyPhase + 1} OF ${this.objectives.length}`, next.text);
+      this.ui.setStoryHint(next.hint || '');
+      return false;
+    }
+
+    // Last phase cleared: the mission is over and it is a win.
+    this.storyDone = true;
+    this.ui.setStoryHint('');
+    this.audio.play('unlock');
+    this.ui.banner('MISSION COMPLETE', cfg.story.name);
+    this.endRun('MISSION COMPLETE', true);
+    return true;
   }
 
   /**
@@ -1597,6 +1666,7 @@ export class Game {
     if (cfg.daily) credits += CREDITS.dailyBonus;
     if (cfg.mode.hasRivals && this.finished && position <= 3) credits += CREDITS.podium[position - 1];
     if (cfg.campaign && success) credits += cfg.campaign.reward;
+    if (cfg.story && this.storyDone) credits += cfg.story.reward;
     credits = Math.round(credits * cfg.difficulty.rewardMult);
     this.save.addCredits(credits);
 
@@ -1605,6 +1675,13 @@ export class Game {
       if (this.save.data.campaignProgress < cfg.campaign.id) {
         this.save.set('campaignProgress', cfg.campaign.id);
         this.ui.toast(`CHAPTER ${cfg.campaign.id} CLEARED`);
+      }
+    }
+    // --- story progression ---------------------------------------------------
+    if (cfg.story && this.storyDone) {
+      if ((this.save.data.storyProgress || 0) < cfg.story.id) {
+        this.save.set('storyProgress', cfg.story.id);
+        this.ui.toast(`MISSION ${cfg.story.id} CLEARED`);
       }
     }
     if (cfg.daily) {
@@ -1634,7 +1711,7 @@ export class Game {
     }
 
     // --- results screen -------------------------------------------------------
-    const win = success && (!cfg.mode.hasRivals || position === 1);
+    const win = cfg.story ? !!this.storyDone : (success && (!cfg.mode.hasRivals || position === 1));
     const tiles = [
       { label: 'Score', value: nfmt(finalScore), record: !!records.score },
       { label: 'Distance', value: `${(m.distance / 1000).toFixed(2)} km`, record: !!records.distance },
@@ -1664,6 +1741,11 @@ export class Game {
     if (objDone.length) rewards.push(`${objDone.length} / ${this.objectives.length} OBJECTIVES`);
     if (cfg.daily) rewards.push(`DAILY ×${cfg.daily.scoreMultiplier.toFixed(1)}`);
     if (cfg.campaign && success) rewards.push(`CHAPTER ${cfg.campaign.id} CLEARED`);
+    if (cfg.story) {
+      rewards.push(this.storyDone
+        ? `MISSION ${cfg.story.id} CLEARED`
+        : `PHASE ${this.storyPhase} OF ${this.objectives.length}`);
+    }
 
     this.ui.showResults({
       verdict: win ? 'VICTORY' : success ? 'RUN COMPLETE' : 'RUN ENDED',
@@ -2011,6 +2093,19 @@ export class Game {
         this.launchRun({
           mode: 'campaign', difficulty: c.diff, location: c.biome, weather: c.weather,
           laps: c.laps, campaign: c, seed: hashSeed(`campaign-${c.id}`),
+        });
+      },
+      onLaunchStory: (id) => {
+        const m = STORY_BY_ID[id];
+        if (!m) return;
+        if (m.id > (this.save.data.storyProgress || 0) + 1) {
+          this.ui.toast('Mission locked', 'warn');
+          return;
+        }
+        this.audio.unlock();
+        this.launchRun({
+          mode: 'story', difficulty: m.diff, location: m.biome, weather: m.weather,
+          time: m.time, story: m, seed: hashSeed(`story-${m.id}`),
         });
       },
       getDaily: () => getDailyChallenge(),

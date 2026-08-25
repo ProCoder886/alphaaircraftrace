@@ -815,13 +815,32 @@ export const MODES = {
       'Falling more than 6 km behind the lead enemy',
     ],
   },
+  story: {
+    id: 'story', name: 'STORY MODE', tag: 'NEW',
+    desc: 'Fifteen missions in three acts, flown in order. Each one is a full sortie — a transit, a first contact, an escalation and a hold — of about half an hour, over a venue and a weather system chosen for the mission rather than drawn at random. Objectives are briefed before you launch and advance one phase at a time on the HUD.',
+    hasLaps: false, hasRivals: false, hasTimer: false, escalates: true, failOnDamage: true,
+    combat: true, noRings: true, story: true, primary: 'kills',
+    mandatory: ['kills'],
+    objectives: [
+      'Fly the mission phases in order — each one unlocks the next',
+      'The phase objective and its progress are always on the HUD',
+      'Hold a target lock before launching; guided rounds need it',
+      'Clearing the last phase clears the mission and unlocks the next',
+    ],
+    gameOver: [
+      'Hull destroyed by enemy fire',
+      'Ground impact, or collision with a building or structure',
+      'Engine overheat — 60 seconds above Mach 24',
+      'Shot down while stalled below Mach 2',
+    ],
+  },
   free: {
     id: 'free', name: 'FREE FLIGHT', tag: null,
     desc: 'No timer, no rivals, no failure state. Explore the generated venue, learn an airframe, practise the gate work.',
     hasLaps: false, hasRivals: false, hasTimer: false, escalates: false, failOnDamage: false, primary: 'distance',
   },
 };
-export const MODE_ORDER = ['battle', 'endless', 'endlessrace', 'quick', 'campaign', 'survival', 'timeattack', 'free'];
+export const MODE_ORDER = ['battle', 'story', 'endless', 'endlessrace', 'quick', 'campaign', 'survival', 'timeattack', 'free'];
 
 /* ===========================================================================
  * WEAPONS
@@ -837,38 +856,64 @@ export const WEAPONS = [
    * for the same thing: a general-purpose autocannon, a fast weak minigun, a
    * slow heavy cannon that hurts, and a hitscan-fast plasma repeater. The
    * whole set cycles on one key, so switching mid-merge is a single press.
+   *
+   * REACH. Every gun now carries an explicit `range` — the distance the round
+   * is credited to cross — and `life` is derived from it against the muzzle
+   * velocity rather than being a separate number to keep in step. The ladder
+   * is FIVE TIMES what it was: at Mach 30 closure a six-kilometre gun was one
+   * second of firing window, which is why gunnery felt like it never
+   * connected. Both muzzle velocity and time of flight carry part of the
+   * increase, because range bought entirely with `life` gives you a slow round
+   * that arrives after the target has gone.
+   *
+   * ACCURACY. Dispersion is halved across the board and the hit test is a
+   * swept segment rather than a point sample, so a round travelling 90 m in a
+   * frame can no longer step straight over the fighter it was aimed at. That
+   * one fix is most of what "the guns do not hit anything" was.
    * -------------------------------------------------------------------- */
   {
     id: 'gun', name: 'Autocannon', short: 'GUN', icon: 'gun', heavy: false,
-    damage: 9, speed: 2600, life: 2.2, cooldown: 0.075, spread: 0.010,
-    guided: false, radius: 26, color: 0xfff0a8, tracer: true, barrels: 2,
-    desc: '25 mm autocannon. Balanced rate and punch.',
+    damage: 20, speed: 3400, life: 8.4, cooldown: 0.075, spread: 0.005,
+    guided: false, radius: 34, color: 0xfff0a8, tracer: true, barrels: 2,
+    range: 28000,
+    desc: '25 mm autocannon. 28 km. Balanced rate and punch.',
   },
   {
     id: 'minigun', name: 'Minigun', short: 'MIN', icon: 'gun', heavy: false,
-    damage: 4, speed: 2200, life: 1.9, cooldown: 0.030, spread: 0.019,
-    guided: false, radius: 24, color: 0xffd070, tracer: true, barrels: 2,
-    desc: 'Rotary minigun. Enormous rate, wide cone, low damage per round.',
+    damage: 9, speed: 3000, life: 7.0, cooldown: 0.030, spread: 0.010,
+    guided: false, radius: 30, color: 0xffd070, tracer: true, barrels: 2,
+    range: 21000,
+    desc: 'Rotary minigun. 21 km. Enormous rate, wide cone, low damage per round.',
   },
   {
     id: 'heavygun', name: 'Heavy Cannon', short: 'HVY', icon: 'gun', heavy: false,
-    damage: 26, speed: 3000, life: 2.6, cooldown: 0.24, spread: 0.004,
-    guided: false, radius: 32, color: 0xffa03c, tracer: true, barrels: 1,
-    desc: '40 mm cannon. Slow, tight, and it hurts.',
+    damage: 58, speed: 3900, life: 10.0, cooldown: 0.24, spread: 0.0022,
+    guided: false, radius: 42, color: 0xffa03c, tracer: true, barrels: 1,
+    range: 39000,
+    desc: '40 mm cannon. 39 km. Slow, tight, and it hurts.',
   },
   {
     id: 'plasma', name: 'Plasma Repeater', short: 'PLS', icon: 'gun', heavy: false,
-    damage: 15, speed: 4200, life: 1.6, cooldown: 0.13, spread: 0.002,
-    guided: false, radius: 30, color: 0x7ff0ff, tracer: true, barrels: 2,
-    desc: 'Charged bolts. Almost no lead required at this velocity.',
+    damage: 34, speed: 5600, life: 6.0, cooldown: 0.13, spread: 0.0011,
+    guided: false, radius: 38, color: 0x7ff0ff, tracer: true, barrels: 2,
+    range: 33000,
+    desc: 'Charged bolts. 33 km, and almost no lead required at this velocity.',
   },
   /* ---- heavy weapons ----------------------------------------------------
-   * The four heavies are a RANGE LADDER: 8 / 10 / 12 / 15 km. `range` is the
-   * launch authority — the furthest the round is credited to reach — and it is
-   * what the lock gate in combat.js measures against before it will let the
-   * weapon off the rail. `life` is then derived to match: a round that claims
-   * 15 km must still be alive when it gets there, so life ≥ range / speed with
-   * a margin for the manoeuvring a lead-pursuit intercept actually costs.
+   * The four heavies are a RANGE LADDER, now SEVEN TIMES its old length:
+   * 56 / 70 / 84 / 105 km. `range` is the launch authority — the furthest the
+   * round is credited to reach — and it is what the lock gate in combat.js
+   * measures against before it will let the weapon off the rail. `life` is
+   * then derived to match: a round that claims 105 km must still be alive when
+   * it gets there, so life >= range / speed with a margin for the manoeuvring a
+   * lead-pursuit intercept actually costs. Motor velocities are raised with the
+   * reach, or a 105 km shot is a round the target simply outruns.
+   *
+   * Damage and blast are also seven times what they were. A hit from any of
+   * these is now decisive against any airframe in the game, which is the
+   * point: at this reach a heavy is a committed, slow-reloading decision, not
+   * chip damage. Hostile-launched rounds are scaled back by
+   * `COMBAT.enemyWeaponScale` — see the note there.
    *
    * Guided rounds also carry `precision`, which tightens the terminal seeker.
    * The laser is the reference weapon: highest precision, longest reach, and
@@ -876,31 +921,31 @@ export const WEAPONS = [
    * -------------------------------------------------------------------- */
   {
     id: 'missile', name: 'Missile', short: 'MSL', icon: 'missile', heavy: true,
-    damage: 52, speed: 2050, life: 8.0, cooldown: 1.5, spread: 0,
-    guided: true, turnRate: 3.4, radius: 70, blast: 180, color: 0xff9a4a,
-    range: 8000, precision: 0.80,
-    desc: 'Heat-seeking missile. 8 km. Needs a lock.',
+    damage: 364, speed: 3400, life: 20.0, cooldown: 1.5, spread: 0,
+    guided: true, turnRate: 3.4, radius: 90, blast: 1260, color: 0xff9a4a,
+    range: 56000, precision: 0.80,
+    desc: 'Heat-seeking missile. 56 km. Needs a lock.',
   },
   {
     id: 'laser', name: 'Laser-Guided Missile', short: 'LGM', icon: 'missile', heavy: true,
-    damage: 76, speed: 2600, life: 9.0, cooldown: 2.6, spread: 0,
-    guided: true, turnRate: 6.2, radius: 66, blast: 165, color: 0x66e8ff, beam: true,
-    range: 15000, precision: 1.00,
-    desc: 'Beam-riding missile. 15 km, laser-guided precision.',
+    damage: 532, speed: 4200, life: 30.0, cooldown: 2.6, spread: 0,
+    guided: true, turnRate: 6.2, radius: 86, blast: 1155, color: 0x66e8ff, beam: true,
+    range: 105000, precision: 1.00,
+    desc: 'Beam-riding missile. 105 km, laser-guided precision.',
   },
   {
     id: 'grenade', name: 'Air Grenade', short: 'GRN', icon: 'missile', heavy: true,
-    damage: 62, speed: 1500, life: 8.0, cooldown: 1.9, spread: 0.012,
-    guided: true, turnRate: 2.2, radius: 110, blast: 320, color: 0x9dff6a,
-    range: 10000, precision: 0.62,
-    desc: 'Guided cluster charge. 10 km, widest blast on the rail.',
+    damage: 434, speed: 2600, life: 32.0, cooldown: 1.9, spread: 0.012,
+    guided: true, turnRate: 2.2, radius: 130, blast: 2240, color: 0x9dff6a,
+    range: 70000, precision: 0.62,
+    desc: 'Guided cluster charge. 70 km, widest blast on the rail.',
   },
   {
     id: 'rpg', name: 'RPG', short: 'RPG', icon: 'missile', heavy: true,
-    damage: 92, speed: 2200, life: 8.0, cooldown: 2.8, spread: 0.004,
-    guided: true, turnRate: 2.8, radius: 86, blast: 260, color: 0xff5a3c, smoke: true,
-    range: 12000, precision: 0.72,
-    desc: 'Heavy guided rocket. 12 km, enormous damage.',
+    damage: 644, speed: 3600, life: 28.0, cooldown: 2.8, spread: 0.004,
+    guided: true, turnRate: 2.8, radius: 106, blast: 1820, color: 0xff5a3c, smoke: true,
+    range: 84000, precision: 0.72,
+    desc: 'Heavy guided rocket. 84 km, enormous damage.',
   },
 ];
 export const WEAPONS_BY_ID = Object.fromEntries(WEAPONS.map((w) => [w.id, w]));
@@ -921,8 +966,8 @@ export const COMBAT = {
   lockConeDeg: 38,             // half-angle to ACQUIRE a lock
   lockHoldDeg: 62,             // half-angle to KEEP one — hysteresis
   /* The seeker has to see at least as far as the longest weapon can reach, or
-   * the 15 km round could never be launched at its own rated range. */
-  lockRange: 16000,            // m — furthest a lock will hold
+   * the 105 km round could never be launched at its own rated range. */
+  lockRange: 112000,           // m — furthest a lock will hold
   lockTime: 0.55,              // s of continuous tracking to acquire
   lockDecay: 0.8,              // how fast a broken lock bleeds away
   /* ---- gunnery ----------------------------------------------------------
@@ -930,21 +975,69 @@ export const COMBAT = {
    * closure is not a skill test, it is a lottery: the lead angle is tens of
    * degrees and changes faster than a human can track. The assist only bites
    * once the pipper is already near the target, so aiming still matters. */
-  gunAssist: 0.9,              // how far the burst is bent toward the solution
-  gunAssistDeg: 22,            // half-angle in which the assist applies at all
-  gunRange: 2400,
+  gunAssist: 0.94,             // how far the burst is bent toward the solution
+  gunAssistDeg: 26,            // half-angle in which the assist applies at all
+  /** Furthest the pipper will take a gun solution. Follows the belt's reach. */
+  gunRange: 12000,
   enemyHealth: 100,
   playerHitFlash: 0.35,
   waveInterval: 26,            // s between reinforcement waves
-  /* ---- squadron size ----------------------------------------------------
-   * The airspace holds twenty hostiles minimum in every mode that fields them.
-   * `minEnemies` is a FLOOR the director tops back up to as kills come in, not
-   * just an opening grid — so the fight never thins out into a chase. `maxEnemies`
-   * is the hard cap on live airframes, and the two are deliberately close: the
-   * pressure is meant to be constant rather than arriving in lulls and spikes.
+  /* ---- hostile weapon scaling -------------------------------------------
+   * The WEAPONS table is the PLAYER's arsenal, and it is now enormous: a
+   * single missile carries 364 damage inside a 1.26 km blast. Hostiles fire
+   * from the same table, and a squadron of a hundred aircraft each throwing
+   * kilometre-wide warheads at a 100-hull airframe is not a fight, it is a
+   * coin flip on the first merge. Rounds NOT launched by the player are scaled
+   * by this on the way in, so the player's guns and missiles hit exactly as
+   * hard as the table says while the return fire stays survivable.
    * -------------------------------------------------------------------- */
-  minEnemies: 20,
-  maxEnemies: 26,
+  enemyWeaponScale: 0.14,
+  /** Hostile splash reach, as a fraction of the round's rated blast. */
+  enemyBlastScale: 0.30,
+  /* ---- squadron size ----------------------------------------------------
+   * A HUNDRED hostiles minimum in every mode that fields them — five times the
+   * old floor. `minEnemies` is a FLOOR the director tops back up to as kills
+   * come in, not just an opening grid, so the fight never thins out into a
+   * chase. `maxEnemies` is the hard cap on live airframes, and the two are
+   * deliberately close: the pressure is meant to be constant rather than
+   * arriving in lulls and spikes.
+   *
+   * A squadron this size only works because hostiles are cheap when they are
+   * far away: they fly in path space either way, and `enemyDrawRange` decides
+   * how many of them are actually MESHES on any given frame. See the note on
+   * that value.
+   * -------------------------------------------------------------------- */
+  minEnemies: 100,
+  maxEnemies: 130,
+  /* ---- drawing a hundred aircraft ---------------------------------------
+   * The simulation is cheap: an enemy is a few dozen scalars advanced in path
+   * space. The MESH is not — six draw calls, a trail ribbon and an afterburner
+   * each. With hostiles spread 7-10 km apart most of them are far outside the
+   * distance at which a fighter is more than a pixel, so beyond this range the
+   * visual is switched off entirely while the aircraft keeps flying, keeps
+   * shooting and keeps showing on the radar. The count on the HUD is the real
+   * count; the draw call budget is not.
+   * -------------------------------------------------------------------- */
+  enemyDrawRange: 26000,       // m — beyond this a hostile is simulated, not drawn
+  enemyDrawBudget: 28,         // hard cap on hostile meshes drawn at once
+  /* ---- keeping them apart -----------------------------------------------
+   * Spawning a squadron seven kilometres apart is not the same as KEEPING it
+   * seven kilometres apart: every hostile is pursuing the same aircraft, so
+   * without a separation term the whole wing converges on the player's offsets
+   * and arrives as one saturated blob — which is the thing the spread exists
+   * to prevent. Each fighter therefore pushes off any neighbour closer than
+   * `spreadMin` and stops caring past `spreadMax`, so the squadron settles
+   * into the 7-10 km lattice the brief asks for while still hunting.
+   *
+   * The check is strided rather than exhaustive: a hundred aircraft each
+   * testing ninety-nine neighbours every frame is ten thousand distance
+   * computations for a force that changes slowly. `spreadSamples` peers per
+   * frame, on a rotating offset, converges to the same lattice.
+   * -------------------------------------------------------------------- */
+  spreadMin: 7000,             // m — closer than this and they push apart
+  spreadMax: 10000,            // m — past this a neighbour is not a neighbour
+  spreadForce: 2.2,            // how hard the push is, in offset metres/second
+  spreadSamples: 14,           // peers each fighter checks per frame
   /** Seconds after a kill before that slot is refilled. */
   respawnDelay: 3.5,
   /* ---- approach geometry ------------------------------------------------
@@ -959,6 +1052,392 @@ export const COMBAT = {
     0x9b5cff, 0x00d6c4, 0xd63a3a, 0xc9d2dc,
   ],
 };
+
+
+/* ===========================================================================
+ * STORY MODE
+ * ------------------------------------------------------------------------
+ * Fifteen missions, in three acts, flown in order. This is the only mode with
+ * a fixed shape: every other mode in the game is a generator with a scoreboard
+ * attached, and none of them can build a sortie that ESCALATES — that opens
+ * quietly, turns, and finishes somewhere you did not expect to be.
+ *
+ * HOW A MISSION IS BUILT
+ *
+ * A mission is a list of PHASES flown back to back without a loading screen.
+ * Each phase is one measurable goal against the same `metrics` object every
+ * other mode already fills in, so nothing here needs a bespoke tracker:
+ *
+ *   kills       hostiles destroyed          time      seconds survived
+ *   distance    metres flown                machTime  seconds held above blur Mach
+ *   manoeuvres  named manoeuvres flown      rolls     full-axis rolls
+ *   turns       hard turns                  loops     loops and flips
+ *   nearMisses  close passes on structures  topMach   highest Mach reached
+ *
+ * Phase goals are CUMULATIVE within a mission — a phase that asks for 40 kills
+ * after one that asked for 25 wants 40 total, not 65 more — because that is
+ * what the HUD can honestly show as one bar filling.
+ *
+ * LENGTH. The brief is 25-30 minutes per mission and the numbers below are
+ * sized for it rather than guessed. At the tuning point the game ships with, a
+ * competent pilot in the middle of a hundred-ship squadron kills roughly one
+ * hostile every 12-16 seconds once the merge has developed, and covers about
+ * 2 km/s at cruise. A five-phase mission asking for 90 kills is therefore
+ * something like twenty minutes of fighting plus the transit and survival
+ * phases around it. `estMinutes` records the intent so the menu can state it
+ * and so anyone retuning the numbers can see what they were aimed at.
+ *
+ * DIFFICULTY comes from three places, and all three climb across the fifteen:
+ * the difficulty preset (rival skill, damage, weather severity), the venue
+ * (Emerald Delta is forgiving, Neon Megacity is not), and `pressure` — a
+ * multiplier on the squadron floor, so late missions genuinely put more
+ * airframes in the sky rather than the same fight with bigger numbers on it.
+ * ======================================================================== */
+
+/** One phase of a mission. `text` is what the HUD shows while it is live. */
+const P = (id, text, metric, value, hint = '') => ({ id, text, metric, value, hint });
+
+export const STORY = [
+  /* ================= ACT I — THE DELTA ==================================
+   * Learning the aircraft and the war, over the friendliest airspace on the
+   * circuit. The threat is real from the first mission but the sky is wide,
+   * the weather is clear and the ground is a long way down.
+   * =================================================================== */
+  {
+    id: 1, act: 1, actName: 'THE DELTA', name: 'FIRST LIGHT',
+    biome: 'forest', weather: 'sunrise', time: 'sunrise', diff: 'normal',
+    pressure: 0.55, reward: 2400, estMinutes: 26,
+    tagline: 'A patrol that stopped answering.',
+    situation: 'Delta Control lost contact with the dawn patrol ninety minutes ago, somewhere over the eastern channel beds. You are the nearest airframe. Go and find out what happened to them.',
+    intel: 'Expect nothing. That is what the last three sorties expected.',
+    orders: 'Fly the channel, hold the airspace when it turns, and come home.',
+    phases: [
+      P(1, 'Fly the eastern channel and make contact', 'distance', 26000,
+        'Hold the throttle up. The beds run east — follow them.'),
+      P(2, 'Engage the hostiles that find you', 'kills', 18,
+        'Left mouse is guns. Right mouse launches, and needs a lock first.'),
+      P(3, 'Hold the airspace for four minutes', 'time', 600,
+        'They will keep coming. Keep your hull.'),
+      P(4, 'Break the first wing — 45 confirmed', 'kills', 45,
+        'Use the missiles. At this reach you can kill before the merge.'),
+      P(5, 'Clear the channel — 70 confirmed', 'kills', 70,
+        'Finish it. Nothing hostile leaves the beds.'),
+    ],
+  },
+  {
+    id: 2, act: 1, actName: 'THE DELTA', name: 'THE TERRACES',
+    biome: 'forest', weather: 'overcast', time: 'morning', diff: 'normal',
+    pressure: 0.70, reward: 3000, estMinutes: 27,
+    tagline: 'They are not raiding. They are surveying.',
+    situation: 'The wreck you found was not shot down in a dogfight — it was shot down from behind, at range, by something that knew exactly where it would be. Somebody is mapping this valley.',
+    intel: 'Hostile flights are working the terrace viaducts in spread pairs. They break the moment they are engaged.',
+    orders: 'Work the terraces. Do not let a single flight finish its run.',
+    phases: [
+      P(1, 'Reach the terrace viaducts', 'distance', 22000,
+        'The viaducts are the tall structures on the hill shoulders.'),
+      P(2, 'Break up the survey flights — 30 confirmed', 'kills', 30,
+        'Kill the leader and the rest scatter. Take them while they are scattered.'),
+      P(3, 'Fly 12 hard manoeuvres while engaged', 'manoeuvres', 12,
+        'Q and E roll the airframe. A and D bank it. Both count.'),
+      P(4, 'Survive the response — six minutes', 'time', 900,
+        'They know you are here now.'),
+      P(5, 'Clear the terraces — 75 confirmed', 'kills', 75,
+        'All of them.'),
+    ],
+  },
+  {
+    id: 3, act: 1, actName: 'THE DELTA', name: 'HOLLOW VALE',
+    biome: 'village', weather: 'goldenHour', time: 'goldenHour', diff: 'normal',
+    pressure: 0.85, reward: 3600, estMinutes: 28,
+    tagline: 'Low, slow, and over somebody\'s house.',
+    situation: 'The survey flights were mapping approach lanes into the Vale. Whatever is coming, it is coming through farmland, and there are people underneath it.',
+    intel: 'You will be fighting low. The ground is close and it does not move.',
+    orders: 'Hold the Vale. Stay off the ground while you do it.',
+    phases: [
+      P(1, 'Take up station over the Vale', 'distance', 18000,
+        'The windmill ridge is the marker.'),
+      P(2, 'Intercept the first push — 25 confirmed', 'kills', 25,
+        'They are coming in low. Look down.'),
+      P(3, 'Thread 20 close passes on the structures', 'nearMisses', 20,
+        'Fly close to the buildings without touching them. Close is the point.'),
+      P(4, 'Hold for six minutes', 'time', 900,
+        'Do not chase them out of the valley. Hold.'),
+      P(5, 'Break the push — 80 confirmed', 'kills', 80,
+        'Send the rest home without an aircraft.'),
+    ],
+  },
+  {
+    id: 4, act: 1, actName: 'THE DELTA', name: 'THE LONG CHASE',
+    biome: 'desert', weather: 'brightSun', time: 'noon', diff: 'hard',
+    pressure: 0.95, reward: 4400, estMinutes: 29,
+    tagline: 'One of them ran. Follow it.',
+    situation: 'A single hostile broke off west across the Ashfall Flats at full reheat. It is going somewhere. Follow it, and try not to lose it in the dust.',
+    intel: 'Nothing out there but mesa and wadi. Sightlines are enormous, and so are theirs.',
+    orders: 'Stay with it. Whatever it leads you to, engage.',
+    phases: [
+      P(1, 'Run it down — 60 km across the flats', 'distance', 60000,
+        'Nitrous is Space. Turbo Speed on NUM 2 doubles it.'),
+      P(2, 'Hold Mach 22 or better for two minutes', 'machTime', 120,
+        'Keep the throttle up. Watch the heat above Mach 24.'),
+      P(3, 'Engage what it led you to — 35 confirmed', 'kills', 35,
+        'That is a lot more than one aircraft.'),
+      P(4, 'Survive the ambush — five minutes', 'time', 780,
+        'They knew you were following. Of course they did.'),
+      P(5, 'Fight clear — 85 confirmed', 'kills', 85,
+        'Out the other side.'),
+    ],
+  },
+  {
+    id: 5, act: 1, actName: 'THE DELTA', name: 'ASHFALL',
+    biome: 'desert', weather: 'dustStorm', time: 'afternoon', diff: 'hard',
+    pressure: 1.10, reward: 5200, estMinutes: 30,
+    tagline: 'A staging field, and a storm on top of it.',
+    situation: 'The chase ended at a dispersal field under a rolling dust front. This is where the survey flights were coming from. Take it apart before the storm closes it to you as well.',
+    intel: 'Visibility will be almost nothing. Your radar is not affected. Use it.',
+    orders: 'Destroy the field\'s air cover. Act One ends here.',
+    phases: [
+      P(1, 'Penetrate the dust front', 'distance', 24000,
+        'Fly the instruments. The radar is bottom left.'),
+      P(2, 'Suppress the alert flight — 30 confirmed', 'kills', 30,
+        'They are already airborne.'),
+      P(3, 'Fly 18 manoeuvres inside the storm', 'manoeuvres', 18,
+        'Turbulence is worse in here. Fly through it.'),
+      P(4, 'Hold the field for eight minutes', 'time', 1140,
+        'The whole base is scrambling now.'),
+      P(5, 'Destroy the air cover — 95 confirmed', 'kills', 95,
+        'Every airframe on this field.'),
+    ],
+  },
+
+  /* ================= ACT II — THE HIGH GROUND ============================
+   * The war stops being a mystery and becomes a campaign. Harder venues,
+   * worse weather, and a squadron that has clearly been told about you.
+   * =================================================================== */
+  {
+    id: 6, act: 2, actName: 'THE HIGH GROUND', name: 'THE CANOPY',
+    biome: 'jungle', weather: 'fogBank', time: 'morning', diff: 'hard',
+    pressure: 1.20, reward: 6000, estMinutes: 28,
+    tagline: 'Karst towers, fog, and no horizon.',
+    situation: 'The dispersal field was resupplied from the Verdant Canopy. The route runs between limestone towers a wingspan apart, under cloud that sits on the deck all morning.',
+    intel: 'The towers are solid and they are taller than you think. The gaps between them are real.',
+    orders: 'Follow the supply route through the karst and cut it.',
+    phases: [
+      P(1, 'Enter the karst field', 'distance', 20000,
+        'Between the towers, not over them. Over them is where they are watching.'),
+      P(2, 'Thread 30 close passes between the towers', 'nearMisses', 30,
+        'Arches and gaps are flyable. Solid rock is not.'),
+      P(3, 'Cut the supply flights — 40 confirmed', 'kills', 40,
+        'They cannot manoeuvre in here either.'),
+      P(4, 'Hold the route for seven minutes', 'time', 1020,
+        'Nothing gets through.'),
+      P(5, 'Close the route — 90 confirmed', 'kills', 90,
+        'Permanently.'),
+    ],
+  },
+  {
+    id: 7, act: 2, actName: 'THE HIGH GROUND', name: 'SILT AND SALT',
+    biome: 'mudwater', weather: 'clear', time: 'afternoon', diff: 'hard',
+    pressure: 1.30, reward: 6800, estMinutes: 29,
+    tagline: 'Nowhere to hide on a floor this flat.',
+    situation: 'Their forward radar sits on the Silt Pans, strung along the old barrage walls. Flat ground, no relief, no cover, and a horizon that goes on forever in every direction.',
+    intel: 'You will be visible from the moment you arrive. So will they.',
+    orders: 'Break the radar picket and everything defending it.',
+    phases: [
+      P(1, 'Cross the pans to the barrage line', 'distance', 30000,
+        'Stay low. It will not help, but stay low anyway.'),
+      P(2, 'Break the picket — 35 confirmed', 'kills', 35,
+        'Long-range work. The laser round reaches 105 km.'),
+      P(3, 'Hold Mach 22 for three minutes under fire', 'machTime', 180,
+        'Speed is the only cover out here.'),
+      P(4, 'Survive the counter-sweep — eight minutes', 'time', 1140,
+        'They have nothing else to do today.'),
+      P(5, 'Clear the pans — 100 confirmed', 'kills', 100,
+        'Leave nothing on this floor.'),
+    ],
+  },
+  {
+    id: 8, act: 2, actName: 'THE HIGH GROUND', name: 'WHITE SILENCE',
+    biome: 'ice', weather: 'heavySnow', time: 'noon', diff: 'elite',
+    pressure: 1.40, reward: 8000, estMinutes: 30,
+    tagline: 'The only cold place on the circuit, and they chose it.',
+    situation: 'Glacier Reach. A whiteout, a shelf wall a kilometre high, and a hostile wing that has been waiting up here since before any of this started.',
+    intel: 'Whiteout means whiteout. You will see the ice when you are on it.',
+    orders: 'Find the wing and destroy it. All of it.',
+    phases: [
+      P(1, 'Reach the shelf wall', 'distance', 26000,
+        'The wall runs across your track. Do not fly into it.'),
+      P(2, 'First contact — 30 confirmed', 'kills', 30,
+        'They are above you. They are always above you up here.'),
+      P(3, 'Fly 12 full-axis rolls in the engagement', 'rolls', 12,
+        'Q and E. All the way round, both times.'),
+      P(4, 'Hold the shelf for nine minutes', 'time', 1320,
+        'Watch your hull. Nothing regenerates.'),
+      P(5, 'Destroy the wing — 105 confirmed', 'kills', 105,
+        'This is the one that has been killing patrols.'),
+    ],
+  },
+  {
+    id: 9, act: 2, actName: 'THE HIGH GROUND', name: 'TITAN PASS',
+    biome: 'mountain', weather: 'fog', time: 'morning', diff: 'elite',
+    pressure: 1.50, reward: 9200, estMinutes: 30,
+    tagline: 'A pass barely wider than a wingspan.',
+    situation: 'Their reinforcement route crosses the Titan Range through a single pass. Two and a half kilometres of vertical relief on both sides and fog filling the bottom of it.',
+    intel: 'The pass is flyable. The mountain is not. There is no third option.',
+    orders: 'Hold the pass. Nothing crosses it while you are alive.',
+    phases: [
+      P(1, 'Climb to the pass', 'distance', 24000,
+        'Up. Then keep going up.'),
+      P(2, 'Meet the first crossing — 35 confirmed', 'kills', 35,
+        'They will come through in trail. Take the queue apart.'),
+      P(3, 'Thread 35 close passes in the pass itself', 'nearMisses', 35,
+        'The walls are the difficulty here, not the enemy.'),
+      P(4, 'Hold the pass for nine minutes', 'time', 1320,
+        'They cannot go round.'),
+      P(5, 'Close the pass — 110 confirmed', 'kills', 110,
+        'Close it.'),
+    ],
+  },
+  {
+    id: 10, act: 2, actName: 'THE HIGH GROUND', name: 'THE CITADEL',
+    biome: 'fortress', weather: 'thunderstorm', time: 'dusk', diff: 'elite',
+    pressure: 1.65, reward: 11000, estMinutes: 30,
+    tagline: 'The oldest venue on the circuit, at its worst.',
+    situation: 'Everything you have destroyed since the Delta was staged out of Citadel Siege. The curtain walls are eight hundred years old, the storm sitting on them is the only weather on this circuit that can hurt you, and the wing inside is their best.',
+    intel: 'Lightning, wind shear and flying debris. The storm is a participant.',
+    orders: 'Break the Citadel wing. Act Two ends here.',
+    phases: [
+      P(1, 'Fight into the storm cell', 'distance', 22000,
+        'It gets worse the further in you go.'),
+      P(2, 'Engage the curtain wall flights — 40 confirmed', 'kills', 40,
+        'They know the gaps in the stonework. You do not, yet.'),
+      P(3, 'Fly 25 manoeuvres inside the cell', 'manoeuvres', 25,
+        'Rolls, loops, hard turns. All of them count.'),
+      P(4, 'Hold inside the walls for ten minutes', 'time', 1500,
+        'This is their ground and they are not leaving it.'),
+      P(5, 'Break the wing — 120 confirmed', 'kills', 120,
+        'Then get out before the storm closes.'),
+    ],
+  },
+
+  /* ================= ACT III — TERMINAL VELOCITY =========================
+   * The last five. Maximum difficulty, maximum pressure, and the fights
+   * finally happen at the top of the envelope where the airframe was always
+   * meant to live.
+   * =================================================================== */
+  {
+    id: 11, act: 3, actName: 'TERMINAL VELOCITY', name: 'MERIDIAN',
+    biome: 'city', weather: 'sunset', time: 'sunset', diff: 'master',
+    pressure: 1.80, reward: 13000, estMinutes: 29,
+    tagline: 'The line runs between the buildings, not above them.',
+    situation: 'They have reached Meridian Sprawl. Twelve million people underneath a fight that is now happening at Mach 25 between glass towers.',
+    intel: 'Twin-tower pairs have a plaza between them wide enough to fly through. Most other things do not.',
+    orders: 'Clear the sprawl. Keep it between the towers.',
+    phases: [
+      P(1, 'Enter the downtown corridor', 'distance', 20000,
+        'Down among them. Height is what they are watching for.'),
+      P(2, 'Break the first sweep — 40 confirmed', 'kills', 40,
+        'Use the buildings. They will not follow you through a gap.'),
+      P(3, 'Thread 40 close passes between the towers', 'nearMisses', 40,
+        'The gaps are real. The glass is not a suggestion.'),
+      P(4, 'Hold the sprawl for ten minutes', 'time', 1500,
+        'Every airframe they have left is coming here.'),
+      P(5, 'Clear the sprawl — 125 confirmed', 'kills', 125,
+        'Over the city. Do it cleanly.'),
+    ],
+  },
+  {
+    id: 12, act: 3, actName: 'TERMINAL VELOCITY', name: 'REDLINE',
+    biome: 'desert', weather: 'goldenHour', time: 'goldenHour', diff: 'master',
+    pressure: 1.90, reward: 14500, estMinutes: 28,
+    tagline: 'Above Mach 24 the engine is on a clock.',
+    situation: 'Their last transport wing is running for open airspace at the top of its envelope. You cannot catch it without going past the redline, and past the redline you have sixty seconds before the engine lets go.',
+    intel: 'Mach 24 is the thermal limit. Backing off cools it — slowly. Budget it.',
+    orders: 'Catch the wing. Spend the heat carefully.',
+    phases: [
+      P(1, 'Open the pursuit — 80 km', 'distance', 80000,
+        'Turbo Speed doubles the nitrous. NUM 2.'),
+      P(2, 'Hold Mach 22 or better for five minutes', 'machTime', 300,
+        'This is the phase the engine hates.'),
+      P(3, 'Reach Mach 29', 'topMach', 29,
+        'The ceiling is Mach 30. Go and touch it.'),
+      P(4, 'Destroy the escort — 60 confirmed', 'kills', 60,
+        'They are as fast as you are. They cannot turn like you.'),
+      P(5, 'Destroy the wing — 115 confirmed', 'kills', 115,
+        'Nothing lands.'),
+    ],
+  },
+  {
+    id: 13, act: 3, actName: 'TERMINAL VELOCITY', name: 'NIGHT OVER NEON',
+    biome: 'neon', weather: 'neonNight', time: 'night', diff: 'master',
+    pressure: 2.00, reward: 16000, estMinutes: 30,
+    tagline: 'Every surface is a light source and every reflection lies.',
+    situation: 'Neon Megacity, at night, in the rain of light that passes for weather here. Their command element is somewhere in the middle of it and is not going to announce itself.',
+    intel: 'You will not be able to trust your eyes. Trust the radar and the lock tone.',
+    orders: 'Find the command element. Destroy everything around it first.',
+    phases: [
+      P(1, 'Enter the neon grid', 'distance', 22000,
+        'Follow the arterials. They glow for a reason.'),
+      P(2, 'Strip the escort — 45 confirmed', 'kills', 45,
+        'The command element does not fly without one.'),
+      P(3, 'Fly 20 full-axis rolls in the grid', 'rolls', 20,
+        'Rolling is how you break a lock in here.'),
+      P(4, 'Hold the grid for eleven minutes', 'time', 1620,
+        'They will spend everything to protect this.'),
+      P(5, 'Destroy the command element — 130 confirmed', 'kills', 130,
+        'It is in there. Take the rest apart until it is not.'),
+    ],
+  },
+  {
+    id: 14, act: 3, actName: 'TERMINAL VELOCITY', name: 'THE LAST FIELD',
+    biome: 'fortress', weather: 'storm', time: 'dawn', diff: 'legendary',
+    pressure: 2.15, reward: 19000, estMinutes: 30,
+    tagline: 'Everything they have left, in one place.',
+    situation: 'What is left of their air arm has consolidated back at the Citadel. Every airframe that survived the Delta, the Canopy, the Pans, the Reach, the Pass, Meridian and Neon is on that field or above it.',
+    intel: 'There is no clever way to do this one.',
+    orders: 'Destroy it.',
+    phases: [
+      P(1, 'Fight your way in', 'distance', 24000,
+        'They are expecting you this time.'),
+      P(2, 'Break the outer screen — 45 confirmed', 'kills', 45,
+        'The screen is thick. Go through it, not round.'),
+      P(3, 'Fly 30 manoeuvres in the fight', 'manoeuvres', 30,
+        'Everything you have learned.'),
+      P(4, 'Hold over the field for twelve minutes', 'time', 1740,
+        'The longest hold of the war.'),
+      P(5, 'Destroy the air arm — 140 confirmed', 'kills', 140,
+        'All of it.'),
+    ],
+  },
+  {
+    id: 15, act: 3, actName: 'TERMINAL VELOCITY', name: 'ALPHA',
+    biome: 'neon', weather: 'darkClouds', time: 'night', diff: 'legendary',
+    pressure: 2.35, reward: 30000, estMinutes: 30,
+    tagline: 'The last one. Everything, at the top of the envelope.',
+    situation: 'One airframe left on their side, and it is the same class as yours. Same ceiling, same reheat, same reach. It has been flying against you since the Delta and it has learned everything you did.',
+    intel: 'It will reverse onto you. It will roll out of your gun solution. It will not make a mistake.',
+    orders: 'End it.',
+    phases: [
+      P(1, 'Make the merge', 'distance', 18000,
+        'It is coming to you. Do not turn early.'),
+      P(2, 'Survive the first pass — 40 confirmed', 'kills', 40,
+        'It did not come alone.'),
+      P(3, 'Reach Mach 30', 'topMach', 30,
+        'The ceiling. Nothing above this.'),
+      P(4, 'Hold for twelve minutes', 'time', 1740,
+        'It is waiting for your hull to run out.'),
+      P(5, 'Finish it — 150 confirmed', 'kills', 150,
+        'Everything, at the top of the envelope.'),
+    ],
+  },
+];
+
+export const STORY_BY_ID = Object.fromEntries(STORY.map((m) => [m.id, m]));
+/** The three acts, for the menu's section headers. */
+export const STORY_ACTS = [
+  { act: 1, name: 'THE DELTA', desc: 'Learning the aircraft, and the war.' },
+  { act: 2, name: 'THE HIGH GROUND', desc: 'It stops being a mystery and becomes a campaign.' },
+  { act: 3, name: 'TERMINAL VELOCITY', desc: 'The last five, at the top of the envelope.' },
+];
 
 /* ===========================================================================
  * CAMPAIGN
@@ -1030,6 +1509,9 @@ export const ACHIEVEMENTS = [
   { id: 'legend',      name: 'Legend',             desc: 'Win a race on Legendary difficulty.',            check: (s) => s.legendaryWins >= 1,         reward: 6000 },
   { id: 'collector',   name: 'Hangar Complete',    desc: 'Unlock every airframe.',                         check: (s, save) => AIRCRAFT.every((a) => a.unlock.type === 'default' || (save.unlocked || []).includes(a.id)), reward: 5000 },
   { id: 'champion',    name: 'Circuit Champion',   desc: 'Complete the campaign.',                         check: (s, save) => (save.campaignProgress || 0) >= CAMPAIGN.length, reward: 10000 },
+  { id: 'actone',      name: 'The Delta',          desc: 'Clear Act I of Story Mode.',                     check: (s, save) => (save.storyProgress || 0) >= 5,  reward: 4000 },
+  { id: 'acttwo',      name: 'The High Ground',    desc: 'Clear Act II of Story Mode.',                    check: (s, save) => (save.storyProgress || 0) >= 10, reward: 9000 },
+  { id: 'storydone',   name: 'Terminal Velocity',  desc: 'Clear all fifteen Story missions.',              check: (s, save) => (save.storyProgress || 0) >= STORY.length, reward: 25000 },
 ];
 
 /* ===========================================================================
@@ -1182,6 +1664,8 @@ export const DEFAULT_SAVE = {
   unlocked: ['raptor', 'falcon'],
   selectedAircraft: 'raptor',
   selectedMode: 'battle',
+  /** Highest story mission cleared. 0 means only mission 1 is available. */
+  storyProgress: 0,
   selectedDifficulty: 'elite',
   selectedLocation: 'forest',
   /* `random` is not a weather state — it is the instruction to draw one from

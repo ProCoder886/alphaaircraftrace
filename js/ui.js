@@ -12,6 +12,7 @@
 import {
   AIRCRAFT, AIRCRAFT_BY_ID, BIOMES, BIOMES_BY_ID, MODES, MODE_ORDER,
   DIFFICULTIES, DIFFICULTY_ORDER, POWERS, WEATHER, WEATHER_MENU, CAMPAIGN, ACHIEVEMENTS,
+  STORY, STORY_BY_ID, STORY_ACTS, LOCATIONS_BY_ID,
   QUALITY_ORDER, QUALITY_PRESETS, BINDING_LABELS, DEFAULT_BINDINGS, TIPS,
   CONTROL_GROUPS, MACH, WEAPONS, GAME_NAME, VERSION, clamp, clamp01, lerp, TAU,
 } from './config.js';
@@ -263,6 +264,12 @@ export class UI {
       cbtHostiles: $('#cbt-hostiles'),
       brief: $('#hud-brief'),
       controls: $('#hud-controls'),
+      brief2: $('#mission-brief'),
+      objHint: $('#obj-hint'),
+      storyStrip: $('#story-strip'),
+      storyMission: $('#story-mission'),
+      storyPhase: $('#story-phase'),
+      storyPips: $('#story-pips'),
       dialFlight: $('#dial-flight'),
       dialCombat: $('#dial-combat'),
       lockRange: $('#lock-range'),
@@ -301,7 +308,7 @@ export class UI {
   showScreen(name) {
     const map = {
       loading: this.dom.loading, onboarding: this.dom.onboarding,
-      menu: this.dom.menu, pause: this.dom.pause,
+      menu: this.dom.menu, pause: this.dom.pause, brief: this.dom.brief2,
       results: this.dom.results, overlay: this.dom.overlay, none: null,
     };
     for (const [k, node] of Object.entries(map)) {
@@ -516,7 +523,8 @@ export class UI {
       ['play', 'Play', ICONS.play], ['mode', 'Game Mode', ICONS.mode],
       ['difficulty', 'Difficulty', ICONS.diff], ['location', 'Location', ICONS.loc],
       ['weather', 'Weather', ICONS.wx],
-      ['aircraft', 'Aircraft', ICONS.craft], ['campaign', 'Campaign', ICONS.camp],
+      ['aircraft', 'Aircraft', ICONS.craft],
+      ['story', 'Story Mode', ICONS.camp], ['campaign', 'Campaign', ICONS.camp],
       ['daily', 'Daily Challenge', ICONS.daily], ['achievements', 'Achievements', ICONS.ach],
       ['stats', 'Statistics', ICONS.stats], ['settings', 'Settings', ICONS.set],
       ['howto', 'How To Play', ICONS.help], ['credits', 'Credits', ICONS.cred],
@@ -562,6 +570,7 @@ export class UI {
       case 'location': p.innerHTML = this._panelLocation(); break;
       case 'weather': p.innerHTML = this._panelWeather(); break;
       case 'aircraft': p.innerHTML = this._panelAircraft(); break;
+      case 'story': p.innerHTML = this._panelStory(); break;
       case 'campaign': p.innerHTML = this._panelCampaign(); break;
       case 'daily': p.innerHTML = this._panelDaily(); break;
       case 'achievements': p.innerHTML = this._panelAchievements(); break;
@@ -876,6 +885,40 @@ export class UI {
       <div class="card-grid" style="grid-template-columns:1fr;gap:9px">${rows}</div>`;
   }
 
+  _panelStory() {
+    const s = this.save.data;
+    const prog = s.storyProgress || 0;
+    const acts = STORY_ACTS.map((a) => {
+      const rows = STORY.filter((m) => m.act === a.act).map((m) => {
+        const cleared = m.id <= prog;
+        const locked = m.id > prog + 1;
+        const b = BIOMES_BY_ID[m.biome];
+        return `<div class="chapter${cleared ? ' cleared' : ''}${locked ? ' locked' : ''}" ${locked ? '' : `data-mission="${m.id}"`}>
+          <div class="chapter-num">${cleared ? '✓' : String(m.id).padStart(2, '0')}</div>
+          <div class="chapter-body">
+            <b>${m.name}</b>
+            <span>${m.tagline}</span>
+            <div class="chapter-meta">
+              <span class="daily-pill">${b ? b.short : m.biome}</span>
+              <span class="daily-pill">${WEATHER[m.weather]?.name || m.weather}</span>
+              <span class="daily-pill">${DIFFICULTIES[m.diff].name}</span>
+              <span class="daily-pill">${m.phases.length} PHASES</span>
+              <span class="daily-pill hot">~${m.estMinutes} MIN</span>
+            </div>
+          </div>
+          <div class="chapter-reward">${nf(m.reward)} ◈</div>
+        </div>`;
+      }).join('');
+      return `<div class="act-block">
+        <div class="act-head"><b>ACT ${['I', 'II', 'III'][a.act - 1]} · ${a.name}</b><span>${a.desc}</span></div>
+        <div class="card-grid" style="grid-template-columns:1fr;gap:9px">${rows}</div>
+      </div>`;
+    }).join('');
+    return `${this._head('STORY MODE',
+      `Fifteen missions in three acts, flown in order. Each one is a full half-hour sortie with five phases and its own briefing. ${prog} of ${STORY.length} cleared.`)}
+      ${acts}`;
+  }
+
   _panelDaily() {
     const d = this.callbacks.getDaily?.();
     if (!d) return this._head('DAILY CHALLENGE', 'Unavailable.');
@@ -1032,6 +1075,11 @@ export class UI {
       this._renderMenuPanel();
     });
     pick('[data-chapter]', (n) => this.callbacks.onLaunchCampaign?.(+n.dataset.chapter));
+    // A Story mission opens its briefing first; the briefing launches it.
+    pick('[data-mission]', (n) => {
+      const m = STORY_BY_ID[+n.dataset.mission];
+      if (m) this.showMissionBrief(m, this.save.data.storyProgress || 0);
+    });
     pick('[data-daily]', () => this.callbacks.onLaunchDaily?.());
     pick('[data-reset]', () => {
       if (confirm('Reset all progress, unlocks, records and settings? This cannot be undone.')) {
@@ -1909,6 +1957,12 @@ export class UI {
     click('#ob-skip', () => { this.audio.ui('back'); this.callbacks.onOnboardingDone?.(); });
     click('#btn-launch', () => { this.audio.ui('confirm'); this.callbacks.onLaunch?.(); });
     click('#btn-hud-hide', () => this.toggleHudChrome());
+    click('#brief-launch', () => {
+      this.audio.ui('confirm');
+      const m = this._briefMission;
+      if (m) this.callbacks.onLaunchStory?.(m.id);
+    });
+    click('#brief-back', () => { this.audio.ui('back'); this.showScreen('menu'); });
     click('#dial-flight', () => this.togglePanel('flight'));
     click('#dial-combat', () => this.togglePanel('combat'));
     // Camera zoom. Repeats while held so dragging the framing in is one press
@@ -2047,6 +2101,90 @@ export class UI {
     const portrait = window.innerHeight > window.innerWidth;
     // Portrait on a touch device is never playable, whatever the width.
     this.dom.orientation.classList.toggle('show', this.device.isTouch && portrait);
+  }
+
+  /* =====================================================================
+   * STORY MODE
+   * ================================================================== */
+
+  /**
+   * Mission briefing. Shown before every Story launch, never skipped.
+   *
+   * A mission runs about half an hour and its five phases have to be flown in
+   * order, so arriving in one without knowing what it wants is not a challenge
+   * — it is half an hour spent finding out. The briefing states the situation,
+   * the intelligence, the orders and every phase up front, and the player
+   * launches from it rather than from the main menu.
+   */
+  showMissionBrief(m, progress = 0) {
+    const cleared = progress >= m.id;
+    $('#brief-act').textContent = `ACT ${['I', 'II', 'III'][m.act - 1]} · ${m.actName}`;
+    $('#brief-no').textContent = String(m.id).padStart(2, '0');
+    $('#brief-name').textContent = m.name;
+    $('#brief-tagline').textContent = m.tagline;
+    $('#brief-situation').textContent = m.situation;
+    $('#brief-intel').textContent = m.intel;
+    $('#brief-orders').textContent = m.orders;
+
+    const list = $('#brief-phases');
+    list.innerHTML = m.phases.map((ph) => `
+      <li class="brief-phase">
+        <b>${ph.text}</b>
+        ${ph.hint ? `<i>${ph.hint}</i>` : ''}
+      </li>`).join('');
+
+    const loc = LOCATIONS_BY_ID[m.biome];
+    $('#brief-facts').innerHTML = `
+      <div class="fact"><i>VENUE</i><b>${loc ? loc.name : m.biome}</b></div>
+      <div class="fact"><i>WEATHER</i><b>${WEATHER[m.weather]?.name || m.weather}</b></div>
+      <div class="fact"><i>DIFFICULTY</i><b>${DIFFICULTIES[m.diff]?.name || m.diff}</b></div>
+      <div class="fact"><i>EST. LENGTH</i><b>${m.estMinutes} min</b></div>
+      <div class="fact"><i>SQUADRON</i><b>×${m.pressure.toFixed(2)} pressure</b></div>
+      <div class="fact"><i>REWARD</i><b>◈ ${m.reward.toLocaleString()}</b></div>`;
+
+    $('#brief-sub').textContent = cleared
+      ? `Mission ${m.id} · already cleared · ${m.phases.length} phases`
+      : `Mission ${m.id} of 15 · ${m.phases.length} phases · ~${m.estMinutes} minutes`;
+    this._briefMission = m;
+    this.showScreen('brief');
+  }
+
+  /** The how-to line for the live phase. Empty clears it. */
+  setStoryHint(text) {
+    const n = this.dom.objHint;
+    if (!n) return;
+    n.textContent = text || '';
+    n.classList.toggle('show', !!text);
+  }
+
+  /**
+   * The phase banner: which mission, which phase, and how many are left. Lives
+   * outside the objective card so closing that panel does not lose the one
+   * thing a half-hour mission needs permanently on screen.
+   */
+  setStoryPhase(mission, index, total) {
+    const strip = this.dom.storyStrip;
+    if (!strip) return;
+    if (!mission) { strip.classList.remove('show'); this._storyKey = null; return; }
+    // Called every frame from the phase machine; the content changes about
+    // five times in half an hour, so nothing is written unless it changed.
+    const key = `${mission.id}:${index}:${total}`;
+    if (key === this._storyKey) return;
+    this._storyKey = key;
+    strip.classList.add('show');
+    this.dom.storyMission.textContent = `M${String(mission.id).padStart(2, '0')} · ${mission.name}`;
+    this.dom.storyPhase.textContent = `PHASE ${Math.min(index + 1, total)} / ${total}`;
+    if (this._storyPips !== total) {
+      this._storyPips = total;
+      this.dom.storyPips.innerHTML = Array.from({ length: total }, () => '<i></i>').join('');
+    }
+    const pips = this.dom.storyPips.children;
+    for (let i = 0; i < pips.length; i++) pips[i].className = i < index ? 'done' : i === index ? 'live' : '';
+  }
+
+  clearStoryHud() {
+    this.setStoryHint('');
+    this.dom.storyStrip?.classList.remove('show');
   }
 
   /* =====================================================================
