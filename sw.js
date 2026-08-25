@@ -14,7 +14,7 @@
  * Bump CACHE_VERSION whenever the shipped files change.
  */
 
-const CACHE_VERSION = 'alpha-aircraft-race-3d-v3';
+const CACHE_VERSION = 'alpha-aircraft-race-3d-v4';
 const SHELL = [
   './',
   './index.html',
@@ -29,7 +29,9 @@ const SHELL = [
   './js/renderer.js',
   './js/player.js',
   './js/world.js',
+  './js/locations.js',
   './js/ai.js',
+  './js/combat.js',
   './js/ui.js',
   './js/audio.js',
   './js/performance.js',

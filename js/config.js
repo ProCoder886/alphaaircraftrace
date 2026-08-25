@@ -11,7 +11,7 @@
 
 import { LOCATIONS, LOCATIONS_BY_ID } from './locations.js';
 
-export const VERSION = '1.1.0';
+export const VERSION = '1.2.0';
 export const GAME_NAME = 'ALPHA AIRCRAFT RACE 3D';
 
 /* ===========================================================================
