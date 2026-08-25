@@ -112,9 +112,16 @@ export class PerfMonitor {
   }
 
   begin(now) {
-    if (!this.lastTime) { this.lastTime = now; return 1 / 60; }
+    if (!this.lastTime) { this.lastTime = now; this.wallDt = 1 / 60; return 1 / 60; }
     let dt = (now - this.lastTime) / 1000;
     this.lastTime = now;
+    /* The TRUE elapsed time, before any clamping. `rawDt` below is the delta
+     * after the tab-switch guard, which is what the simulation and the frame
+     * timings want; anything measuring a REACTION BUDGET in seconds — the
+     * quality governor's cooldowns — has to use this instead, or a machine
+     * running at 0.8 fps advances those budgets at a fifth of real time and
+     * the governor is slowest exactly where it is needed most. */
+    this.wallDt = Math.max(1 / 480, dt);
     // Guard against tab-switch mega-deltas destroying the simulation.
     if (dt > 0.25) dt = 0.25;
     if (dt <= 0) dt = 1 / 240;
@@ -372,10 +379,11 @@ export class AdaptiveQuality {
      * machine this system exists for — the simulation clock advances at a fifth
      * of real time, so every cooldown and every debt threshold below took five
      * times as long to reach as it was tuned for. The governor was at its
-     * slowest precisely when it was needed most. `rawDt` is the real frame
-     * time, unclamped, which is what a reaction budget has to be measured in.
+     * slowest precisely when it was needed most. `wallDt` is the real frame
+     * time, taken before any clamp, which is what a reaction budget has to be
+     * measured in. Note `rawDt` is NOT that — it is the delta after the guard.
      */
-    const wall = this.monitor.rawDt ?? dt;
+    const wall = this.monitor.wallDt ?? dt;
     this.cooldown -= wall;
     const avg = this.monitor.avgMs;
     const p95 = this.monitor.p95;

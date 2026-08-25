@@ -634,14 +634,31 @@ export class Game {
     const superseded = () => token !== this._launchToken;
     const s = this.save.data;
     const modeId = overrides.mode || s.selectedMode || DEFAULTS.mode;
-    const diffId = overrides.difficulty || s.selectedDifficulty || DEFAULTS.difficulty;
-    const locId = overrides.location || s.selectedLocation || DEFAULTS.location;
+    const mode = MODES[modeId] || MODES.endless;
+
+    /* A Story mission owns its own venue, weather, time of day and difficulty —
+     * they are part of the mission, not of the player's loadout. Resolving it
+     * first is what lets everything below read from it.
+     *
+     * The fallback matters: every path in goes through a briefing that names a
+     * mission, but a story run that arrived without one would have no
+     * objectives at all and no way to end, so it takes the next uncleared
+     * mission rather than becoming an unwinnable sortie. */
+    const story = mode.story
+      ? (overrides.story
+        || STORY.find((m) => m.id > (this.save.data.storyProgress || 0))
+        || STORY[STORY.length - 1])
+      : null;
+
+    const diffId = story?.diff || overrides.difficulty || s.selectedDifficulty || DEFAULTS.difficulty;
+    const locId = story?.biome || overrides.location || s.selectedLocation || DEFAULTS.location;
     const craftId = overrides.aircraft || s.selectedAircraft || DEFAULTS.aircraft;
-    const seed = overrides.seed ?? ((Math.random() * 1e9) | 0);
+    const seed = overrides.seed ?? (story ? hashSeed(`story-${story.id}`) : ((Math.random() * 1e9) | 0));
 
     const rng = new RNG(seed);
-    const venue = this.pickVenue(rng, locId, overrides.weather ?? s.selectedWeather, overrides.time);
-    const mode = MODES[modeId] || MODES.endless;
+    const venue = this.pickVenue(rng, locId,
+      story?.weather ?? overrides.weather ?? s.selectedWeather,
+      story?.time ?? overrides.time);
     const difficulty = DIFFICULTIES[diffId] || DIFFICULTIES.elite;
     // AIRCRAFT[0] is the fallback, not a hard-coded id: a saved airframe that no
     // longer exists in the roster must still launch something.
@@ -651,7 +668,7 @@ export class Game {
       ...venue, seed, mode, difficulty, spec, rng,
       daily: overrides.daily || null,
       campaign: overrides.campaign || null,
-      story: overrides.story || null,
+      story,
       laps: overrides.laps || mode.laps || 1,
     };
 
@@ -2105,7 +2122,20 @@ export class Game {
         this.audio.unlock();
         this.enterMenu();
       },
-      onLaunch: () => { this.audio.unlock(); this.launchRun(); },
+      onLaunch: () => {
+        /* Story Mode has no "just launch it" — a mission is a specific mission
+         * with a briefing in front of it. Pressing Launch with Story selected
+         * opens the next one you have not cleared rather than starting a
+         * combat sortie with no objectives in it. */
+        if ((this.save.data.selectedMode || DEFAULTS.mode) === 'story') {
+          const next = STORY.find((m) => m.id > (this.save.data.storyProgress || 0)) || STORY[STORY.length - 1];
+          this.ui.showMissionBrief(next, this.save.data.storyProgress || 0);
+          this.audio.ui('confirm');
+          return;
+        }
+        this.audio.unlock();
+        this.launchRun();
+      },
       onLaunchDaily: () => {
         const d = getDailyChallenge();
         this.audio.unlock();
@@ -2132,10 +2162,9 @@ export class Game {
           return;
         }
         this.audio.unlock();
-        this.launchRun({
-          mode: 'story', difficulty: m.diff, location: m.biome, weather: m.weather,
-          time: m.time, story: m, seed: hashSeed(`story-${m.id}`),
-        });
+        // Venue, weather, time, difficulty and seed all come off the mission
+        // itself inside `launchRun` — they are the mission, not a loadout.
+        this.launchRun({ mode: 'story', story: m });
       },
       getDaily: () => getDailyChallenge(),
       onBuyAircraft: (id) => {
