@@ -90,27 +90,29 @@ rate and your own recovery window all move with it.
 index.html                 app shell — canvas, screens, HUD markup
 sw.js                      offline cache for the shell + engine
 css/                       main · menu · hud · mobile · animations
-js/                        exactly ten modules (see below)
+js/                        twelve modules (see below)
 vendor/three/              three.js r180, vendored (MIT)
 Assets/3d/aircraft/        the three modelled fighter jets (.glb, LOD0 + LOD1)
 Assets/3d/manifest.json    asset index, also written by the Tripo3D pipeline
 tools/tripo/               Tripo3D asset generation pipeline
 ```
 
-### The ten modules
+### The twelve modules
 
 | Module | Responsibility |
 |---|---|
 | `main.js` | Bootstrap, environment checks, failure screen, service worker |
-| `config.js` | Constants, tunables, content tables, seeded RNG and noise |
-| `game.js` | Game state, modes, objectives, scoring, progression, save, frame loop |
+| `config.js` | Constants, tunables, content tables, Story missions, seeded RNG and noise |
+| `locations.js` | The venue roster — the rules each world type is grown from |
+| `game.js` | Game state, modes, objectives, Story phases, scoring, save, frame loop |
 | `renderer.js` | WebGL context, sky, lighting, post-FX, camera rig, aircraft factory, VFX |
 | `player.js` | Input, flight model, boost, damage, collisions, the five powers |
-| `world.js` | Terrain field, route generation, chunk streaming, content, weather |
+| `world.js` | Terrain field, route generation, chunk streaming, collider shapes, weather |
 | `ai.js` | Rival pilots, traffic, race director |
-| `ui.js` | Menus, HUD, radar, onboarding, settings, results, touch controls |
+| `combat.js` | Weapons, hostile fighters, formations, the combat director |
+| `ui.js` | Menus, HUD, radar, briefings, onboarding, settings, results, touch |
 | `audio.js` | Web Audio synthesis: engine, ambience, SFX, adaptive music |
-| `performance.js` | Device profiling, frame timing, adaptive quality, pools, loader |
+| `performance.js` | Device profiling, frame timing, the frame governor, pools, loader |
 
 ### Notable systems
 
