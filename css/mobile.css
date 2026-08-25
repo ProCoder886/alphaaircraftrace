@@ -255,3 +255,33 @@ body.touch-mode .readout-right { right: calc(33% - 78px); }
   body.touch-mode .alt-tape { height: 92px; }
   body.touch-mode .hud-bc { width: min(230px, 30%); }
 }
+
+/* ---------------------------------------------------------------------------
+ * PANEL DIALS ON TOUCH
+ * The HUD's root font size scales with viewport height, which on a phone in
+ * landscape puts the dials at about 34 px — under every platform's minimum
+ * touch target. These are the two controls on the HUD a thumb has to be able
+ * to hit mid-flight, so they get a fixed size in pixels rather than one that
+ * follows the type scale.
+ * ------------------------------------------------------------------------ */
+/* The HUD sits ABOVE the touch cluster on a phone, not below it.
+ *
+ * `#mobile-controls` is z-25 and `.hud` is z-20, and the virtual stick claims
+ * the bottom-left 42% x 62% of the screen as an invisible touch region — which
+ * reaches up far enough to swallow the bottom half of the flight dial. `.hud`
+ * is `pointer-events: none`, so raising it only changes which element wins a
+ * tap on the handful of HUD controls that opt back in: these two dials and the
+ * hide button. Everything else on the HUD still lets the touch through. */
+body.touch-mode .hud { z-index: 26; }
+body.touch-mode .panel-dial { width: 52px; height: 52px; margin-top: 8px; }
+body.touch-mode .dial-chevron { width: 20px; height: 20px; }
+body.touch-mode .dial-label { font-size: 6.5px; letter-spacing: 0.10em; }
+body.touch-mode .hud-bc .panel-dial { margin: 0 auto 8px; }
+@media (max-height: 380px) {
+  body.touch-mode .panel-dial { width: 44px; height: 44px; }
+  body.touch-mode .dial-chevron { width: 17px; height: 17px; }
+  body.touch-mode .dial-label { font-size: 6px; }
+}
+/* The control legend is a keyboard reference. A pilot on a phone can still
+   open it — a phone can have a keyboard — but it is scaled to fit. */
+body.touch-mode .hud-controls { max-width: 74vw; padding: 5px; gap: 4px; }

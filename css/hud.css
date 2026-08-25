@@ -395,7 +395,10 @@ body.touch-mode .zoom-btn { width: 2.1em; height: 2.1em; font-size: 0.95em; }
  * without opening anything.
  * ------------------------------------------------------------------------ */
 .lock-range {
-  position: absolute; left: 50%; top: calc(50% + 5.4rem); transform: translateX(-50%);
+  /* Below the airframe, not on it: at the chase framing the aircraft occupies
+     the middle of the lower half, and a readout sitting on its nozzles is one
+     you read past rather than read. */
+  position: absolute; left: 50%; top: calc(50% + 7.6rem); transform: translateX(-50%);
   display: none; align-items: baseline; gap: 5px;
   padding: 3px 10px 4px; border-radius: 999px;
   border: 1px solid rgba(120, 230, 255, 0.28);
