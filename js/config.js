@@ -382,6 +382,25 @@ export const QUALITY_ORDER = ['low', 'medium', 'high', 'ultra', 'extreme'];
 /* ===========================================================================
  * AIRCRAFT ROSTER
  * ------------------------------------------------------------------------
+ * FIVE airframes: two flyable from the first launch, three earned.
+ *
+ * A hangar of eleven aircraft is a list, not a choice — most of them differed
+ * by a few points on one stat and a paint job, and the ones that mattered were
+ * buried. Five airframes with genuinely different jobs is a decision the player
+ * can actually hold in their head, and every locked one is a target rather than
+ * a row to scroll past:
+ *
+ *   FR-22 RAPTOR   default      the obedient one — turns better than anything
+ *   FA-19 FALCON   default      the all-rounder — no weakness, no speciality
+ *   MK-29 WARHAWK  9 000 cr     the heavy — re-aims rather than turns, but flies
+ *                               away from everything at the top of the range
+ *   NX-3 WRAITH    22 000 cr    the prototype — faceted, phase-tuned, fragile
+ *   OM-X OMEGA     achievement  the reward — no weak axis, absurd reheat
+ *
+ * The first three are modelled meshes loaded from `Assets/3d/aircraft/`, and
+ * they are also the airframes hostiles fly, so the enemy squadron keeps its
+ * full silhouette variety regardless of what the player has unlocked.
+ *
  * `shape` drives the procedural mesh builder in renderer.js, so every airframe
  * has a genuinely different silhouette rather than a recoloured clone.
  * Stats are 0..1 and are mapped onto real physics numbers in player.js.
@@ -462,7 +481,7 @@ export const AIRCRAFT = [
     stats: { speed: 0.94, accel: 0.90, handling: 0.66, boost: 0.92, durability: 0.82 },
     ability: 'Ram Intakes — boost recharges 35% faster above Mach 16.',
     abilityKey: 'ramair',
-    unlock: { type: 'default' },
+    unlock: { type: 'credits', cost: 9000 },
     colors: { primary: 0x9aa3ad, secondary: 0x353c45, accent: 0x7fb8e8, emissive: 0xbfe0ff, trail: 0xbcd8f2 },
     model: {
       file: 'Assets/3d/aircraft/warhawk.glb',
@@ -483,44 +502,12 @@ export const AIRCRAFT = [
     },
   },
   {
-    id: 'talon', name: 'SR-9 TALON', class: 'Speed Specialist',
-    desc: 'A fuselage wrapped around two oversized reheat cores. Devastating on the long sky-highways, punishing in the canyon work.',
-    stats: { speed: 0.95, accel: 0.84, handling: 0.44, boost: 0.86, durability: 0.48 },
-    ability: 'Ram Air — boost recharges 35% faster above Mach 16.',
-    abilityKey: 'ramair',
-    unlock: { type: 'credits', cost: 4500 },
-    colors: { primary: 0xc41f2e, secondary: 0x14161a, accent: 0xff5a3c, emissive: 0xff7a2a, trail: 0xff8a3a },
-    shape: {
-      length: 21.0, noseLen: 0.36, noseSharp: 2.3, bodyW: 1.42, bodyH: 1.18,
-      wingSpan: 11.0, wingSweep: 0.86, wingRoot: 7.4, wingTip: 0.9, wingDihedral: -0.02, wingPos: 0.02,
-      canard: 0.0, canardSpan: 0, tail: 'twin', tailSize: 1.15, tailCant: 0.30,
-      engines: 2, engineSep: 1.5, engineR: 1.02, nozzleFlare: 1.34, intake: 'chin',
-      strakes: 1.3, ventral: 0.9, livery: 'blade',
-    },
-  },
-  {
-    id: 'bastion', name: 'HB-4 BASTION', class: 'Heavy Assault Racer',
-    desc: 'Armoured leading edges and a reinforced spine. It shrugs off contact that would end another pilot\'s race, then grinds the place back.',
-    stats: { speed: 0.70, accel: 0.52, handling: 0.48, boost: 0.66, durability: 1.00 },
-    ability: 'Ablative Hull — collision damage reduced by 40%.',
-    abilityKey: 'ablative',
-    unlock: { type: 'credits', cost: 6800 },
-    colors: { primary: 0xe8b21c, secondary: 0x1b1b1d, accent: 0xffd85e, emissive: 0xffae2b, trail: 0xffcd6a },
-    shape: {
-      length: 20.2, noseLen: 0.24, noseSharp: 1.1, bodyW: 2.05, bodyH: 1.66,
-      wingSpan: 13.6, wingSweep: 0.58, wingRoot: 6.8, wingTip: 2.3, wingDihedral: 0.02, wingPos: 0.00,
-      canard: 0.4, canardSpan: 5.2, tail: 'twin', tailSize: 1.28, tailCant: 0.36,
-      engines: 2, engineSep: 1.72, engineR: 1.12, nozzleFlare: 1.26, intake: 'side',
-      strakes: 1.5, ventral: 1.1, livery: 'hazard',
-    },
-  },
-  {
     id: 'wraith', name: 'NX-3 WRAITH', class: 'Stealth Prototype',
     desc: 'Faceted, radar-dark and unnervingly quiet until the reheat lights. Built for pilots who prefer to be past you before you knew they were there.',
     stats: { speed: 0.80, accel: 0.78, handling: 0.76, boost: 0.74, durability: 0.58 },
     ability: 'Ghost Frame — Phase Shift lasts 50% longer.',
     abilityKey: 'ghost',
-    unlock: { type: 'credits', cost: 9000 },
+    unlock: { type: 'credits', cost: 22000 },
     colors: { primary: 0x4a5058, secondary: 0x101317, accent: 0x9fb4c7, emissive: 0x8fd6ff, trail: 0xaad4ff },
     shape: {
       length: 19.0, noseLen: 0.33, noseSharp: 1.9, bodyW: 1.95, bodyH: 1.05,
@@ -528,38 +515,6 @@ export const AIRCRAFT = [
       canard: 0.0, canardSpan: 0, tail: 'v', tailSize: 1.0, tailCant: 0.72,
       engines: 2, engineSep: 1.30, engineR: 0.84, nozzleFlare: 0.92, intake: 'dorsal',
       strakes: 1.1, ventral: 0.2, livery: 'facet',
-    },
-  },
-  {
-    id: 'phantom', name: 'PH-12 PHANTOM', class: 'Technical Racer',
-    desc: 'A route-runner\'s frame. Extended sensor spine, superb low-speed control and the stability to take shortcuts nobody else attempts.',
-    stats: { speed: 0.74, accel: 0.80, handling: 0.86, boost: 0.70, durability: 0.62 },
-    ability: 'Deep Scan — Route Scan reveals shortcuts 60% further ahead.',
-    abilityKey: 'deepscan',
-    unlock: { type: 'credits', cost: 11500 },
-    colors: { primary: 0x7b4fd6, secondary: 0xe9edf2, accent: 0xc79bff, emissive: 0xb478ff, trail: 0xc79bff },
-    shape: {
-      length: 18.4, noseLen: 0.38, noseSharp: 2.0, bodyW: 1.60, bodyH: 1.24,
-      wingSpan: 13.2, wingSweep: 0.54, wingRoot: 5.4, wingTip: 1.8, wingDihedral: 0.06, wingPos: 0.05,
-      canard: 0.75, canardSpan: 5.8, tail: 'twin', tailSize: 1.05, tailCant: 0.50,
-      engines: 2, engineSep: 1.28, engineR: 0.82, nozzleFlare: 1.14, intake: 'side',
-      strakes: 0.9, ventral: 0.4, livery: 'circuit',
-    },
-  },
-  {
-    id: 'zephyr', name: 'ZR-8 ZEPHYR', class: 'Elite Airframe',
-    desc: 'Circuit-legal exotics only. There is no weak axis on this aircraft, which is exactly why it costs what it costs.',
-    stats: { speed: 0.88, accel: 0.90, handling: 0.88, boost: 0.90, durability: 0.70 },
-    ability: 'Circuit Tuning — all power cooldowns reduced by 15%.',
-    abilityKey: 'tuning',
-    unlock: { type: 'credits', cost: 18000 },
-    colors: { primary: 0xf2f4f7, secondary: 0x2a2f36, accent: 0xffcf4d, emissive: 0xffd76b, trail: 0xfff0b0 },
-    shape: {
-      length: 19.6, noseLen: 0.34, noseSharp: 1.8, bodyW: 1.68, bodyH: 1.22,
-      wingSpan: 13.9, wingSweep: 0.68, wingRoot: 6.4, wingTip: 1.5, wingDihedral: 0.04, wingPos: 0.04,
-      canard: 0.65, canardSpan: 5.6, tail: 'twin', tailSize: 1.12, tailCant: 0.46,
-      engines: 2, engineSep: 1.40, engineR: 0.92, nozzleFlare: 1.22, intake: 'side',
-      strakes: 1.2, ventral: 0.6, livery: 'chevron',
     },
   },
   {
@@ -576,38 +531,6 @@ export const AIRCRAFT = [
       canard: 0.8, canardSpan: 6.2, tail: 'twin', tailSize: 1.22, tailCant: 0.54,
       engines: 2, engineSep: 1.56, engineR: 1.06, nozzleFlare: 1.42, intake: 'chin',
       strakes: 1.4, ventral: 0.8, livery: 'ember',
-    },
-  },
-  {
-    id: 'vipera', name: 'VP-5 VIPERA', class: 'Aggressive Duellist',
-    desc: 'Twitchy, unstable, absurdly quick to rotate. Built for close-quarters overtaking and near-miss chains, not for relaxing.',
-    stats: { speed: 0.84, accel: 0.88, handling: 0.80, boost: 0.78, durability: 0.44 },
-    ability: 'Predator — near misses award 40% more score and combo.',
-    abilityKey: 'predator',
-    unlock: { type: 'credits', cost: 14000 },
-    colors: { primary: 0x9d0f2b, secondary: 0x1a1416, accent: 0xff2f5f, emissive: 0xff3a6a, trail: 0xff6a92 },
-    shape: {
-      length: 17.8, noseLen: 0.31, noseSharp: 2.1, bodyW: 1.48, bodyH: 1.16,
-      wingSpan: 12.0, wingSweep: 0.72, wingRoot: 6.2, wingTip: 1.1, wingDihedral: -0.05, wingPos: 0.02,
-      canard: 0.7, canardSpan: 5.4, tail: 'v', tailSize: 1.06, tailCant: 0.66,
-      engines: 2, engineSep: 1.24, engineR: 0.88, nozzleFlare: 1.28, intake: 'side',
-      strakes: 1.25, ventral: 0.7, livery: 'fang',
-    },
-  },
-  {
-    id: 'aurora', name: 'AU-0 AURORA', class: 'Endurance Frame',
-    desc: 'A long-range survey airframe pressed into racing. Enormous internal volume means shields that hold and boost that never quite runs dry.',
-    stats: { speed: 0.68, accel: 0.60, handling: 0.66, boost: 0.94, durability: 0.86 },
-    ability: 'Deep Reserves — boost meter capacity increased by 30%.',
-    abilityKey: 'reserves',
-    unlock: { type: 'credits', cost: 8200 },
-    colors: { primary: 0x2fa5b8, secondary: 0xc9d3da, accent: 0x7ff0ff, emissive: 0x5fe4ff, trail: 0x8ff4ff },
-    shape: {
-      length: 20.8, noseLen: 0.29, noseSharp: 1.4, bodyW: 1.92, bodyH: 1.52,
-      wingSpan: 15.6, wingSweep: 0.50, wingRoot: 6.0, wingTip: 2.6, wingDihedral: 0.08, wingPos: 0.05,
-      canard: 0.5, canardSpan: 5.4, tail: 'twin', tailSize: 1.18, tailCant: 0.40,
-      engines: 2, engineSep: 1.62, engineR: 1.00, nozzleFlare: 1.12, intake: 'side',
-      strakes: 1.0, ventral: 0.6, livery: 'wave',
     },
   },
 ];
@@ -1256,7 +1179,7 @@ export const DEFAULT_SAVE = {
   version: 1,
   onboarded: false,
   credits: 0,
-  unlocked: ['raptor'],
+  unlocked: ['raptor', 'falcon'],
   selectedAircraft: 'raptor',
   selectedMode: 'battle',
   selectedDifficulty: 'elite',
@@ -1294,6 +1217,12 @@ export const DEFAULT_SAVE = {
     invertPitch: false,
     showDebug: false,
     hudScale: 1.0,
+    /* Reference panels, both CLOSED out of the box on every device. The
+     * control legend and the weapons/objective block are worth reading for the
+     * first few runs and then permanently in front of the sky; each has its own
+     * dial on the HUD, and this remembers what the pilot chose. */
+    panelFlight: false,
+    panelCombat: false,
     touchControls: true,
     cameraZoom: 1,
     bindings: null,

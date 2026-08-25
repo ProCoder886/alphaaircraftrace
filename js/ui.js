@@ -263,6 +263,10 @@ export class UI {
       cbtHostiles: $('#cbt-hostiles'),
       brief: $('#hud-brief'),
       controls: $('#hud-controls'),
+      dialFlight: $('#dial-flight'),
+      dialCombat: $('#dial-combat'),
+      lockRange: $('#lock-range'),
+      lockRangeValue: $('#lock-range-value'),
       machBlock: $('#hud-mach-block'),
       machValue: $('#hud-mach'),
       hudHide: $('#btn-hud-hide'),
@@ -283,6 +287,7 @@ export class UI {
     this.setSection(this.menuSection);
     this._bindStatic();
     this._bindTouch();
+    this._applyPanelState();
     this._applyBodyFlags();
     this.armFullscreenGesture();
     this.setTip();
@@ -1418,6 +1423,21 @@ export class UI {
      * strip says so before the player presses the key rather than after. */
     const far = !!s.locked && s.targetRange != null && !s.inRange;
     strip.classList.toggle('outofrange', far);
+
+    /* Target lock range, on its own under the reticle. Independent of the panel
+     * above — that one is closed by default, and the distance to what you have
+     * locked is not a number to go opening a panel for. */
+    const lr = this.dom.lockRange;
+    if (lr) {
+      const tracking = !!s.locked || s.lock > 0.02;
+      lr.classList.toggle('active', tracking);
+      lr.classList.toggle('locked', !!s.locked && !far);
+      lr.classList.toggle('far', far);
+      if (tracking) {
+        this.dom.lockRangeValue.textContent = s.targetKm != null ? s.targetKm : '--.-';
+      }
+    }
+
     this.dom.lockText.textContent = far
       ? `OUT OF RANGE ${s.targetKm} km / ${s.weaponRangeKm} km`
       : s.locked
@@ -1479,6 +1499,7 @@ export class UI {
   /** Tear the combat overlay down when a non-combat mode starts. */
   clearCombatHud() {
     this.dom.combat?.classList.remove('active');
+    this.dom.lockRange?.classList.remove('active', 'locked', 'far');
     if (this._tgtPool) for (const p of this._tgtPool) p.root.style.display = 'none';
   }
 
@@ -1888,6 +1909,8 @@ export class UI {
     click('#ob-skip', () => { this.audio.ui('back'); this.callbacks.onOnboardingDone?.(); });
     click('#btn-launch', () => { this.audio.ui('confirm'); this.callbacks.onLaunch?.(); });
     click('#btn-hud-hide', () => this.toggleHudChrome());
+    click('#dial-flight', () => this.togglePanel('flight'));
+    click('#dial-combat', () => this.togglePanel('combat'));
     // Camera zoom. Repeats while held so dragging the framing in is one press
     // rather than eight, and both pointer and touch drive the same path.
     const zoomHold = (el, dir) => {
@@ -2024,6 +2047,52 @@ export class UI {
     const portrait = window.innerHeight > window.innerWidth;
     // Portrait on a touch device is never playable, whatever the width.
     this.dom.orientation.classList.toggle('show', this.device.isTouch && portrait);
+  }
+
+  /* =====================================================================
+   * REFERENCE PANELS
+   * ------------------------------------------------------------------
+   * The control legend and the weapons/objective block are reference, not
+   * instruments: worth reading for the first few runs and then permanently in
+   * front of the thing you are actually looking at. Both are CLOSED by default
+   * on every device, each behind its own circular dial, and the choice is
+   * remembered — a pilot who wants the legend up gets it up on every launch
+   * without touching a settings screen.
+   * ================================================================== */
+
+  /** Settings key and body class for each dial. */
+  static get PANELS() {
+    return {
+      flight: { key: 'panelFlight', cls: 'panel-flight-off', dial: 'dialFlight' },
+      combat: { key: 'panelCombat', cls: 'panel-combat-off', dial: 'dialCombat' },
+    };
+  }
+
+  /** Paint both panels from the saved settings. Called once, on boot. */
+  _applyPanelState() {
+    for (const id of Object.keys(UI.PANELS)) this.setPanel(id, this.panelOpen(id), false);
+  }
+
+  /** Is this panel currently open? Closed unless the player has said otherwise. */
+  panelOpen(id) {
+    const p = UI.PANELS[id];
+    return !!(p && this.save.data.settings[p.key]);
+  }
+
+  /** Open or close one panel, optionally persisting the choice. */
+  setPanel(id, open, persist = true) {
+    const p = UI.PANELS[id];
+    if (!p) return false;
+    document.body.classList.toggle(p.cls, !open);
+    const dial = this.dom[p.dial];
+    if (dial) dial.setAttribute('aria-expanded', String(open));
+    if (persist) this.save.setSetting(p.key, open);
+    return open;
+  }
+
+  togglePanel(id) {
+    this.audio.ui('click');
+    return this.setPanel(id, !this.panelOpen(id));
   }
 
   /**

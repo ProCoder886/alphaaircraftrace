@@ -28,7 +28,10 @@
 }
 </script>
 </head>
-<body class="app-booting">
+<!-- Both reference panels start closed. The classes are on the markup rather
+     than only applied by script, so the legend and the weapons block never
+     flash on for a frame before the saved preference is read. -->
+<body class="app-booting panel-flight-off panel-combat-off">
 
 <!-- ═══════════════════════════════ RENDER SURFACE ═══════════════════════ -->
 <div id="viewport">
@@ -124,7 +127,15 @@
       <span><i>DIST</i><b id="hud-distance">0.00 km</b></span>
       <span><i>CP</i><b id="hud-checkpoints">0</b></span>
     </div>
-    <!-- every control, always on screen -->
+    <!-- The full control legend. Hidden by default on every device — it is a
+         reference, not an instrument, and it was covering a third of the sky.
+         The dial beside it is the way back. -->
+    <button class="panel-dial tone-green" id="dial-flight" type="button"
+            aria-expanded="false" aria-controls="hud-controls"
+            title="Show or hide the full control legend">
+      <svg class="dial-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      <span class="dial-label">CONTROLS</span>
+    </button>
     <div class="hud-controls" id="hud-controls" aria-hidden="true"></div>
   </div>
 
@@ -194,6 +205,14 @@
       <div class="cp-distance" id="cp-distance">0.0 KM</div>
     </div>
     <div class="cp-offscreen" id="cp-offscreen" aria-hidden="true"></div>
+    <!-- Target lock range, on its own under the reticle. The weapon panel can
+         be closed; the distance to the thing you are about to shoot is not
+         something to go looking for in a menu, so it lives here instead. -->
+    <div class="lock-range" id="lock-range" aria-hidden="true">
+      <span class="lr-tag">LOCK</span>
+      <b class="lr-value" id="lock-range-value">--.-</b>
+      <span class="lr-unit">km</span>
+    </div>
     <!-- combat: target boxes, lock reticle and per-enemy speed labels -->
     <div class="target-layer" id="target-layer" aria-hidden="true"></div>
   </div>
@@ -236,6 +255,14 @@
 
   <!-- bottom centre: combat strip, objective + event feed -->
   <div class="hud-bc">
+    <!-- Same deal as the control legend: the weapon and objective block is
+         closed by default and this dial opens it. -->
+    <button class="panel-dial tone-blue" id="dial-combat" type="button"
+            aria-expanded="false" aria-controls="hud-combat"
+            title="Show or hide the weapons and objective panel">
+      <svg class="dial-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      <span class="dial-label">WEAPONS</span>
+    </button>
     <!-- combat status: selected weapon, lock state, wave -->
     <div class="hud-combat" id="hud-combat" aria-hidden="true">
       <div class="lock-strip" id="lock-strip">

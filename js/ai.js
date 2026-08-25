@@ -733,9 +733,13 @@ export class RaceDirector {
     for (let i = 0; i < count; i++) {
       const arch = chosen[i];
       // Match airframe to personality so the grid reads correctly at a glance.
+      /* Match airframe to personality where the roster has one that fits. It
+       * is five airframes across eight archetypes, so several deliberately
+       * share — the ones without an entry fall through to the round-robin
+       * below, which is what keeps a full grid from being one aircraft. */
       const wanted = {
-        speed: 'talon', agile: 'falcon', defensive: 'bastion', aggressive: 'vipera',
-        technical: 'phantom', elite: 'zephyr', legendary: 'omega', balanced: 'aurora',
+        speed: 'warhawk', agile: 'falcon', defensive: 'warhawk', aggressive: 'raptor',
+        technical: 'wraith', elite: 'wraith', legendary: 'omega', balanced: 'falcon',
       }[arch.id];
       const spec = AIRCRAFT_BY_ID[wanted] && wanted !== playerSpec.id
         ? AIRCRAFT_BY_ID[wanted]

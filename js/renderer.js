@@ -1596,7 +1596,18 @@ const CAM_MODES = [
   { id: 'fpv', name: 'First Person', dist: -3.6, height: 1.15, look: 240, fov: 82, rigid: true, hideSelf: true },
 ];
 
-export { CAM_ZOOM_MIN, CAM_ZOOM_MAX, CAM_ZOOM_STEP };
+/**
+ * Chase distance multiplier while the aircraft is held on the countdown.
+ *
+ * The flight framing is deliberately tight — it dollies in harder as speed and
+ * reheat build, because that is what sells the speed — but a stationary jet in
+ * that framing fills the screen and reads as "the camera is stuck in the
+ * cockpit". The pre-race view sits back far enough to see the airframe and the
+ * airspace it is about to launch into, and eases forward once you are moving.
+ */
+const CAM_COUNTDOWN_SCALE = 1.42;
+
+export { CAM_ZOOM_MIN, CAM_ZOOM_MAX, CAM_ZOOM_STEP, CAM_COUNTDOWN_SCALE };
 
 export class CameraRig {
   constructor(camera) {
@@ -1613,6 +1624,11 @@ export class CameraRig {
     this.fov = 66;
     this.baseFov = 66;
     this.zoom = 1;              // live dolly multiplier on the chase distance
+    /* Smoothed `distanceScale`. Callers set it per state — the countdown sits
+     * wider than flight, the results camera wider still — and easing it here
+     * rather than at the call site means a state change is a camera settling
+     * rather than a cut. */
+    this.distScale = 1;
     /* Player-set zoom, 0.25..1. This is a separate axis from the automatic
      * speed/reheat dolly: the automatic one is the game reacting to how fast
      * you are going, this one is the pilot deciding how close they want to sit
@@ -1650,7 +1666,15 @@ export class CameraRig {
     this.shakeFreq = freq;
   }
 
-  /** Snap instantly — used on race start / respawn so there is no fly-in. */
+  /**
+   * Snap instantly — used on race start / respawn so there is no fly-in.
+   *
+   * `initialised = false` means the NEXT update() places the whole rig rather
+   * than easing into it. Every damped channel has to be in that set: position
+   * alone is not enough, because a look target left over from the menu points
+   * the camera at where the hangar was, and the aircraft spends the countdown
+   * sliding across the frame from the corner it was left in.
+   */
   reset() { this.initialised = false; this.onReset?.(); }
 
   /**
@@ -1685,9 +1709,14 @@ export class CameraRig {
     // --- desired camera position in aircraft space ------------------------
     // A rigid (first-person) eye point must not drift forward with speed —
     // it is a fixed seat in the airframe, not a chase distance.
+    const wantScale = params.distanceScale ?? 1;
+    this.distScale = this.initialised ? damp(this.distScale, wantScale, 3.2, dt) : wantScale;
     const distance = m.rigid ? m.dist
-      : m.dist * this.zoom * this.userZoom * (params.distanceScale ?? 1);
-    const height = m.rigid ? m.height : m.height * (1 + speed01 * 0.10) * lerp(1, this.zoom, 0.7);
+      : m.dist * this.zoom * this.userZoom * this.distScale;
+    // Sitting further back also sits a little higher, so a wide framing looks
+    // down at the airframe instead of along it.
+    const height = m.rigid ? m.height
+      : m.height * (1 + speed01 * 0.10) * lerp(1, this.zoom, 0.7) * lerp(1, this.distScale, 0.6);
     this._offset.set(0, height, distance);
     // Trail slightly outside the turn so the airframe reads against the sky.
     if (!m.rigid) this._offset.x += (params.lateral ?? 0) * -3.2;
@@ -1697,8 +1726,9 @@ export class CameraRig {
     // Pull the camera up when diving so terrain never clips the near plane.
     if (!m.rigid) desired.y += clamp(-(params.pitchRate ?? 0) * 8, -6, 10);
 
+    const snap = !this.initialised;
     const lag = m.rigid ? 40 : lerp(5.5, 11.0, speed01) * (params.lagScale ?? 1);
-    if (!this.initialised) { this.position.copy(desired); this.initialised = true; }
+    if (snap) { this.position.copy(desired); this.initialised = true; }
     else {
       this.position.x = damp(this.position.x, desired.x, lag, dt);
       this.position.y = damp(this.position.y, desired.y, lag * 0.92, dt);
@@ -1710,14 +1740,19 @@ export class CameraRig {
     const lookDist = m.look * (1 + speed01 * 0.5);
     const desiredLook = this._tmpA.copy(target.position).addScaledVector(fwd, lookDist);
     desiredLook.y += m.rigid ? 0 : 2.2;
-    this.lookAt.x = damp(this.lookAt.x, desiredLook.x, lag * 1.4, dt);
-    this.lookAt.y = damp(this.lookAt.y, desiredLook.y, lag * 1.4, dt);
-    this.lookAt.z = damp(this.lookAt.z, desiredLook.z, lag * 1.4, dt);
+    if (snap) this.lookAt.copy(desiredLook);
+    else {
+      this.lookAt.x = damp(this.lookAt.x, desiredLook.x, lag * 1.4, dt);
+      this.lookAt.y = damp(this.lookAt.y, desiredLook.y, lag * 1.4, dt);
+      this.lookAt.z = damp(this.lookAt.z, desiredLook.z, lag * 1.4, dt);
+    }
 
     // --- camera banking follows the airframe roll -------------------------
     const upTarget = this._tmpB.set(0, 1, 0).applyQuaternion(q);
     const blend = m.rigid ? 1.0 : (this.reducedMotion ? 0.35 : 0.72);
     this.up.lerpVectors(this._worldUp, upTarget, blend).normalize();
+    // A snap is a snap: no shake carried over from whatever happened last run.
+    if (snap) this.shake = 0;
 
     this.camera.position.copy(this.position);
     this.camera.up.copy(this.up);
@@ -1740,9 +1775,13 @@ export class CameraRig {
     }
 
     // --- dynamic FOV ------------------------------------------------------
+    // The hangar preview drops the camera to a 34° long lens. Easing back out
+    // of that over half a second is exactly the "why is the jet enormous"
+    // moment before the countdown, so a snap resets the lens too.
     const fovTarget = m.fov + speed01 * 12 + boost * 13
       + clamp01(params.machZoom ?? 0) * 9 + (params.fovBoost ?? 0);
-    this.fov = damp(this.fov, this.reducedMotion ? m.fov + speed01 * 4 : fovTarget, 4.5, dt);
+    const fovWanted = this.reducedMotion ? m.fov + speed01 * 4 : fovTarget;
+    this.fov = snap ? fovWanted : damp(this.fov, fovWanted, 4.5, dt);
     if (Math.abs(this.camera.fov - this.fov) > 0.01) {
       this.camera.fov = this.fov;
       this.camera.updateProjectionMatrix();

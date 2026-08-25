@@ -51,7 +51,14 @@
  * a single key cap is read. Sized to be legible at a glance in flight.
  * ------------------------------------------------------------------------ */
 .hud-controls {
-  margin-top: 10px; display: flex; flex-wrap: wrap; align-items: flex-start;
+  /* Green, to match the dial that opens it. The per-group tones inside stay —
+     FLIGHT green, COMBAT red, SYSTEM blue — so the frame says which panel this
+     is and the groups inside say which control is which. */
+  margin-top: 8px; padding: 7px; border-radius: 8px;
+  border: 1px solid rgba(93, 255, 156, 0.32);
+  background: linear-gradient(180deg, rgba(8, 26, 18, 0.42), rgba(4, 12, 10, 0.30));
+  box-shadow: 0 0 16px rgba(93, 255, 156, 0.10) inset;
+  display: flex; flex-wrap: wrap; align-items: flex-start;
   /* Sized so FLIGHT takes a row of its own and COMBAT + SYSTEM share the next
      one. Two rows keeps the block clear of the airspeed readout below it,
      which a three-row stack ran straight into. */
@@ -59,7 +66,61 @@
   opacity: 0.86; transition: opacity 160ms linear;
 }
 .hud-controls:hover { opacity: 1; }
-body.touch-mode .hud-controls { display: none; }
+
+/* ---------------------------------------------------------------------------
+ * PANEL DIALS
+ * Two big circular toggles — green for the control legend, blue for the
+ * weapons / objective block — because both of those panels are REFERENCE, not
+ * instruments: useful for the first few runs and then permanently in the way of
+ * the thing you are actually looking at, which is the sky in front of the
+ * aircraft. Both start closed on every device, and the dial is a target big
+ * enough to hit with a thumb mid-flight.
+ * ------------------------------------------------------------------------ */
+.panel-dial {
+  --tone: #5dff9c;
+  position: relative; display: inline-flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 1px;
+  width: 3.15rem; height: 3.15rem; padding: 0;
+  margin-top: 10px; border-radius: 50%; cursor: pointer;
+  /* The HUD as a whole is click-through so the mouse reaches the trigger; a
+     control the pilot has to press has to opt back in. */
+  pointer-events: auto;
+  border: 2px solid color-mix(in srgb, var(--tone) 62%, transparent);
+  background: radial-gradient(circle at 50% 34%,
+    color-mix(in srgb, var(--tone) 22%, rgba(5, 12, 22, 0.86)),
+    rgba(4, 10, 20, 0.88) 72%);
+  color: var(--tone);
+  box-shadow:
+    0 0 16px color-mix(in srgb, var(--tone) 26%, transparent),
+    0 0 12px color-mix(in srgb, var(--tone) 18%, transparent) inset;
+  backdrop-filter: blur(4px);
+  transition: transform var(--t-fast), border-color var(--t-fast), box-shadow var(--t-fast);
+}
+.panel-dial.tone-green { --tone: #5dff9c; }
+.panel-dial.tone-blue  { --tone: #56c8ff; }
+.panel-dial:hover { transform: scale(1.06); border-color: var(--tone); }
+.panel-dial:active { transform: scale(0.96); }
+.panel-dial:focus-visible { outline: 2px solid var(--tone); outline-offset: 3px; }
+.dial-chevron {
+  width: 1.15rem; height: 1.15rem; flex: none;
+  transition: transform 220ms var(--ease);
+}
+.panel-dial[aria-expanded="true"] .dial-chevron { transform: rotate(180deg); }
+.dial-label {
+  font-size: 0.36rem; font-weight: 700; letter-spacing: 0.14em;
+  color: color-mix(in srgb, var(--tone) 82%, #ffffff);
+  text-shadow: 0 0 8px color-mix(in srgb, var(--tone) 55%, transparent);
+}
+/* The weapons dial sits above its panel and centres over it. */
+.hud-bc .panel-dial { display: flex; margin: 0 auto 6px; }
+
+/* Closed is the default state: the body carries the class from the first
+   frame, so neither panel ever flashes on before the preference is read. */
+body.panel-flight-off .hud-controls { display: none; }
+body.panel-combat-off .hud-combat,
+body.panel-combat-off .objective-card { display: none !important; }
+/* Hiding the whole HUD hides the dials too — there would be nothing to open. */
+body.hud-hidden .panel-dial { display: none !important; }
 
 .ctl-group {
   --tone: rgba(120, 230, 255, 0.9);
@@ -327,9 +388,47 @@ body.touch-mode .zoom-btn { width: 2.1em; height: 2.1em; font-size: 0.95em; }
 .bar.hull.crit .bar-fill { background: linear-gradient(90deg, rgba(255, 59, 82, 0.7), var(--red)); animation: warnFlash 0.75s ease-in-out infinite; }
 .status-num { font-family: var(--font-num); font-size: 0.68em; color: #cfeaff; width: 42px; text-align: right; }
 
+/* ---------------------------------------------------------------------------
+ * TARGET LOCK RANGE
+ * On its own under the reticle, independent of the weapons panel: the distance
+ * to the thing you have locked is the one combat number that has to be readable
+ * without opening anything.
+ * ------------------------------------------------------------------------ */
+.lock-range {
+  position: absolute; left: 50%; top: calc(50% + 5.4rem); transform: translateX(-50%);
+  display: none; align-items: baseline; gap: 5px;
+  padding: 3px 10px 4px; border-radius: 999px;
+  border: 1px solid rgba(120, 230, 255, 0.28);
+  background: rgba(5, 13, 22, 0.62);
+  backdrop-filter: blur(3px);
+  white-space: nowrap;
+}
+.lock-range.active { display: flex; }
+.lr-tag { font-size: 0.42rem; letter-spacing: 0.22em; color: rgba(200, 232, 255, 0.6); }
+.lr-value {
+  font-family: var(--font-num); font-size: 0.92rem; font-weight: 400; line-height: 1;
+  color: #eafdff; text-shadow: 0 0 10px rgba(120, 220, 255, 0.5);
+}
+.lr-unit { font-size: 0.46rem; letter-spacing: 0.12em; color: rgba(200, 232, 255, 0.55); }
+/* Locked and reachable: green. Locked but outside the armed weapon's rated
+   range: red, and the number is the reason the launch will be refused. */
+.lock-range.locked { border-color: rgba(47, 255, 138, 0.55); box-shadow: 0 0 14px rgba(47, 255, 138, 0.22); }
+.lock-range.locked .lr-value { color: #7dffbc; text-shadow: 0 0 10px rgba(47, 255, 138, 0.6); }
+.lock-range.locked .lr-tag { color: rgba(125, 255, 188, 0.75); }
+.lock-range.far { border-color: rgba(255, 90, 100, 0.55); box-shadow: 0 0 14px rgba(255, 90, 100, 0.22); }
+.lock-range.far .lr-value { color: #ff9aa2; text-shadow: 0 0 10px rgba(255, 90, 100, 0.6); }
+.lock-range.far .lr-tag { color: rgba(255, 154, 162, 0.8); }
+
 /* ══════════════════════ BOTTOM CENTRE — objective ════════════════════ */
 .hud-bc { position: absolute; bottom: max(14px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); width: min(360px, 40%); }
-.objective-card { border: 1px solid rgba(200, 230, 255, 0.18); border-radius: 3px; background: rgba(6, 12, 19, 0.6); padding: 8px 12px 9px; }
+/* Blue, to match the dial that opens it — the pilot learns "blue dial, blue
+   panel" once and never has to read either label again. */
+.objective-card {
+  border: 1px solid rgba(86, 200, 255, 0.34); border-radius: 3px;
+  background: linear-gradient(180deg, rgba(8, 22, 36, 0.68), rgba(5, 12, 20, 0.58));
+  box-shadow: 0 0 14px rgba(86, 200, 255, 0.10) inset;
+  padding: 8px 12px 9px;
+}
 .obj-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .obj-tag { font-size: 0.55em; letter-spacing: 0.26em; color: var(--amber); text-transform: uppercase; }
 .obj-mode { font-size: 0.55em; letter-spacing: 0.18em; color: rgba(210, 240, 255, 0.45); text-transform: uppercase; }
@@ -612,8 +711,9 @@ body.hud-hidden #mobile-controls { display: none !important; }
 .hud-combat {
   display: none; gap: 8px; align-items: center; margin: 0 auto 6px;
   width: max-content; padding: 5px 10px; border-radius: 6px;
-  border: 1px solid rgba(120, 230, 255, 0.22);
-  background: linear-gradient(180deg, rgba(6, 16, 28, 0.74), rgba(4, 10, 20, 0.55));
+  border: 1px solid rgba(86, 200, 255, 0.38);
+  background: linear-gradient(180deg, rgba(8, 22, 36, 0.76), rgba(4, 10, 20, 0.56));
+  box-shadow: 0 0 16px rgba(86, 200, 255, 0.12) inset;
   backdrop-filter: blur(4px);
 }
 .hud-combat.active { display: flex; }

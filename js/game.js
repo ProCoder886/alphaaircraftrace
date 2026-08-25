@@ -15,7 +15,7 @@ import {
   RNG, hashSeed, clamp, clamp01, lerp, damp, TAU,
 } from './config.js';
 import { DeviceProfile, PerfMonitor, AdaptiveQuality, Scheduler, LoadPipeline, nextFrame } from './performance.js';
-import { RenderSystem, CAM_ZOOM_MIN, CAM_ZOOM_MAX, CAM_ZOOM_STEP } from './renderer.js';
+import { RenderSystem, CAM_ZOOM_MIN, CAM_ZOOM_MAX, CAM_ZOOM_STEP, CAM_COUNTDOWN_SCALE } from './renderer.js';
 import { World } from './world.js';
 import { Player, InputManager } from './player.js';
 import { RaceDirector } from './ai.js';
@@ -72,11 +72,33 @@ export class SaveManager {
         }
       };
       merge(merged, parsed);
-      return merged;
+      return this._migrate(merged);
     } catch (e) {
       console.warn('[Save] unreadable, starting fresh:', e.message);
       return structuredClone(DEFAULT_SAVE);
     }
+  }
+
+  /**
+   * Repair a save that names content this build no longer has.
+   *
+   * The roster and the venue list are content tables, and content tables
+   * change: a save written when the hangar held eleven airframes can name one
+   * of the six that were cut, and every read of it downstream is `undefined`.
+   * Fixing it once here, on load, is cheaper and far safer than a defensive
+   * fallback at each of the dozen places that look an id up.
+   */
+  _migrate(data) {
+    if (!AIRCRAFT_BY_ID[data.selectedAircraft]) data.selectedAircraft = DEFAULTS.aircraft;
+    data.unlocked = (data.unlocked || []).filter((id) => AIRCRAFT_BY_ID[id]);
+    if (data.selectedLocation !== 'random' && !BIOMES_BY_ID[data.selectedLocation]) {
+      data.selectedLocation = DEFAULTS.location;
+    }
+    if (data.selectedMode && !MODES[data.selectedMode]) data.selectedMode = DEFAULTS.mode;
+    if (data.selectedWeather !== 'random' && !WEATHER[data.selectedWeather]) {
+      data.selectedWeather = 'random';
+    }
+    return data;
   }
 
   persist() {
@@ -603,7 +625,9 @@ export class Game {
     const venue = this.pickVenue(rng, locId, overrides.weather ?? s.selectedWeather, overrides.time);
     const mode = MODES[modeId] || MODES.endless;
     const difficulty = DIFFICULTIES[diffId] || DIFFICULTIES.elite;
-    const spec = AIRCRAFT_BY_ID[craftId] || AIRCRAFT_BY_ID.vector;
+    // AIRCRAFT[0] is the fallback, not a hard-coded id: a saved airframe that no
+    // longer exists in the roster must still launch something.
+    const spec = AIRCRAFT_BY_ID[craftId] || AIRCRAFT[0];
 
     this.runConfig = {
       ...venue, seed, mode, difficulty, spec, rng,
@@ -713,6 +737,18 @@ export class Game {
     this.render.rig.setUserZoom(this.save.data.settings.cameraZoom ?? 1);
     this.ui.setZoom(this.render.rig.zoomPercent, CAM_ZOOM_MIN * 100, CAM_ZOOM_MAX * 100);
     this.render.rig.reset();
+    /* Place the rig NOW, not on the first countdown frame.
+     *
+     * `tick` does not drive the camera while the state is 'loading', so
+     * without this the rig sits wherever the menu left it — and the menu's
+     * hangar preview leaves it two wingspans off the nose on a 34° long lens.
+     * The loading screen then lifts on a jet that fills the frame from a
+     * corner, and it slides into place during the countdown. Snapping it here,
+     * against the position `player.reset` has already put the aircraft at,
+     * means the first frame the player ever sees is the correct one. */
+    this.render.rig.update(0, this.player, {
+      speed01: 0, boost: 0, turbulence: 0, distanceScale: CAM_COUNTDOWN_SCALE,
+    });
 
     this.audio.igniteEngine();
     this.audio.setMusic(
@@ -760,7 +796,7 @@ export class Game {
       pitch: 0, roll: 0, yaw: 0, alive: true, gLoad: 1, altitude: this.player.position.y, damage01: 0,
     });
     this.render.rig.update(dt, { position: this.player.position, quaternion: this.player.quaternion }, {
-      speed01: 0, boost: 0, turbulence: 0,
+      speed01: 0, boost: 0, turbulence: 0, distanceScale: CAM_COUNTDOWN_SCALE,
     });
   }
 
