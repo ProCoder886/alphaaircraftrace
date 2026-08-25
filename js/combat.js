@@ -30,6 +30,9 @@ import { mergeGeometriesSafe } from './renderer.js';
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
+/* Dedicated, NOT one of the shared three above: the shot broadphase holds this
+ * across a loop whose body calls `_sweepHit`, which clobbers _v2 and _v3. */
+const _mid = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
 const _col = new THREE.Color();
@@ -760,8 +763,8 @@ export class CombatSystem {
      * more airframes in the sky than an early one, rather than being the same
      * fight with a bigger number on the objective. Everything else runs at 1. */
     this.pressure = opts.pressure ?? 1;
-    this.minEnemies = Math.round(COMBAT.minEnemies * this.pressure);
-    this.maxEnemies = Math.round(COMBAT.maxEnemies * this.pressure);
+    this.minEnemies = Math.min(COMBAT.hardCap, Math.round(COMBAT.minEnemies * this.pressure));
+    this.maxEnemies = Math.min(COMBAT.hardCap, Math.round(COMBAT.maxEnemies * this.pressure));
 
     this.tracers = new TracerBatch(render.scene);
     this.heavies = new HeavyBatch(render.scene);
@@ -1197,6 +1200,14 @@ export class CombatSystem {
   /** A hostile squeezes off a burst at the player. */
   enemyBurst(enemy, player, rounds) {
     const w = WEAPONS_BY_ID.gun;
+    /* The same ceiling `spawn` enforces, which this used to bypass by pushing
+     * straight onto the list. With a hundred hostiles in the air that is not a
+     * theoretical hole: a squadron firing ten-round bursts every half second
+     * will fill the tracer batch, and every round past the cap is one that is
+     * simulated and never drawn. */
+    const room = TRACER_CAP + HEAVY_CAP - this.shots.length;
+    if (room <= 0) return;
+    rounds = Math.min(rounds, room);
     // Aim error shrinks with accuracy: a poor pilot sprays, an ace leads you.
     const err = (1 - enemy.accuracy) * 0.055;
     for (let i = 0; i < rounds; i++) {
@@ -1390,8 +1401,16 @@ export class CombatSystem {
        * so a hit is a hit at any frame rate and any muzzle velocity. */
       let hit = null;
       if (s.fromPlayer) {
+        /* Broadphase first. A hundred hostiles times several hundred rounds in
+         * the air is tens of thousands of pairs a frame, and the swept test is
+         * an order more work than a distance compare — so reject on a sphere
+         * around this frame's travel before doing any of it. */
+        _mid.addVectors(_v, s.pos).multiplyScalar(0.5);
+        const reach = _v.distanceTo(s.pos) * 0.5 + w.radius;
+        const reach2 = reach * reach;
         for (const e of this.enemies) {
           if (!e.alive) continue;
+          if (e.position3.distanceToSquared(_mid) > reach2) continue;
           if (this._sweepHit(_v, s.pos, e.position3, w.radius)) { hit = e; break; }
         }
       } else if (player && player.alive) {

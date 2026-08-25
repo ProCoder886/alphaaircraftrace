@@ -308,9 +308,9 @@ export class AdaptiveQuality {
    * still particles to shed would be throwing away detail the machine could
    * afford.
    */
-  _governPreset(dt, avg, budget) {
+  _governPreset(wall, avg, budget) {
     if (!this.presetChoice) return false;
-    this.presetCooldown -= dt;
+    this.presetCooldown -= wall;
 
     const order = QUALITY_ORDER;
     const at = order.indexOf(this.presetName);
@@ -318,12 +318,12 @@ export class AdaptiveQuality {
     const floor = Math.max(0, order.indexOf(this.presetFloor));
 
     // Short of the floor with the ladder already at the bottom: shed a preset.
-    if (avg > budget * 1.10 && this.level >= this.maxLevel) this.presetDebt += dt;
-    else this.presetDebt = Math.max(0, this.presetDebt - dt * 0.6);
+    if (avg > budget * 1.10 && this.level >= this.maxLevel) this.presetDebt += wall;
+    else this.presetDebt = Math.max(0, this.presetDebt - wall * 0.6);
 
     // Comfortable AND the ladder is back at the top: earn the preset back.
-    if (avg < budget * 0.72 && this.level === 0) this.presetCredit += dt;
-    else this.presetCredit = Math.max(0, this.presetCredit - dt * 0.5);
+    if (avg < budget * 0.72 && this.level === 0) this.presetCredit += wall;
+    else this.presetCredit = Math.max(0, this.presetCredit - wall * 0.5);
 
     if (this.presetCooldown > 0) return false;
 
@@ -364,21 +364,33 @@ export class AdaptiveQuality {
 
   update(dt) {
     if (!this.enabled) return false;
-    this.cooldown -= dt;
+    /* WALL-CLOCK, not the simulation delta.
+     *
+     * `PerfMonitor.begin` clamps the delta it returns to 0.25 s so a tab-switch
+     * cannot destroy the physics. That clamp is right for the simulation and
+     * completely wrong here: on a machine running at 0.8 fps — exactly the
+     * machine this system exists for — the simulation clock advances at a fifth
+     * of real time, so every cooldown and every debt threshold below took five
+     * times as long to reach as it was tuned for. The governor was at its
+     * slowest precisely when it was needed most. `rawDt` is the real frame
+     * time, unclamped, which is what a reaction budget has to be measured in.
+     */
+    const wall = this.monitor.rawDt ?? dt;
+    this.cooldown -= wall;
     const avg = this.monitor.avgMs;
     const p95 = this.monitor.p95;
     const budget = 1000 / this.targetFps;
 
     // Debt accrues when we are consistently over budget; credit when comfortably under.
     if (p95 > budget * 1.28 || avg > budget * 1.14) {
-      this.dropDebt += dt * (avg > budget * 1.4 ? 2.2 : 1);
+      this.dropDebt += wall * (avg > budget * 1.4 ? 2.2 : 1);
       this.riseCredit = 0;
     } else if (avg < budget * 0.78 && p95 < budget * 1.02) {
-      this.riseCredit += dt;
-      this.dropDebt = Math.max(0, this.dropDebt - dt * 0.5);
+      this.riseCredit += wall;
+      this.dropDebt = Math.max(0, this.dropDebt - wall * 0.5);
     } else {
-      this.dropDebt = Math.max(0, this.dropDebt - dt * 0.3);
-      this.riseCredit = Math.max(0, this.riseCredit - dt * 0.3);
+      this.dropDebt = Math.max(0, this.dropDebt - wall * 0.3);
+      this.riseCredit = Math.max(0, this.riseCredit - wall * 0.3);
     }
 
     let changed = false;
@@ -396,12 +408,12 @@ export class AdaptiveQuality {
     for (const key of Object.keys(t)) {
       if (key === 'label') { this.scalars.label = t.label; continue; }
       if (key === 'shadowInterval') { this.scalars.shadowInterval = t.shadowInterval; continue; }
-      this.scalars[key] = damp(this.scalars[key] ?? t[key], t[key], k, dt);
+      this.scalars[key] = damp(this.scalars[key] ?? t[key], t[key], k, wall);
     }
     if (changed && this.onChange) this.onChange(this.level, t.label);
     // The preset governor is the second line: it only acts once the ladder has
     // run out, and its own change is reported through `onPresetChange`.
-    if (this._governPreset(dt, avg, budget)) return true;
+    if (this._governPreset(wall, avg, budget)) return true;
     return changed;
   }
 

@@ -12,7 +12,7 @@
 import {
   AIRCRAFT, AIRCRAFT_BY_ID, BIOMES, BIOMES_BY_ID, MODES, MODE_ORDER,
   DIFFICULTIES, DIFFICULTY_ORDER, POWERS, WEATHER, WEATHER_MENU, CAMPAIGN, ACHIEVEMENTS,
-  STORY, STORY_BY_ID, STORY_ACTS, LOCATIONS_BY_ID,
+  STORY, STORY_BY_ID, STORY_ACTS, LOCATIONS_BY_ID, COMBAT,
   QUALITY_ORDER, QUALITY_PRESETS, BINDING_LABELS, DEFAULT_BINDINGS, TIPS,
   CONTROL_GROUPS, MACH, WEAPONS, GAME_NAME, VERSION, clamp, clamp01, lerp, TAU,
 } from './config.js';
@@ -2139,7 +2139,7 @@ export class UI {
       <div class="fact"><i>WEATHER</i><b>${WEATHER[m.weather]?.name || m.weather}</b></div>
       <div class="fact"><i>DIFFICULTY</i><b>${DIFFICULTIES[m.diff]?.name || m.diff}</b></div>
       <div class="fact"><i>EST. LENGTH</i><b>${m.estMinutes} min</b></div>
-      <div class="fact"><i>SQUADRON</i><b>×${m.pressure.toFixed(2)} pressure</b></div>
+      <div class="fact"><i>SQUADRON</i><b>${Math.min(COMBAT.hardCap, Math.round(COMBAT.minEnemies * m.pressure))} hostiles</b></div>
       <div class="fact"><i>REWARD</i><b>◈ ${m.reward.toLocaleString()}</b></div>`;
 
     $('#brief-sub').textContent = cleared

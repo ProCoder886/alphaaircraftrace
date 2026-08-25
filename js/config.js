@@ -1031,6 +1031,13 @@ export const COMBAT = {
    * -------------------------------------------------------------------- */
   minEnemies: 100,
   maxEnemies: 130,
+  /* Absolute ceiling on live hostile AIRFRAMES, whatever a Story mission's
+   * pressure asks for. The per-frame cost of a hostile is bounded already —
+   * only `enemyDrawBudget` of them are ever meshes — but each one still owns an
+   * afterburner, a power shell and a trail ribbon at construction, and a late
+   * mission at 2.35x pressure would ask for three hundred of those in a single
+   * frame. This is where that stops. */
+  hardCap: 180,
   /* ---- drawing a hundred aircraft ---------------------------------------
    * The simulation is cheap: an enemy is a few dozen scalars advanced in path
    * space. The MESH is not — six draw calls, a trail ribbon and an afterburner
