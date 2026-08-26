@@ -784,6 +784,16 @@ export class Game {
     this.blockedPowers.clear();
     this.freezeTimer = 0;
     this.scoreMultiplier = cfg.daily ? cfg.daily.scoreMultiplier : 1;
+    /* Every per-run failure timer, cleared here rather than where it is used.
+     * These are countdowns to a game over: one left running from the previous
+     * sortie is a run that ends for something that happened in a run the
+     * player already finished. */
+    this._slowT = 0;
+    this._outrunT = 0;
+    this._disengageT = 0;
+    this._combatWarn = '';
+    this._machBand = undefined;
+    this._burnerWas = false;
 
     // Mode-specific setup.
     const m = cfg.mode;
@@ -1442,17 +1452,51 @@ export class Game {
   _checkCombatFailure(dt, player, cfg) {
     if (cfg.mode.speedFocus) {
       // Endless Race: you have to keep the speed up, and stay with the pack.
+      let slow = false;
       if (player.mach < 4) {
+        slow = true;
         this._slowT = (this._slowT || 0) + dt;
         this._combatWarn = `SPEED CRITICAL · ${Math.max(0, 12 - this._slowT).toFixed(0)}s`;
         if (this._slowT > 12) { this.endRun('SPEED LOST', false); return true; }
       } else { this._slowT = 0; this._combatWarn = ''; }
 
+      /* --- being out-run ---------------------------------------------------
+       * The pack SPAWNS seven to ten kilometres ahead — that is the premise of
+       * the mode, you are chasing it — so this rule cannot simply ask whether
+       * anyone is in front. It used to fail at a flat six kilometres, which is
+       * inside the spawn window, so the race ended on its first frame every
+       * time with the player still at the start line.
+       *
+       * Three things fix it, and all three are needed. The gap is DERIVED from
+       * the spawn envelope, so it is always clear of where the game itself
+       * puts them. It does not arm until the player has had `outrunGrace` to
+       * accelerate out of the opening. And it is SUSTAINED — falling behind is
+       * a countdown you can fly your way out of, with the warning clearing at
+       * a tighter gap than it starts at so it cannot strobe at the boundary.
+       * ------------------------------------------------------------------ */
       const lead = this.combat?.liveEnemies()
         .reduce((m, e) => Math.max(m, e.distanceAlong), -Infinity) ?? -Infinity;
-      if (isFinite(lead) && lead - player.distanceAlong > 6000) {
-        this.endRun('OUT-RUN BY THE SQUADRON', false);
-        return true;
+      const gap = isFinite(lead) ? lead - player.distanceAlong : 0;
+      const armed = this.runTime > COMBAT.outrunGrace;
+      const losing = (this._outrunT || 0) > 0;
+      const behind = gap > COMBAT.outrunGap * (losing ? COMBAT.outrunClear : 1);
+      if (armed && behind) {
+        this._outrunT = (this._outrunT || 0) + dt;
+        const left = Math.max(0, COMBAT.outrunTime - this._outrunT);
+        /* SPEED CRITICAL wins the strip. It is the shorter countdown and it is
+         * the reason you are being out-run in the first place — telling a
+         * player to close the gap while their real problem is that they are
+         * about to lose the run for being slow is the wrong instruction. */
+        if (!slow) {
+          this._combatWarn = `CLOSE THE GAP · ${(gap / 1000).toFixed(1)} km · ${left.toFixed(0)}s`;
+        }
+        if (this._outrunT > COMBAT.outrunTime) {
+          this.endRun('OUT-RUN BY THE SQUADRON', false);
+          return true;
+        }
+      } else if (this._outrunT) {
+        this._outrunT = 0;
+        if (!slow) this._combatWarn = '';
       }
     } else {
       /* Endless Battle: leaving the fight is the same as losing it.

@@ -381,7 +381,15 @@ export class EnemyFighter extends AIRacer {
 
     // Top speed for a hostile is the same envelope the player flies. In the
     // speed-focused mode they are allowed all the way to the Mach 30 ceiling.
-    this.topSpeed = Math.min(MACH.maxMs, this.topSpeed * (opts.speedFocus ? 1.42 : 1.0));
+    /* Endless Race: the pack is capped at the player's nitrous ceiling rather
+     * than given half again its own top speed. At 1.42x every hostile ran
+     * Mach 28-30 against an airframe that does Mach 22 dry, so the gap opened
+     * whatever the player flew and the race was unwinnable on a long enough
+     * timescale. Capped here, the speed ladder becomes the mode: dry loses
+     * ground, nitrous holds station, nitrous and Turbo together close. */
+    this.topSpeed = opts.speedFocus
+      ? Math.min(MACH.msPerMach * COMBAT.paceMach, this.topSpeed * 1.42)
+      : Math.min(MACH.maxMs, this.topSpeed);
 
     /* A hostile is not a racer and does not belong in the corridor. The
      * corridor cap would pull a formation spread over seven kilometres back
@@ -982,7 +990,7 @@ export class CombatSystem {
      * you lose. */
     const ahead = (extra = 0) => clamp(
       this.rng.float(COMBAT.spawnAheadMin, COMBAT.spawnAheadMax) + extra + off[2],
-      COMBAT.spawnAheadMin, COMBAT.spawnAheadMax * 3.2,
+      COMBAT.spawnAheadMin, COMBAT.spawnAheadCeil,
     );
 
     // The pack being chased is always in front of you.

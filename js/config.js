@@ -990,7 +990,7 @@ export const MODES = {
   },
   endlessrace: {
     id: 'endlessrace', name: 'ENDLESS RACE', tag: 'NEW',
-    desc: 'A hostile top-speed run. The same full weapon set as Battle, but the clock is the enemy — hold Mach, fly the manoeuvres and out-run a squadron that tops out at Mach 30 alongside you.',
+    desc: 'A hostile top-speed run. The same full weapon set as Battle, but the pack is the enemy — it starts ahead of you and holds Mach 24. Dry you lose ground, on nitrous you hold station, and only nitrous and Turbo together will take you past them.',
     hasLaps: false, hasRivals: true, hasTimer: false, escalates: true, failOnDamage: true,
     combat: true, speedFocus: true, primary: 'distance',
     // Aerobatics are not optional here — these are dealt before the random draw.
@@ -998,7 +998,7 @@ export const MODES = {
     objectives: [
       'Hold Mach 22 or above — speed is scored every second',
       'Complete the mandatory manoeuvre set: rolls, loops, flips and hard turns',
-      'Stay ahead of the enemy squadron — they also reach Mach 30',
+      'Run the pack down — it starts 7-10 km ahead and holds Mach 24',
       'Shoot down pursuers that close inside gun range',
     ],
     gameOver: [
@@ -1006,7 +1006,7 @@ export const MODES = {
       'Ground impact, or collision with a building or structure',
       'Engine overheat — 60 seconds above Mach 24',
       'Dropping below Mach 4 for more than 12 seconds',
-      'Falling more than 6 km behind the lead enemy',
+      'Falling 23 km behind the lead enemy for more than 15 seconds',
     ],
   },
   story: {
@@ -1282,6 +1282,44 @@ export const COMBAT = {
   engageDelay: 22,             // s of held fire at the start of a run
   /** Pursuit is this fraction of normal while the hold is running. */
   engageHoldPursuit: 0.35,
+  /* Hard ceiling on where a hostile may be placed along the route. The
+   * formation slot's own along-track offset is applied on top of the spawn
+   * window, so this is what stops a deep slot in a long shape landing over the
+   * horizon. It is also the number the out-run rule is measured against — see
+   * `outrunGap`, which is why it is a named constant rather than a multiple
+   * written inline at the one call site. */
+  spawnAheadCeil: 14000,
+  /* ---- ENDLESS RACE: being out-run ---------------------------------------
+   * The pack spawns AHEAD — that is the premise of the mode, you are chasing
+   * it — so the gap that counts as losing has to be measured from where the
+   * game itself puts them, not from zero. A fixed six kilometres was smaller
+   * than the seven-to-ten-kilometre spawn window, which meant the race was
+   * lost on its first frame, every time, before the player had moved.
+   *
+   * `outrunGap` is therefore DERIVED rather than written down: whatever the
+   * spawn envelope becomes, the fail distance stays clear of it by
+   * `outrunMargin`. The two can no longer disagree.
+   * -------------------------------------------------------------------- */
+  outrunMargin: 9000,          // m clear of the furthest legal spawn
+  outrunGrace: 20,             // s before the rule arms at all
+  outrunTime: 15,              // s beyond the gap before the run ends
+  outrunClear: 0.72,           // fraction of the gap that clears the warning
+  /** The gap, in metres, at which the squadron has genuinely out-run you. */
+  get outrunGap() { return this.spawnAheadCeil + this.outrunMargin; },
+  /* ---- ENDLESS RACE: the pace of the pack --------------------------------
+   * Hostiles used to be given 1.42x their airframe's top speed in this mode,
+   * which put the whole squadron at Mach 28-30 against a player airframe that
+   * tops out around Mach 22 dry. Nothing the player could do closed that: the
+   * gap opened whatever they flew, so the race was lost on a long enough
+   * timescale no matter what.
+   *
+   * The pack is now capped at the player's NITROUS ceiling. That turns the
+   * speed ladder into the gameplay of the mode: dry you lose ground, on
+   * nitrous you hold station, and on nitrous AND Turbo together — the only
+   * route to Mach 30 — you close. Slower airframes stay slower; this is a
+   * ceiling on the leader, not a speed everyone is given.
+   * -------------------------------------------------------------------- */
+  paceMach: 24.5,
   /** Enemy liveries — the recolours the same three airframes are issued in. */
   liveries: [
     0x2fd96b, 0x3aa0ff, 0xff5fb0, 0xffd63a, 0xff8a26, 0x1b1d22,
