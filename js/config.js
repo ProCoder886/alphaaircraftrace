@@ -255,6 +255,25 @@ export const PHYSICS = {
    * Mach 30 / 3000 km/h ceiling, so the top of the envelope is exactly what
    * this multiplier says it is rather than a separate number to keep in step. */
   turboBoost: 2.0,
+  /* ---- the two stages, and what each one is worth alone -----------------
+   * Mach 30 is the top of the envelope and NEITHER button reaches it on its
+   * own. Nitrous (spacebar) alone is worth the reheat margin — Mach 25 in the
+   * numbers above. Turbo (NUM 2) alone is worth `turboSoloMargin` of that same
+   * margin, which puts it around Mach 27: a real step up, and still short.
+   * The ceiling only opens when BOTH are in and both are fully spooled, and it
+   * opens in proportion to how fully — `burner * turboBlend`, so a stage still
+   * lighting is a ceiling still climbing. That product is what makes the top
+   * of the envelope something you commit to rather than something you tap.
+   * -------------------------------------------------------------------- */
+  turboSoloMargin: 1.45,       // reheat margins Turbo alone is worth
+  /* Extra thrust stage that exists ONLY with both lit. Reaching a ceiling is
+   * not the same as reaching it in a usable amount of time, and the combined
+   * run is meant to feel like the aircraft has found another gear. */
+  comboThrust: 0.42,
+  /* And the lapse floor is raised with both lit, so the last two Mach do not
+   * take longer than the first twenty-eight. Clamped to 1 at the use site: a
+   * lapse above 1 would mean thrust GROWING as the cap approaches. */
+  comboLapse: 1.30,
   /* ---- acceleration -----------------------------------------------------
    * Thrust and drag are deliberately scaled DOWN TOGETHER by 5x. Cutting
    * thrust alone would also cut the terminal speed — the top of the envelope
@@ -286,6 +305,12 @@ export const PHYSICS = {
    * you fly toward over a distance instead of something you switch on. */
   thrustBuildTime: 26,         // s of held throttle to full authority
   thrustBuildDecay: 5.5,       // s to bleed it back once the throttle comes off
+  /* Reference acceleration for the SOUND of gaining speed, not for the
+   * physics: `Player.accel01` is dv/dt divided by this and clamped, so the
+   * engine note loads up while the airframe is working for speed and eases
+   * once it has it. Sized to the reheat stage, which is the acceleration a
+   * player is most often listening to. */
+  accelRef: 34,                // m/s² that reads as "gaining hard"
   thrustBuildLow: 0.58,        // thrust multiplier from cold
   thrustBuildHigh: 1.10,       // thrust multiplier fully built
   /* ---- flight dynamics --------------------------------------------------
@@ -439,7 +464,13 @@ export const QUALITY_ORDER = ['low', 'medium', 'high', 'ultra', 'extreme'];
  * ======================================================================== */
 export const RADAR = {
   raceRange: 3200,             // m — corridor racing, where the route is the point
-  combatRange: 26000,          // m — matches the distance hostiles are drawn at
+  /* Combat reach. Hostiles arrive seven to ten kilometres out and hold a
+   * cluster a couple of kilometres across, so a 26 km disc drew the whole
+   * engagement inside its middle third and a wing read as one smudge. At
+   * sixteen the wave arrives around two thirds out, the shape of the formation
+   * is legible, and anything beyond is an edge wedge — which is all a contact
+   * that far away needs to be. */
+  combatRange: 16000,
   /** Contacts past the edge are pinned to the rim rather than dropped. */
   edgePin: true,
   maxContacts: 90,             // drawn per frame; nearest first
@@ -838,6 +869,13 @@ export const POWERS_BY_ID = Object.fromEntries(POWERS.map((p) => [p.id, p]));
  * ------------------------------------------------------------------------
  * Difficulty changes *behaviour*, not just AI top speed: obstacle density,
  * route complexity, recovery windows, weather severity and traffic all move.
+ *
+ * SQUADRON SIZE is one of those behaviours. It used to be a flat hundred-plus
+ * in every mode at every setting, which made Hard and Legendary the same wall
+ * of airframes and left no room for the ladder to mean anything. It is now a
+ * per-difficulty number — thirty on Hard — and the count climbs with the
+ * setting rather than with nothing at all. `COMBAT.minEnemies` is the fallback
+ * for a caller that has no difficulty to hand; the director prefers this.
  * ======================================================================== */
 
 export const DIFFICULTIES = {
@@ -846,33 +884,59 @@ export const DIFFICULTIES = {
     aiSkill: 0.52, aiAggression: 0.30, aiSpeed: 0.86, aiMistake: 0.22, aiPowerUse: 0.3, aiRubberband: 0.5,
     obstacleDensity: 0.55, trafficDensity: 0.5, routeComplexity: 0.4, weatherSeverity: 0.5,
     turbulence: 0.5, damageScale: 0.6, recoveryWindow: 2.2, rewardMult: 1.0, aiCount: 5, timeBonus: 1.35,
+    squadron: 16,
   },
   hard: {
     name: 'HARD', order: 1, desc: 'Rivals defend position and the route stops being polite.',
     aiSkill: 0.66, aiAggression: 0.48, aiSpeed: 0.93, aiMistake: 0.14, aiPowerUse: 0.5, aiRubberband: 0.42,
     obstacleDensity: 0.78, trafficDensity: 0.72, routeComplexity: 0.62, weatherSeverity: 0.72,
     turbulence: 0.72, damageScale: 0.8, recoveryWindow: 1.8, rewardMult: 1.35, aiCount: 6, timeBonus: 1.18,
+    squadron: 30,
   },
   elite: {
     name: 'ELITE', order: 2, desc: 'The championship standard. Intelligent rivals, dense airspace, real consequences.',
     aiSkill: 0.79, aiAggression: 0.62, aiSpeed: 1.0, aiMistake: 0.08, aiPowerUse: 0.7, aiRubberband: 0.34,
     obstacleDensity: 1.0, trafficDensity: 0.95, routeComplexity: 0.82, weatherSeverity: 0.9,
     turbulence: 0.9, damageScale: 1.0, recoveryWindow: 1.5, rewardMult: 1.75, aiCount: 7, timeBonus: 1.0,
+    squadron: 46,
   },
   master: {
     name: 'MASTER', order: 3, desc: 'Rivals read your line and close the door before you commit to it.',
     aiSkill: 0.89, aiAggression: 0.76, aiSpeed: 1.06, aiMistake: 0.04, aiPowerUse: 0.85, aiRubberband: 0.24,
     obstacleDensity: 1.25, trafficDensity: 1.15, routeComplexity: 0.94, weatherSeverity: 1.05,
     turbulence: 1.05, damageScale: 1.25, recoveryWindow: 1.2, rewardMult: 2.3, aiCount: 7, timeBonus: 0.9,
+    squadron: 64,
   },
   legendary: {
     name: 'LEGENDARY', order: 4, desc: 'No mistakes, no mercy, no clean air. Very few pilots finish.',
     aiSkill: 0.97, aiAggression: 0.92, aiSpeed: 1.12, aiMistake: 0.015, aiPowerUse: 1.0, aiRubberband: 0.16,
     obstacleDensity: 1.55, trafficDensity: 1.35, routeComplexity: 1.0, weatherSeverity: 1.2,
     turbulence: 1.2, damageScale: 1.5, recoveryWindow: 0.95, rewardMult: 3.2, aiCount: 7, timeBonus: 0.82,
+    squadron: 84,
   },
 };
 export const DIFFICULTY_ORDER = ['normal', 'hard', 'elite', 'master', 'legendary'];
+
+/**
+ * How many hostile airframes a sortie fields.
+ *
+ * The combat director and the Story briefing card both need this number, and
+ * a briefing that promises thirty while the director flies fifty is worse than
+ * no briefing at all — so both call this rather than each doing the arithmetic.
+ *
+ * @param diff    a DIFFICULTIES key, or the preset object itself
+ * @param pressure a Story mission's pressure multiplier; 1 everywhere else
+ * @returns {{min: number, max: number}} the floor the airspace is topped back
+ *   up to, and the ceiling waves may grow it to
+ */
+export function squadronSize(diff, pressure = 1) {
+  const d = typeof diff === 'string' ? DIFFICULTIES[diff] : diff;
+  const base = d?.squadron ?? COMBAT.minEnemies;
+  const push = 1 + (pressure - 1) * COMBAT.pressureCount;
+  const min = Math.max(1, Math.min(COMBAT.hardCap, Math.round(base * push)));
+  const max = Math.max(min, Math.min(COMBAT.hardCap, Math.round(base * COMBAT.headroom * push)));
+  return { min, max };
+}
 
 /* ===========================================================================
  * GAME MODES
@@ -1125,27 +1189,31 @@ export const COMBAT = {
   /** Hostile splash reach, as a fraction of the round's rated blast. */
   enemyBlastScale: 0.30,
   /* ---- squadron size ----------------------------------------------------
-   * A HUNDRED hostiles minimum in every mode that fields them — five times the
-   * old floor. `minEnemies` is a FLOOR the director tops back up to as kills
-   * come in, not just an opening grid, so the fight never thins out into a
-   * chase. `maxEnemies` is the hard cap on live airframes, and the two are
-   * deliberately close: the pressure is meant to be constant rather than
-   * arriving in lulls and spikes.
+   * The floor the director tops the airspace back up to as kills come in, so
+   * the fight never thins out into a chase. This is a FALLBACK: the real
+   * number comes from `DIFFICULTIES[x].squadron` — thirty on Hard, climbing
+   * with the setting — and this is only used when a caller has no difficulty
+   * to hand. It matches Elite, the middle of the ladder.
    *
-   * A squadron this size only works because hostiles are cheap when they are
-   * far away: they fly in path space either way, and `enemyDrawRange` decides
-   * how many of them are actually MESHES on any given frame. See the note on
-   * that value.
+   * `headroom` is how far above the floor the squadron is allowed to grow as
+   * waves stack. Keeping it a ratio rather than a second absolute number means
+   * the whole ladder scales with one edit per rung.
    * -------------------------------------------------------------------- */
-  minEnemies: 100,
-  maxEnemies: 130,
+  minEnemies: 46,
+  headroom: 1.3,
   /* Absolute ceiling on live hostile AIRFRAMES, whatever a Story mission's
    * pressure asks for. The per-frame cost of a hostile is bounded already —
    * only `enemyDrawBudget` of them are ever meshes — but each one still owns an
-   * afterburner, a power shell and a trail ribbon at construction, and a late
-   * mission at 2.35x pressure would ask for three hundred of those in a single
-   * frame. This is where that stops. */
-  hardCap: 180,
+   * afterburner, a power shell and a trail ribbon at construction. */
+  hardCap: 120,
+  /* ---- how hard Story pressure pushes the count -------------------------
+   * A mission's `pressure` runs to 2.35, and multiplying the squadron by it
+   * outright puts the late missions straight back into the two-hundred-airframe
+   * territory the difficulty ladder exists to avoid. Pressure therefore moves
+   * the count at HALF strength — a 2.35x mission fields 1.68x the airframes —
+   * while continuing to drive AI skill and aggression at full strength, which
+   * is where a mission should be getting harder anyway. */
+  pressureCount: 0.5,
   /* ---- drawing a hundred aircraft ---------------------------------------
    * The simulation is cheap: an enemy is a few dozen scalars advanced in path
    * space. The MESH is not — six draw calls, a trail ribbon and an afterburner
@@ -1157,22 +1225,32 @@ export const COMBAT = {
    * -------------------------------------------------------------------- */
   enemyDrawRange: 26000,       // m — beyond this a hostile is simulated, not drawn
   enemyDrawBudget: 28,         // hard cap on hostile meshes drawn at once
+  /* ---- how tightly a wing flies -----------------------------------------
+   * The formation tables below are written in metres at full combat spread.
+   * Flown at that scale a wing is seven to ten kilometres across, which is
+   * realistic and unreadable: on a radar sized for the whole engagement each
+   * fighter is a lone dot several rings from its own wingmen, and a formation
+   * you cannot see the shape of is not a formation. Scaling the whole table
+   * keeps every shape exactly as designed — the finger-four is still a
+   * finger-four — and brings a wing down to something that arrives as a
+   * CLUSTER you can read at a glance and then pick apart.
+   * -------------------------------------------------------------------- */
+  formationScale: 0.20,        // multiplies every offset in FORMATIONS
   /* ---- keeping them apart -----------------------------------------------
-   * Spawning a squadron seven kilometres apart is not the same as KEEPING it
-   * seven kilometres apart: every hostile is pursuing the same aircraft, so
+   * Scaling the table sets where they START; this is what stops them ending up
+   * in the same cubic metre. Every hostile is pursuing the same aircraft, so
    * without a separation term the whole wing converges on the player's offsets
-   * and arrives as one saturated blob — which is the thing the spread exists
-   * to prevent. Each fighter therefore pushes off any neighbour closer than
-   * `spreadMin` and stops caring past `spreadMax`, so the squadron settles
-   * into the 7-10 km lattice the brief asks for while still hunting.
+   * and arrives as one point. Each fighter pushes off any neighbour closer
+   * than `spreadMin` and stops caring past `spreadMax` — a band chosen so the
+   * squadron holds a tight lattice rather than dispersing across the map.
    *
    * The check is strided rather than exhaustive: a hundred aircraft each
    * testing ninety-nine neighbours every frame is ten thousand distance
    * computations for a force that changes slowly. `spreadSamples` peers per
    * frame, on a rotating offset, converges to the same lattice.
    * -------------------------------------------------------------------- */
-  spreadMin: 7000,             // m — closer than this and they push apart
-  spreadMax: 10000,            // m — past this a neighbour is not a neighbour
+  spreadMin: 620,              // m — closer than this and they push apart
+  spreadMax: 2100,             // m — past this a neighbour is not a neighbour
   spreadForce: 2.2,            // how hard the push is, in offset metres/second
   spreadSamples: 14,           // peers each fighter checks per frame
   /** Seconds after a kill before that slot is refilled. */
@@ -1186,9 +1264,9 @@ export const COMBAT = {
    *
    * Seven to ten kilometres is the window. Nearer and there is no time to
    * point the aircraft; further and the first minute of every sortie is spent
-   * flying toward an empty horizon. The formation spread is a further seven to
-   * ten kilometres ACROSS, so a wave arrives as a band in front of you rather
-   * than a point, and the geometry below decides where in that band.
+   * flying toward an empty horizon. Within that window the wing holds the
+   * tight lattice `formationScale` sets, so a wave arrives as a readable
+   * cluster in front of you and the geometry below decides where it forms.
    * -------------------------------------------------------------------- */
   approach: { head: 0.34, side: 0.26, diagonal: 0.24, vertical: 0.16 },
   spawnAheadMin: 7000,         // m — closest a hostile may ever appear
@@ -1248,8 +1326,9 @@ export const COMBAT = {
  * DIFFICULTY comes from three places, and all three climb across the fifteen:
  * the difficulty preset (rival skill, damage, weather severity), the venue
  * (Emerald Delta is forgiving, Neon Megacity is not), and `pressure` — a
- * multiplier on the squadron floor, so late missions genuinely put more
- * airframes in the sky rather than the same fight with bigger numbers on it.
+ * multiplier on the squadron floor, applied at `COMBAT.pressureCount` strength
+ * so late missions put more airframes in the sky without undoing the ladder
+ * the difficulty setting establishes. See `squadronSize`.
  * ======================================================================== */
 
 /** One phase of a mission. `text` is what the HUD shows while it is live. */
@@ -1684,7 +1763,7 @@ export const DEFAULT_BINDINGS = {
   rollLeft:   ['KeyQ'],
   rollRight:  ['KeyE'],
   throttleUp: ['ShiftLeft', 'ShiftRight'],
-  brake:      ['ControlLeft', 'KeyH'],
+  brake:      ['KeyF', 'ControlLeft', 'KeyH'],
   boost:      ['Space'],
   power1:     ['Numpad1', 'Digit1'],
   power2:     ['Numpad2', 'Digit2'],
@@ -1705,7 +1784,10 @@ export const DEFAULT_BINDINGS = {
   weaponGrenade: ['KeyV'],
   weaponRpg:     ['KeyB'],
   pause:      ['Escape'],
-  fullscreen: ['KeyF'],
+  /* F is the air brake — it is the key a pilot reaches for to slow down, and
+   * it is worth more there than on a window toggle. Fullscreen keeps F11,
+   * which is what a browser uses for it anyway. */
+  fullscreen: ['F11'],
   // One key, one press: C toggles between Chase and First Person.
   camera:     ['KeyC'],
   debug:      ['F8'],
@@ -1715,7 +1797,7 @@ export const BINDING_LABELS = {
   pitchUp: 'Pitch Up / Climb', pitchDown: 'Pitch Down / Dive',
   leanLeft: 'Lean / Turn Left', leanRight: 'Lean / Turn Right',
   rollLeft: 'Bank Left', rollRight: 'Bank Right',
-  throttleUp: 'Throttle Up', brake: 'Air Brake', boost: 'Nitrous Boost',
+  throttleUp: 'Throttle Up', brake: 'Air Brake / Slow Down', boost: 'Nitrous Boost',
   fireGun: 'Fire Guns (or Left Mouse)', fireWeapon: 'Launch Missile (or Right Mouse)',
   cycleGun: 'Next Gun Type', cycleWeapon: 'Next Missile Type',
   cycleTarget: 'Change Target',
@@ -1748,7 +1830,7 @@ export const CONTROL_GROUPS = [
       { action: 'rollLeft', short: 'Roll L', icon: 'rollL' },
       { action: 'rollRight', short: 'Roll R', icon: 'rollR' },
       { action: 'throttleUp', short: 'Thrust', icon: 'throttle' },
-      { action: 'brake', short: 'Brake', icon: 'brake' },
+      { action: 'brake', short: 'Slow', icon: 'brake' },
       { action: 'boost', short: 'Nitrous', icon: 'turbo' },
     ],
   },

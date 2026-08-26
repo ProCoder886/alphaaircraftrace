@@ -12,7 +12,7 @@
 import {
   AIRCRAFT, AIRCRAFT_BY_ID, BIOMES, BIOMES_BY_ID, MODES, MODE_ORDER,
   DIFFICULTIES, DIFFICULTY_ORDER, POWERS, WEATHER, WEATHER_MENU, CAMPAIGN, ACHIEVEMENTS,
-  STORY, STORY_BY_ID, STORY_ACTS, LOCATIONS_BY_ID, COMBAT,
+  STORY, STORY_BY_ID, STORY_ACTS, LOCATIONS_BY_ID, squadronSize,
   QUALITY_ORDER, QUALITY_PRESETS, BINDING_LABELS, DEFAULT_BINDINGS, TIPS,
   CONTROL_GROUPS, MACH, WEAPONS, RADAR, radarProject, radarBearing,
   GAME_NAME, VERSION, clamp, clamp01, lerp, TAU,
@@ -340,7 +340,11 @@ export class UI {
     const host = this.dom.controls;
     if (!host) return;
     this._legendCombat = showCombat;
-    const binds = this.save.data.settings.bindings || {};
+    /* The LIVE map, not the saved one. A saved profile can be older than the
+     * defaults it is merged over — the input manager migrates those on load —
+     * and a legend drawn from the raw save would confidently print the key a
+     * control used to be on. */
+    const binds = this.input?.bindings || this.save.data.settings.bindings || {};
     const frag = document.createDocumentFragment();
 
     for (const group of CONTROL_GROUPS) {
@@ -2266,7 +2270,7 @@ export class UI {
       <div class="fact"><i>WEATHER</i><b>${WEATHER[m.weather]?.name || m.weather}</b></div>
       <div class="fact"><i>DIFFICULTY</i><b>${DIFFICULTIES[m.diff]?.name || m.diff}</b></div>
       <div class="fact"><i>EST. LENGTH</i><b>${m.estMinutes} min</b></div>
-      <div class="fact"><i>SQUADRON</i><b>${Math.min(COMBAT.hardCap, Math.round(COMBAT.minEnemies * m.pressure))} hostiles</b></div>
+      <div class="fact"><i>SQUADRON</i><b>${squadronSize(m.diff, m.pressure).min} hostiles</b></div>
       <div class="fact"><i>REWARD</i><b>◈ ${m.reward.toLocaleString()}</b></div>`;
 
     $('#brief-sub').textContent = cleared

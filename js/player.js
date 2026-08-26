@@ -36,6 +36,7 @@ const NITROUS_GREEN = new THREE.Color(0x2bff86);
 export class InputManager {
   constructor(bindings = null) {
     this.bindings = bindings ? { ...DEFAULT_BINDINGS, ...bindings } : { ...DEFAULT_BINDINGS };
+    this._migrateBrakeKey(bindings);
     this.keys = new Set();
     this.pressed = new Set();     // edge-triggered this frame
     this.released = new Set();
@@ -117,7 +118,32 @@ export class InputManager {
     return false;
   }
 
-  setBindings(b) { this.bindings = { ...DEFAULT_BINDINGS, ...(b || {}) }; }
+  /**
+   * A saved profile predating F becoming the air brake.
+   *
+   * Bindings are persisted as a WHOLE map the moment a player rebinds anything,
+   * so a profile written before this change pins `brake` to Ctrl/H and
+   * `fullscreen` to F, and the spread above faithfully restores both — leaving
+   * the one key the brake is now documented on doing nothing at all.
+   *
+   * The fix is narrow on purpose. It fires only when the saved map holds the
+   * OLD DEFAULTS EXACTLY: fullscreen on F alone, and F nowhere on the brake.
+   * Anyone who deliberately put F somewhere of their own, or who moved
+   * fullscreen themselves, has a map that does not match and is left alone.
+   */
+  _migrateBrakeKey(saved) {
+    if (!saved) return;
+    const fs = saved.fullscreen, brake = saved.brake;
+    if (!Array.isArray(fs) || fs.length !== 1 || fs[0] !== 'KeyF') return;
+    if (Array.isArray(brake) && brake.includes('KeyF')) return;
+    this.bindings.fullscreen = [...DEFAULT_BINDINGS.fullscreen];
+    this.bindings.brake = ['KeyF', ...(brake || DEFAULT_BINDINGS.brake).filter((c) => c !== 'KeyF')];
+  }
+
+  setBindings(b) {
+    this.bindings = { ...DEFAULT_BINDINGS, ...(b || {}) };
+    this._migrateBrakeKey(b);
+  }
   rebind(action, code) {
     // A key can only drive one action — strip it from anywhere else first.
     for (const [k, list] of Object.entries(this.bindings)) {
@@ -630,6 +656,7 @@ export class Player {
     this.turboBlend = 0;
     this.boostCooldown = 0;
     this.burner = 0;             // reheat spool state, 0..1
+    this.accel01 = 0;            // signed, damped: how hard speed is changing
     this.health = this.maxHealth;
     this.alive = true;
     this.sink = 0;
@@ -730,6 +757,7 @@ export class Player {
     this.overheat = 0;
     this.throttle = this.throttleTarget = 0.85;
     this.burner = 0;
+    this.accel01 = 0;
     this.loadFactor = 1;
     this.rollRateActual = 0;
     this.slipVel = 0;
@@ -932,9 +960,19 @@ export class Player {
      * anywhere. */
     const scale = this.topSpeed / PHYSICS.maxSpeed;
     const margin = PHYSICS.boostSpeed - PHYSICS.maxSpeed;
+    /* --- the combined stage ------------------------------------------------
+     * How fully BOTH stages are lit, as one number. Turbo used to open the
+     * ceiling to Mach 30 on its own the instant it was pressed, which made the
+     * spacebar irrelevant at the top of the envelope and the top of the
+     * envelope a button rather than a commitment. Now each stage is worth its
+     * own margin alone, and the last stretch to Mach 30 belongs to the two of
+     * them together — in proportion to how fully each is in, so a stage still
+     * spooling is a ceiling still climbing. */
+    const combo = this.burner * this.turboBlend;
     let cap = this.topSpeed;
     if (this.boosting) cap = (PHYSICS.maxSpeed + margin * 0.94) * scale;
-    if (turbo) cap = MACH.maxMs;
+    if (turbo) cap = Math.max(cap, (PHYSICS.maxSpeed + margin * PHYSICS.turboSoloMargin) * scale);
+    if (turbo && this.boosting) cap = lerp(cap, MACH.maxMs, combo);
     cap *= lerp(1, 0.88, thin);
 
     /* --- sustained-throttle build ----------------------------------------
@@ -963,9 +1001,15 @@ export class Player {
      * every airframe to Mach 30, so the ability that used to add 12% to a
      * ceiling now buys thrust where thrust is scarcest, and gets you there
      * sooner instead. */
-    const lapse = lerp(1, PHYSICS.reheatLapseFloor * this.turboBonus,
+    const floor = Math.min(1, PHYSICS.reheatLapseFloor * this.turboBonus
+      * lerp(1, PHYSICS.comboLapse, combo));
+    const lapse = lerp(1, floor,
       Math.pow(clamp01(this.speed / Math.max(1, cap)), PHYSICS.reheatLapsePower));
-    const stage = this.burner * build + this.turboBlend * PHYSICS.turboThrust;
+    /* Both stages lit is worth more than the sum of the two: `comboThrust` is
+     * the gear that only exists when nitrous and Turbo are burning together,
+     * and it is what makes the run to Mach 30 a run rather than a wait. */
+    const stage = this.burner * build + this.turboBlend * PHYSICS.turboThrust
+      + combo * PHYSICS.comboThrust;
     thrust += PHYSICS.boostAccel * this.boostPower * stage * lapse;
     // Gravity along the flight path: a dive is free speed, a climb costs it.
     // Power Flight all but cancels it, which is what makes it a save button.
@@ -977,10 +1021,20 @@ export class Player {
       * (1 + c.brake * 3.2 + Math.abs(sc.roll) * 0.14);
     // Power Flight is exactly that: the wing stops charging you for lift.
     const induced = powerFlight ? 0 : PHYSICS.inducedDrag * this.loadFactor * this.loadFactor / V;
+    const wasSpeed = this.speed;
     this.speed += (thrust - parasitic - induced) * dt;
     if (this.speed > cap) this.speed = damp(this.speed, cap, 2.4, dt);
     // MACH.max is the hard ceiling for every airframe in the game.
     this.speed = clamp(this.speed, PHYSICS.minSpeed * 0.55, MACH.maxMs);
+    /* --- how hard the airframe is gaining or losing speed -------------------
+     * Presentation only, and it exists because the engine note used to track
+     * SPEED alone: at a steady Mach 20 and while clawing up to it the aircraft
+     * sounded identical, so there was no audible difference between working
+     * for speed and having it. Signed, damped, and normalised against a
+     * reference acceleration so both the load-up and the airbrake read.
+     * -------------------------------------------------------------------- */
+    const dv = (this.speed - wasSpeed) / Math.max(1e-4, dt);
+    this.accel01 = damp(this.accel01, clamp(dv / PHYSICS.accelRef, -1, 1), 3.5, dt);
 
     /* --- integrate ------------------------------------------------------ */
     // Below the speed at which the wing can hold 1 g the airframe simply mushes.

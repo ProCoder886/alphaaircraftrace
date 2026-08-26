@@ -22,7 +22,7 @@
 import * as THREE from 'three';
 import {
   WEAPONS_BY_ID, HEAVY_ORDER, GUN_ORDER, COMBAT, SCORE, PHYSICS, MACH, AIRCRAFT_BY_ID,
-  RNG, clamp, clamp01, lerp, damp, TAU,
+  squadronSize, RNG, clamp, clamp01, lerp, damp, TAU,
 } from './config.js';
 import { AIRacer } from './ai.js';
 import { mergeGeometriesSafe } from './renderer.js';
@@ -250,18 +250,19 @@ export class WeaponGuide {
 /* ===========================================================================
  * FORMATIONS
  * ------------------------------------------------------------------------
- * Slot offsets as [lateral, vertical, along] in metres.
+ * Slot offsets as [lateral, vertical, along] in metres at FULL COMBAT SPREAD.
+ * Nothing flies at these numbers directly: `COMBAT.formationScale` multiplies
+ * every one of them at the point of use, and the table is written unscaled so
+ * the shapes stay readable as geometry and the tightness stays one edit.
  *
- * These used to be measured in HUNDREDS of metres, which at Mach 22 closure
- * put an entire four-ship inside a single second of flight — the squadron read
- * as one saturated blob, every missile that killed one killed the pair beside
- * it, and there was no geometry to fly against because there was no space
- * between them. The lateral figures below are now SEVEN TO TEN KILOMETRES:
- * far enough apart that each hostile is its own engagement, that killing one
- * does not collapse the wing, and that turning to face one exposes you to
- * another. That spacing is also what makes the new weapon reach mean
- * something — a 56 km missile is only interesting if the target is a long way
- * away.
+ * The figures below are the honest ones — a real finger-four is kilometres
+ * across. Flown at full scale, though, a wing is spread wider than the radar
+ * has rings: each fighter is a lone dot nowhere near its own wingmen, the
+ * shape is invisible, and there is nothing to read. Scaling the whole table
+ * keeps the geometry — the stepped pairs, the wall with no way through the
+ * middle, the ring that comes from every bearing — and brings the wing down to
+ * something that arrives as a CLUSTER, which is the thing the player is
+ * actually meant to see coming and then pick apart.
  *
  * Eight formations, not four, and they are drawn per wave, so a squadron
  * arrives with a shape you have to read rather than a wall you memorise.
@@ -399,23 +400,29 @@ export class EnemyFighter extends AIRacer {
   /**
    * Slot offset for this fighter inside its formation.
    *
-   * A squadron of a hundred does not fit in a six-slot table, so slots past
-   * the end of it repeat the shape one element further out and one element
-   * further back, alternating sides. The result is a squadron that keeps
-   * getting wider instead of stacking a dozen aircraft on the same point —
-   * which is the whole reason the spacing was raised in the first place.
+   * The table is written at full combat spread and flown at
+   * `COMBAT.formationScale` of it, so every shape keeps its geometry while a
+   * wing arrives as a cluster you can read on the radar instead of a scatter
+   * of unrelated dots several rings apart.
    */
   formationOffset() {
     const f = FORMATIONS[this.formationId] || FORMATIONS.finger;
     const base = f[this.formationSlot % f.length];
     const wing = Math.floor(this.formationSlot / f.length);
-    if (!wing) return base;
+    const k = COMBAT.formationScale;
+    if (!wing) return [base[0] * k, base[1] * k, base[2] * k];
+    /* Wings past the first repeat the shape one element further out and one
+     * further back, alternating sides — a squadron of thirty does not fit in a
+     * six-slot table. The repeat steps are scaled by the same factor as the
+     * table itself, or the second wing would sit ten kilometres off a shape
+     * that is now one and a half across, and the cluster would be a cluster
+     * plus a scattering of strays. */
     const side = wing % 2 ? 1 : -1;
     const step = Math.ceil(wing / 2);
     return [
-      base[0] + side * step * 11000,
-      base[1] + side * step * 1500,
-      base[2] - step * 9500,
+      (base[0] + side * step * 4200) * k,
+      (base[1] + side * step * 900) * k,
+      (base[2] - step * 3600) * k,
     ];
   }
 
@@ -783,8 +790,16 @@ export class CombatSystem {
      * close — they simply do not shoot. It is the difference between a fight
      * starting and a fight ambushing you. */
     this.armTimer = COMBAT.engageDelay;
-    this.minEnemies = Math.min(COMBAT.hardCap, Math.round(COMBAT.minEnemies * this.pressure));
-    this.maxEnemies = Math.min(COMBAT.hardCap, Math.round(COMBAT.maxEnemies * this.pressure));
+    /* --- how many airframes are up there -----------------------------------
+     * The floor comes from the DIFFICULTY the player chose — thirty on Hard,
+     * climbing with the setting — rather than from one flat number that made
+     * every rung of the ladder the same wall of aircraft. Story pressure moves
+     * it on top of that, but at half strength: a 2.35x mission multiplying the
+     * count outright is how a Legendary late mission ends up back at two
+     * hundred airframes, which is the thing the ladder exists to avoid. */
+    const squadron = squadronSize(difficulty, this.pressure);
+    this.minEnemies = squadron.min;
+    this.maxEnemies = squadron.max;
 
     this.tracers = new TracerBatch(render.scene);
     this.heavies = new HeavyBatch(render.scene);
@@ -891,9 +906,9 @@ export class CombatSystem {
   /**
    * Put a wave of hostiles in the air around the player.
    *
-   * The squadron is held at `COMBAT.minEnemies` (20) rather than grown from
+   * The squadron is held at the difficulty's own floor rather than grown from
    * two: this is a battle, and a battle that opens with a pair and thins out
-   * as you kill them is a chase. Each wave tops the airspace back up to the
+   * as you kill them is a chase. Each wave tops the airspace back up to that
    * floor and pushes a little past it as the fight escalates.
    *
    * Approach geometry is drawn per fighter from `COMBAT.approach`, so a wave
@@ -1173,19 +1188,18 @@ export class CombatSystem {
     if (s) s.fromPlayer = true;
 
     /* --- launch ----------------------------------------------------------
-     * The rail release is its own event: a bloom of motor exhaust at the
-     * pylon, a wash of smoke dropping away under the aircraft, a flash tinted
-     * to the weapon, and a shove on the camera. Without it the round simply
-     * appears in front of you and the launch reads as nothing happening. */
+     * The rail release is its own event, and it is a DIRECTIONAL one: a motor
+     * lighting throws a hard jet backward down the rail and leaves a wall of
+     * efflux smoke hanging where the aircraft was. It used to be an
+     * omnidirectional bloom at the pylon, which is the one shape a rocket
+     * launch never has. `missileLaunch` owns the whole sequence including the
+     * motor burning out a beat later; here we add only what belongs to the
+     * AIRCRAFT rather than to the round — the flash on the canopy and the
+     * shove as several hundred kilos leaves the wing. */
     _v.set(0, 0, -1).applyQuaternion(player.quaternion);
-    this.render.vfx.explode(_v3, 5, w.color);
-    this.render.vfx.sparkBurst(_v3, _v.clone().negate(), 26, w.color);
-    for (let i = 1; i <= 4; i++) {
-      _v2.copy(_v3).addScaledVector(_v, -i * 7);
-      this.render.vfx.smokePuff(_v2, 7, 5.5, 0xd2d7dc);
-    }
-    this.render.postfx.flash(0.20, w.color);
-    this.render.rig.addShake(0.42, 20);
+    this.render.vfx.missileLaunch(_v3, _v, w.color);
+    this.render.postfx.flash(0.26, w.color);
+    this.render.rig.addShake(0.58, 18);
 
     this.audio?.play(w.id === 'grenade' ? 'grenadeThrow' : 'missileLaunch', { volume: 1 });
     this.events.push({ type: 'launch', weapon: w });
@@ -1499,25 +1513,34 @@ export class CombatSystem {
         const len = clamp(s.vel.length() * dt * 1.8, 34, 150);
         this.tracers.push(s.pos, s.dir, len, s.fromPlayer ? 2.6 : 2.0, s.color);
       } else {
-        // Motor burn: the round grows briefly as it lights, then settles.
+        /* Motor burn. A real rocket motor has a BOOST phase and then it is
+         * out: a hard bright burn for the first second or so, then a round
+         * coasting on a cold smoke trail for the rest of its flight. Modelling
+         * that is most of the difference between a missile and a glowing dart
+         * — the flare tells you the round has just left, and the cold trail
+         * tells you it is still coming. */
         const age = w.life - s.life;
+        const burn = clamp01(1 - (age - 0.35) / 0.9);      // 1 while lit, 0 once out
         const boostFlare = 1 + Math.max(0, 0.55 - age) * 1.6;
         this.heavies.push(s.pos, s.dir,
           (w.id === 'grenade' ? 2.4 : 3.6) * boostFlare, s.color);
-        // Guided and rocket rounds leave a burning motor plume: a bright core
-        // right at the nozzle and cooling smoke behind it.
-        // Emission rate is capped rather than per-frame: a plume this dense
-        // costs a few hundred live particles per round, and four rounds in the
-        // air must not be able to drain the whole budget.
+        /* Emission rate is capped rather than per-frame: a plume this dense
+         * costs a few hundred live particles per round, and four rounds in the
+         * air must not be able to drain the whole budget. It also THINS as the
+         * motor dies, which is what makes the burnout visible. */
         s.smokeT = (s.smokeT || 0) - dt;
         if (s.smokeT <= 0) {
-          s.smokeT = 0.055;
+          s.smokeT = burn > 0.05 ? 0.045 : 0.085;
           _v3.copy(s.pos).addScaledVector(s.dir, -6);
-          this.render.vfx.smokePuff(_v3, w.beam ? 2 : 3, w.beam ? 2.4 : 5.0,
-            w.beam ? 0x9fe8ff : 0xc2c8cf);
-          if (age < 1.2) {
-            this.render.vfx.sparkBurst(_v3, s.dir.clone().negate(), 4,
-              w.beam ? 0x9fe8ff : 0xffb057);
+          // Hot exhaust while the motor is lit; plain grey smoke once it is out.
+          const smoke = w.beam ? 0x9fe8ff : (burn > 0.05 ? 0xd8dce0 : 0xa8adb3);
+          this.render.vfx.smokePuff(_v3, w.beam ? 2 : (burn > 0.05 ? 4 : 2),
+            w.beam ? 2.4 : 4.2 + burn * 3.2, smoke);
+          if (burn > 0.05) {
+            // The flame itself, straight out of the nozzle and straight back.
+            _v.copy(s.dir).negate();
+            this.render.vfx.sparkBurst(_v3, _v, Math.round(3 + burn * 7),
+              w.beam ? 0x9fe8ff : 0xffc470);
           }
         }
       }
@@ -1564,50 +1587,49 @@ export class CombatSystem {
       this.render.vfx.sparkBurst(s.pos, s.dir, 14, 0xffd27a);
       if (hit) this.render.vfx.explode(s.pos, 2.5, 0xffb063);
     } else {
-      /* A warhead going off is layered: the white-hot flash of the charge, the
-       * fireball expanding behind it, a ring of secondary fireballs that give
-       * the blast real width, and the smoke column that hangs there afterwards.
-       * Doing all of it is what makes it read as a detonation rather than a
-       * puff — and these are big warheads, so the scale is generous. */
+      /* A warhead going off is a SEQUENCE, and the sequence is most of what
+       * makes it legible: the charge flashes, the fireball grows into the
+       * space the flash lit, the shockwave leaves, burning fuel falls out of
+       * it, the column rises, and the casing cooks off a beat later. All of
+       * that used to happen on one frame — which is exactly why a warhead
+       * clearing a kilometre still read as a puff. `warheadBlast` owns the
+       * timing; the victim's velocity goes in so the debris carries the motion
+       * of whatever was just destroyed. */
       const scale = clamp(blast * 0.22, 26, 96);
-      this.render.vfx.explode(s.pos, scale * 1.15, 0xffffff);
-      this.render.vfx.explode(s.pos, scale, 0xfff0c0);
-      this.render.vfx.explode(s.pos, scale * 0.72, s.color);
-      this.render.vfx.sparkBurst(s.pos, null, 96, 0xffc06a);
-      this.render.vfx.sparkBurst(s.pos, null, 44, 0xffffff);
+      this.render.vfx.warheadBlast(s.pos, scale, s.color, null, hit?.velocity || null);
 
-      // Secondary fireballs around the core, so the blast has a footprint.
-      for (let i = 0; i < 6; i++) {
-        _v2.set(this.rng.next() - 0.5, this.rng.next() * 0.4, this.rng.next() - 0.5)
-          .normalize().multiplyScalar(scale * (0.5 + this.rng.next() * 0.7)).add(s.pos);
-        this.render.vfx.explode(_v2, scale * (0.28 + this.rng.next() * 0.3), s.color);
-      }
-      // Smoke column: rises, because a fireball this size draws air up with it.
-      for (let i = 0; i < 14; i++) {
-        _v2.set((this.rng.next() - 0.5) * 1.4, this.rng.next() * 1.5, (this.rng.next() - 0.5) * 1.4)
-          .multiplyScalar(scale * 1.5).add(s.pos);
-        this.render.vfx.smokePuff(_v2, 11, scale * 0.8, 0x45454a);
-      }
-      /* A ground or structure strike throws debris and dust outward along the
+      /* A ground or structure strike throws debris and dust OUTWARD along the
        * surface instead of spherically, which is what distinguishes hitting a
-       * building from killing an aircraft. */
+       * building from killing an aircraft. Staggered too — the dust rolls out
+       * after the fireball, not with it. */
       if (ground || !hit) {
-        for (let i = 0; i < 10; i++) {
-          const a = this.rng.next() * Math.PI * 2;
-          _v.set(Math.cos(a), 0.35 + this.rng.next() * 0.5, Math.sin(a));
-          _v2.copy(s.pos).addScaledVector(_v, scale * 0.7);
-          this.render.vfx.sparkBurst(_v2, _v, 12, 0xffbf6a);
-          this.render.vfx.smokePuff(_v2, 10, scale * 0.7, ground ? 0x6b5f4e : 0x50505a);
-        }
+        const at = s.pos.clone();
+        const dust = ground ? 0x6b5f4e : 0x50505a;
+        this.render.vfx.after(0.12, () => {
+          for (let i = 0; i < 10; i++) {
+            const a = (i / 10) * Math.PI * 2 + this.rng.next() * 0.4;
+            _v.set(Math.cos(a), 0.30 + this.rng.next() * 0.4, Math.sin(a));
+            _v2.copy(at).addScaledVector(_v, scale * 0.7);
+            this.render.vfx.sparkBurst(_v2, _v, 12, 0xffbf6a);
+            this.render.vfx.smokePuff(_v2, 10, scale * 0.75, dust);
+          }
+        });
       }
 
-      // Felt from the cockpit if it went off anywhere near you.
-      const near = player ? clamp01(1 - s.pos.distanceTo(player.position) / 2200) : 0;
+      /* Felt from the cockpit if it went off anywhere near you — and the
+       * SOUND arrives when sound arrives. A blast a kilometre and a half away
+       * is a flash you see and then a bang you hear a beat later, and that lag
+       * is worth more for scale than any amount of extra bass. */
+      const dist = player ? s.pos.distanceTo(player.position) : 0;
+      const near = player ? clamp01(1 - dist / 2200) : 0;
       if (near > 0.02) {
         this.render.postfx.flash(0.62 * near, 0xffb570);
-        this.render.rig.addShake(1.9 * near, 16);
+        this.render.vfx.after(0.05, () => this.render.rig.addShake(2.2 * near, 14));
       }
-      this.audio?.play('explosion', { volume: clamp01(0.6 + dmg / 400) });
+      const vol = clamp01(0.6 + dmg / 400);
+      const lag = Math.min(1.1, dist / 3400);
+      if (lag < 0.02) this.audio?.play('explosion', { volume: vol });
+      else this.render.vfx.after(lag, () => this.audio?.play('explosion', { volume: vol * (1 - lag * 0.45) }));
     }
 
     const apply = (victim, amount) => {

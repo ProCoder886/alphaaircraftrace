@@ -3241,6 +3241,37 @@ export class VFX {
     this.windVec = new THREE.Vector3();
     this._tmp = new THREE.Vector3();
     this._col = new THREE.Color();
+    /* ---- deferred effects --------------------------------------------------
+     * A detonation is a SEQUENCE, not a frame. The flash is over before the
+     * fireball has finished growing, the shockwave leaves after both, and the
+     * casing cooks off a good half second later. Emitting all of that on one
+     * frame is exactly what makes an explosion read as a puff: everything
+     * arrives and decays together, so there is no order to it.
+     *
+     * This is the cheapest thing that fixes it — a small list of {t, fn} run
+     * down as the clock advances. It is bounded by `_deferCap` because a wall
+     * of simultaneous kills must not be able to queue unbounded work.
+     * -------------------------------------------------------------------- */
+    this._defer = [];
+    this._deferCap = 160;
+  }
+
+  /** Run `fn` in `delay` seconds. Dropped silently if the queue is saturated. */
+  after(delay, fn) {
+    if (this._defer.length >= this._deferCap) return;
+    this._defer.push({ t: delay, fn });
+  }
+
+  _runDeferred(dt) {
+    if (!this._defer.length) return;
+    let w = 0;
+    for (let i = 0; i < this._defer.length; i++) {
+      const d = this._defer[i];
+      d.t -= dt;
+      if (d.t > 0) { this._defer[w++] = d; continue; }
+      try { d.fn(); } catch (e) { /* an effect must never break the frame */ }
+    }
+    this._defer.length = w;
   }
 
   createTrail(color, width, maxPoints, opts) {
@@ -3326,6 +3357,132 @@ export class VFX {
     });
   }
 
+  /**
+   * A round leaving the rail.
+   *
+   * The old launch was a fireball at the pylon, which is the one thing a real
+   * launch is NOT: a rocket motor lighting is a hard directional jet, not an
+   * omnidirectional bloom. What sells it is the asymmetry — a short white
+   * ignition flash at the nozzle, a cone of exhaust driven BACKWARD along the
+   * rail, and then the thing a launch actually leaves behind: a wall of dense
+   * grey smoke hanging in the air where the aircraft used to be, drifting and
+   * spreading long after the round has gone.
+   *
+   * @param pos   the pylon
+   * @param dir   unit vector the round departs along
+   * @param color the weapon's tint, used only for the motor itself
+   */
+  missileLaunch(pos, dir, color = 0xffb057) {
+    // Copied for the same reason as warheadBlast: the burnout puff runs a
+    // third of a second later, and the caller's vectors are scratch.
+    const at = pos.clone();
+    const fwd = dir.clone().normalize();
+    const back = this._tmp.copy(fwd).multiplyScalar(-1);
+
+    // 1. Ignition: white, hot, and over almost immediately.
+    this._col.set(0xfff6e0);
+    this.sparks.emit(at, 26, {
+      speed: 130, life: 0.16, size: 2.2, drag: 5.0,
+      color: this._col, colorVar: 0.2, spread: 0.5, dir: back,
+    });
+    // 2. The motor plume — tinted to the weapon, driven hard down the rail.
+    this._col.set(color);
+    this.sparks.emit(at, 40, {
+      speed: 210, life: 0.42, size: 3.0, drag: 2.6,
+      color: this._col, colorVar: 0.4, spread: 0.7, dir: back,
+    });
+    // 3. Efflux smoke: dense, grey, thrown back and then left hanging. This is
+    //    the part that reads as a launch from outside the aircraft.
+    this._col.set(0xbfc4ca);
+    for (let i = 0; i < 5; i++) {
+      const q = at.clone().addScaledVector(fwd, -i * 9);
+      this.smoke.emit(q, 7, {
+        speed: 52 - i * 7, life: 2.4 + i * 0.5, size: 7 + i * 3.4, drag: 2.4,
+        color: this._col, spread: 1.5, sizeVar: 0.8, dir: back,
+      });
+    }
+    // 4. Burnout. The motor is not still lighting a third of a second later —
+    //    it is a departing point source, and the smoke behind it goes cold.
+    this.after(0.28, () => {
+      const q = at.clone().addScaledVector(fwd, 120);
+      this._col.set(0x9aa0a6);
+      this.smoke.emit(q, 6, { speed: 18, life: 3.0, size: 14, drag: 2.6, color: this._col, spread: 1.8, sizeVar: 0.9 });
+    });
+  }
+
+  /**
+   * A warhead going off.
+   *
+   * Everything here used to happen on a single frame, which is why a
+   * kilometre-wide blast read as a puff: the flash, the fireball, the smoke
+   * and the debris all arrived together and all decayed together, so there was
+   * no sequence to watch. A real detonation has an order and the order is most
+   * of what makes it legible — you see the flash, then the fireball behind it,
+   * then the ring leaving, then the smoke rising into the space it cleared.
+   *
+   * @param pos    detonation point
+   * @param scale  fireball radius in metres
+   * @param color  the round's tint
+   * @param normal surface normal for a ground or structure strike, else null
+   * @param vel    the victim's velocity, so debris carries its motion
+   */
+  warheadBlast(pos, scale = 40, color = 0xffa040, normal = null, vel = null) {
+    /* Both are COPIED, not referenced. Everything below the first stage runs
+     * on a later frame, by which point the caller's vectors have moved on —
+     * `pos` is a scratch vector the projectile loop reuses, and `vel` belongs
+     * to an aircraft that is still flying, or has just stopped existing. */
+    const p = pos.clone();
+    const vc = vel ? vel.clone() : null;
+
+    // t=0 — the charge. White, small, and the brightest thing in the frame.
+    this.explode(p, scale * 0.55, 0xffffff, normal);
+    this._col.set(0xfff4d6);
+    this.sparks.emit(p, 40, { speed: scale * 9, life: 0.2, size: 2.0, drag: 5.5, color: this._col, spread: 2 });
+
+    // t=40ms — the fireball, expanding into the space the flash lit.
+    this.after(0.04, () => {
+      this.explode(p, scale * 1.25, 0xffd489, normal);
+      this._col.set(0xffb257);
+      this.sparks.emit(p, 70, { speed: scale * 5.5, life: 0.9, size: 3.4, drag: 2.0, color: this._col, colorVar: 0.4, spread: 2 });
+    });
+
+    // t=90ms — the shockwave, and the round's own colour in the core.
+    this.after(0.09, () => {
+      this.explode(p, scale * 1.9, color, normal);
+      // Debris carries the victim's motion: it was doing Mach 12 when it died.
+      const along = vc ? this._tmp.copy(vc).multiplyScalar(0.3) : null;
+      this._col.set(0xffc06a);
+      this.sparks.emit(p, 90, {
+        speed: scale * 4.2, life: 1.7, size: 2.8, drag: 1.0,
+        color: this._col, colorVar: 0.45, spread: 2, dir: along,
+      });
+    });
+
+    // t=180ms — burning fuel: slower, redder, and it falls.
+    this.after(0.18, () => {
+      this._col.set(0xff5a1e);
+      this.sparks.emit(p, 46, { speed: scale * 1.8, life: 2.9, size: 4.6, drag: 1.6, color: this._col, colorVar: 0.3, spread: 2 });
+    });
+
+    // t=300ms — the column. Drawn upward because a fireball this size pulls
+    // air up behind it, and left dark so it reads against a bright sky.
+    this.after(0.30, () => {
+      this._col.set(0x33333a);
+      this.smoke.emit(p, 22, { speed: scale * 1.5, life: 4.4, size: scale * 0.9, drag: 1.9, color: this._col, spread: 2, sizeVar: 0.85 });
+      this._col.set(0x6a5a52);
+      this.smoke.emit(p, 12, { speed: scale * 0.7, life: 5.6, size: scale * 1.4, drag: 2.5, color: this._col, spread: 2, sizeVar: 0.9 });
+    });
+
+    // t=520ms — cook-off. The casing and whatever it was carrying, a beat
+    // after everyone has stopped looking. Offset, so it is plainly a second
+    // event rather than a louder part of the first.
+    this.after(0.52, () => {
+      const q = p.clone().add(this._tmp.set(
+        (Math.random() - 0.5) * scale, (Math.random() - 0.2) * scale * 0.6, (Math.random() - 0.5) * scale));
+      this.explode(q, scale * 0.5, 0xffa040);
+    });
+  }
+
   /** Trailing fire and smoke off a falling wreck. Called each frame while it drops. */
   wreckTrail(pos, scale = 1) {
     this._col.set(0x3a3a3c);
@@ -3359,6 +3516,7 @@ export class VFX {
 
   update(dt, camera, windVec) {
     this.time += dt;
+    this._runDeferred(dt);
     this.sparks.update(dt);
     this.smoke.update(dt);
     const cp = camera.position;
@@ -3371,6 +3529,7 @@ export class VFX {
   }
 
   dispose() {
+    this._defer.length = 0;
     this.sparks.dispose(); this.smoke.dispose();
     this.rain.dispose(); this.snow.dispose(); this.dust.dispose(); this.speedField.dispose();
     for (const e of this.explosionPool) e.dispose();

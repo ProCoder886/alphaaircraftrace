@@ -244,20 +244,41 @@ class EngineSynth {
     this.out.gain.linearRampToValueAtTime(0, t + 0.4);
   }
 
-  /** @param s {speed01, throttle, boost, damage01, altitude01} */
+  /** @param s {speed01, throttle, boost, turbo, accel, damage01, altitude01} */
   update(s) {
     const ctx = this.ctx;
     const t = ctx.currentTime;
     const set = (param, v, k = 0.09) => param.setTargetAtTime(v, t, k);
 
-    const spd = clamp01(s.speed01);
-    const boost = clamp01(s.boost);
+    /* Every field defaults. An AudioParam handed a NaN throws, and one throw
+     * inside the engine update leaves the whole synth half-written for the
+     * rest of the frame — so a caller that omits a field gets silence in that
+     * channel rather than taking the engine down with it. `clamp01(undefined)`
+     * is NaN, not 0, which is exactly the trap this closes. */
+    const spd = clamp01(s.speed01 ?? 0);
+    const boost = clamp01(s.boost ?? 0);
     const thr = clamp01(s.throttle ?? 1);
+    /* The Turbo stage, and how hard the airframe is CHANGING speed.
+     *
+     * Turbo is its own channel rather than more `boost` because the two
+     * together are the only route to the top of the envelope, and the ear
+     * should be able to tell that both are lit — a combined run has to sound
+     * like more engine than either one alone, not like the same engine louder.
+     *
+     * `accel` is signed. Gaining speed loads the core up; shedding it — the
+     * air brake — unloads it, which is what makes F audible as well as
+     * visible. Without this the note tracked speed alone, so working up to
+     * Mach 20 and sitting at Mach 20 sounded exactly the same. */
+    const turbo = clamp01(s.turbo ?? 0);
+    const accel = clamp(s.accel ?? 0, -1, 1);
+    const gaining = Math.max(0, accel);
+    const losing = Math.max(0, -accel);
 
     // N1 lags: a big fan takes seconds to spool, and hearing that lag is most
     // of what separates a jet from anything with pistons.
     const spooling = t < this.ignitionUntil;
-    const n1Target = spooling ? 0.34 : clamp01(0.30 + thr * 0.42 + spd * 0.36 + boost * 0.22);
+    const n1Target = spooling ? 0.34 : clamp01(0.30 + thr * 0.42 + spd * 0.36
+      + boost * 0.22 + turbo * 0.14 + gaining * 0.09 - losing * 0.12);
     this.n1 += (n1Target - this.n1) * (spooling ? 0.010 : 0.030);
     const n1 = this.n1;
 
@@ -285,26 +306,32 @@ class EngineSynth {
     // Sub-bass. The rumble tracks thrust; the tone tracks the fan an octave
     // and a half down, so it moves with the engine instead of droning.
     set(this.rumble.filter.frequency, lerp(62, 128, n1), 0.15);
-    set(this.rumble.gain.gain, lerp(0.10, 0.44, Math.pow(n1, 0.85)) + boost * 0.30);
+    set(this.rumble.gain.gain, lerp(0.10, 0.44, Math.pow(n1, 0.85)) + boost * 0.42 + turbo * 0.26);
     set(this.sub.frequency, clamp(f0 * 0.34, 26, 118), 0.14);
-    set(this.subGain.gain, lerp(0.045, 0.185, Math.pow(n1, 1.2)) + boost * 0.13);
-    // Exhaust tearing.
+    set(this.subGain.gain, lerp(0.045, 0.185, Math.pow(n1, 1.2)) + boost * 0.19 + turbo * 0.12);
+    // Exhaust tearing. Tears harder while the airframe is still gaining.
     set(this.hiss.filter.frequency, lerp(2200, 5200, spd));
-    set(this.hiss.gain.gain, lerp(0.012, 0.095, Math.pow(spd, 1.3)) + boost * 0.075);
+    set(this.hiss.gain.gain, lerp(0.012, 0.095, Math.pow(spd, 1.3))
+      + boost * 0.105 + turbo * 0.06 + gaining * 0.045);
     // Airframe: the air itself, which is loud in a fast jet even at idle.
     set(this.airframe.filter.frequency, lerp(700, 1800, spd));
     set(this.airframe.gain.gain, Math.pow(spd, 1.9) * 0.115);
 
-    // Reheat: unstable by nature, and enormous.
-    set(this.reheat.gain.gain, boost * 0.52 + Math.pow(n1, 3) * 0.05);
-    set(this.reheat.filter.frequency, lerp(95, 165, boost));
-    set(this.reheatMid.gain.gain, boost * 0.24);
-    set(this.reheatMid.filter.frequency, lerp(300, 620, boost));
-    set(this.lfoAG.gain, boost * 0.14);
-    set(this.lfoBG.gain, boost * 0.075);
+    /* Reheat: unstable by nature, and enormous. Both stages feed it and the
+     * combined figure is allowed past what either reaches alone — nitrous and
+     * Turbo together is the loudest the aircraft ever is, and it should be
+     * unmistakably that rather than a slightly hotter version of nitrous. */
+    const fire = clamp01(boost * 0.78 + turbo * 0.46);
+    set(this.reheat.gain.gain, fire * 0.86 + Math.pow(n1, 3) * 0.05);
+    set(this.reheat.filter.frequency, lerp(95, 178, fire));
+    set(this.reheatMid.gain.gain, fire * 0.40);
+    set(this.reheatMid.filter.frequency, lerp(300, 680, fire));
+    // The instability itself: a bigger plume flickers harder.
+    set(this.lfoAG.gain, fire * 0.21);
+    set(this.lfoBG.gain, fire * 0.115);
 
     // A damaged compressor stalls and surges.
-    const dmg = clamp01((s.damage01 - 0.45) / 0.55);
+    const dmg = clamp01(((s.damage01 ?? 0) - 0.45) / 0.55);
     set(this.damageGain.gain, dmg * 0.055 * (0.4 + Math.random() * 0.6), 0.05);
     if (dmg > 0.02) this.damageOsc.frequency.setTargetAtTime(31 + Math.random() * 34, t, 0.06);
 
@@ -525,16 +552,31 @@ class SFXKit {
         this._tone({ freq: 46, type: 'sine', dur: 0.70, gain: 0.55 * v, sweep: -16, attack: 0.003 });
         break;
       case 'explosion':
-        // Fuel deflagration, then the airframe coming apart. Two sub layers an
-        // octave apart give the blast a floor you feel rather than only hear,
-        // and the long tail is the debris and the pressure wave coming back.
-        this._noise({ dur: 0.07, gain: 0.62 * v, type: 'highpass', freq: 4600, sweep: 2400, attack: 0.0008 });
-        this._tone({ freq: 112, type: 'sawtooth', dur: 0.30, gain: 0.60 * v, sweep: -76, attack: 0.002,
-          filter: { type: 'lowpass', freq: 900, sweep: -640, q: 2.2 } });
-        this._tone({ freq: 54, type: 'sine', dur: 1.6, gain: 0.85 * v, sweep: -22, attack: 0.004 });
-        this._tone({ freq: 27, type: 'sine', dur: 2.1, gain: 0.62 * v, sweep: -9, attack: 0.010 });
-        this._noise({ dur: 2.0, gain: 0.66 * v, type: 'lowpass', freq: 2800, sweep: -2660, q: 0.7 });
-        this._noise({ dur: 1.1, gain: 0.26 * v, type: 'bandpass', freq: 2400, sweep: -1900, q: 0.9, delay: 0.2 });
+        /* A detonation, in the order a detonation happens.
+         *
+         * The CRACK is the shock front and it is over in under a tenth of a
+         * second. The BODY is the deflagration behind it. The RUMBLE is what
+         * you feel rather than hear, and it is the longest-lived thing here —
+         * a big warhead is still moving air a second and a half later. Then
+         * the debris, and finally the reflection off whatever is around you,
+         * which is the layer that tells the ear this happened somewhere with
+         * ground under it rather than in a vacuum.
+         * ------------------------------------------------------------------ */
+        // 1. Shock front — the crack.
+        this._noise({ dur: 0.055, gain: 0.80 * v, type: 'highpass', freq: 5200, sweep: -3400, attack: 0.0005 });
+        this._noise({ dur: 0.10, gain: 0.62 * v, type: 'bandpass', freq: 2100, sweep: -1500, q: 0.8, attack: 0.0008 });
+        // 2. Body — the fuel going off.
+        this._tone({ freq: 124, type: 'sawtooth', dur: 0.34, gain: 0.72 * v, sweep: -88, attack: 0.0018,
+          filter: { type: 'lowpass', freq: 940, sweep: -700, q: 2.2 } });
+        this._noise({ dur: 0.55, gain: 0.70 * v, type: 'lowpass', freq: 1800, sweep: -1560, q: 0.8, attack: 0.006 });
+        // 3. Rumble — three sub layers, each longer and lower than the last.
+        this._tone({ freq: 58, type: 'sine', dur: 1.7, gain: 0.92 * v, sweep: -24, attack: 0.004 });
+        this._tone({ freq: 29, type: 'sine', dur: 2.4, gain: 0.74 * v, sweep: -10, attack: 0.012 });
+        this._tone({ freq: 19, type: 'sine', dur: 3.0, gain: 0.46 * v, sweep: -5, attack: 0.030, delay: 0.05 });
+        // 4. Debris, and then the reflection coming back off the world.
+        this._noise({ dur: 1.9, gain: 0.52 * v, type: 'lowpass', freq: 2600, sweep: -2400, q: 0.7, delay: 0.10 });
+        this._noise({ dur: 1.3, gain: 0.30 * v, type: 'bandpass', freq: 2200, sweep: -1750, q: 0.9, delay: 0.28 });
+        this._noise({ dur: 1.6, gain: 0.20 * v, type: 'lowpass', freq: 700, sweep: -520, q: 0.6, delay: 0.46 });
         break;
       case 'shield':
         this._tone({ freq: 300, type: 'sine', dur: 0.55, gain: 0.13 * v, sweep: 500, filter: { type: 'bandpass', freq: 900, q: 6 } });
@@ -561,6 +603,33 @@ class SFXKit {
         this._noise({ dur: 0.34, gain: 0.40 * v, type: 'lowpass', freq: 380, sweep: 3400, q: 0.9, attack: 0.003 });
         this._noise({ dur: 1.30, gain: 0.30 * v, type: 'bandpass', freq: 520, sweep: -390, q: 0.55, delay: 0.06 });
         this._noise({ dur: 0.95, gain: 0.15 * v, type: 'highpass', freq: 3200, sweep: -2100, delay: 0.03 });
+        break;
+      }
+      case 'machStep': {
+        /* Passing a Mach band on the way UP.
+         *
+         * A jet accelerating through its range is not one continuous note: the
+         * intakes reschedule, the nozzle steps, and the whole airframe settles
+         * into a new place every few Mach. Without a marker the climb from
+         * cruise to the ceiling is twenty Mach of the same sound getting
+         * slightly louder, and the player has no sense of covering ground.
+         *
+         * `opts.step` (0..1) is how far up the range the band sits, so the
+         * cue climbs with it — low and mechanical down low, hard and metallic
+         * at the top of the envelope where the airframe is complaining.
+         * ------------------------------------------------------------------ */
+        if (!this._guard('machStep', 260)) return;
+        const k = clamp01(opts.step ?? 0.5);
+        // Intake schedule: a bass step that rises with the band.
+        this._tone({ freq: 58 + k * 46, type: 'square', dur: 0.17, gain: 0.30 * v, sweep: 20 + k * 34,
+          attack: 0.002, filter: { type: 'lowpass', freq: 240 + k * 220, q: 3.0 } });
+        this._tone({ freq: 34 + k * 20, type: 'sine', dur: 0.44, gain: 0.34 * v, sweep: 16, attack: 0.006 });
+        // Nozzle stepping — short, metallic, and brighter the higher you are.
+        this._noise({ dur: 0.05, gain: (0.10 + k * 0.16) * v, type: 'bandpass',
+          freq: 2400 + k * 2200, sweep: -1200, q: 4.5, attack: 0.001, delay: 0.01 });
+        // The airframe settling into the new band behind it.
+        this._noise({ dur: 0.40 + k * 0.25, gain: (0.12 + k * 0.14) * v, type: 'bandpass',
+          freq: 700 + k * 900, sweep: 500 + k * 900, q: 0.9, attack: 0.010, delay: 0.03 });
         break;
       }
       case 'gearShift': {
@@ -634,19 +703,32 @@ class SFXKit {
         this._noise({ dur: 0.16, gain: 0.09 * v, type: 'bandpass', freq: 620, sweep: -320, q: 1.1 });
         break;
       case 'missileLaunch':
-        // Rail release, ignition, then the motor tearing away downrange. This
-        // is meant to be the loudest thing the player triggers on purpose —
-        // the launch has to feel like the aircraft just lost weight.
+        /* A launch is four things in a row and the ORDER is what sells it:
+         * the rail lets go, the motor lights, the motor RUNS, and then the
+         * round is far enough away that all you have left is a receding hiss.
+         *
+         * The old version fired the whole thing at once, which is why a
+         * several-hundred-kilo round leaving the wing sounded like a click.
+         * Everything below is delayed into its place, and the motor is now the
+         * long loud part rather than a tail on the end of a transient.
+         * ------------------------------------------------------------------ */
         if (!this._guard('missileLaunch', 130)) return;
-        this._noise({ dur: 0.05, gain: 0.42 * v, type: 'highpass', freq: 3400, sweep: -1900, attack: 0.0008 });
-        this._tone({ freq: 96, type: 'sawtooth', dur: 0.22, gain: 0.52 * v, sweep: -46, attack: 0.002,
-          filter: { type: 'lowpass', freq: 760, q: 2.0 } });
-        this._tone({ freq: 44, type: 'sine', dur: 0.85, gain: 0.60 * v, sweep: -14, attack: 0.004 });
-        // Motor: broadband, opening then Dopplering away as it departs.
-        this._noise({ dur: 0.30, gain: 0.56 * v, type: 'lowpass', freq: 500, sweep: 3600, q: 0.9, attack: 0.003 });
-        this._noise({ dur: 1.5, gain: 0.40 * v, type: 'bandpass', freq: 1100, sweep: -930, q: 0.7, delay: 0.05 });
-        this._tone({ freq: 260, type: 'sawtooth', dur: 1.1, gain: 0.24 * v, sweep: -190, delay: 0.03,
-          filter: { type: 'lowpass', freq: 1900, sweep: -1400 } });
+        // 1. Rail release — metal letting go, sharp and immediately gone.
+        this._noise({ dur: 0.035, gain: 0.50 * v, type: 'highpass', freq: 4200, sweep: -2600, attack: 0.0006 });
+        this._tone({ freq: 1750, type: 'square', dur: 0.045, gain: 0.10 * v, sweep: -900, attack: 0.0008 });
+        // 2. Ignition — the charge, with a real body under it.
+        this._tone({ freq: 108, type: 'sawtooth', dur: 0.26, gain: 0.62 * v, sweep: -54, attack: 0.0016, delay: 0.012,
+          filter: { type: 'lowpass', freq: 820, sweep: -420, q: 2.2 } });
+        this._tone({ freq: 42, type: 'sine', dur: 1.05, gain: 0.78 * v, sweep: -13, attack: 0.004, delay: 0.012 });
+        this._tone({ freq: 26, type: 'sine', dur: 1.35, gain: 0.44 * v, sweep: -7, attack: 0.010, delay: 0.02 });
+        // 3. Motor run — the loud part. Broadband, opening up as the plume
+        //    establishes, then held while the round accelerates away.
+        this._noise({ dur: 0.34, gain: 0.72 * v, type: 'lowpass', freq: 420, sweep: 4200, q: 0.9, attack: 0.004, delay: 0.02 });
+        this._noise({ dur: 1.05, gain: 0.58 * v, type: 'bandpass', freq: 1500, sweep: -1080, q: 0.6, delay: 0.09 });
+        this._tone({ freq: 300, type: 'sawtooth', dur: 0.95, gain: 0.30 * v, sweep: -215, delay: 0.05,
+          filter: { type: 'lowpass', freq: 2100, sweep: -1650 } });
+        // 4. Departure — a thin receding hiss, well after the rest has gone.
+        this._noise({ dur: 1.5, gain: 0.24 * v, type: 'bandpass', freq: 2600, sweep: -2100, q: 1.1, delay: 0.55 });
         break;
       case 'grenadeThrow':
         if (!this._guard('grenadeThrow', 140)) return;

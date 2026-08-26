@@ -24,6 +24,15 @@ import { CombatSystem } from './combat.js';
 import { AudioSystem } from './audio.js';
 import { UI, formatTime, formatDistance } from './ui.js';
 
+/**
+ * How many Mach between the audible steps as the airframe climbs its range.
+ *
+ * Four puts five markers between cruise and the ceiling: enough that a run up
+ * to Mach 30 is a sequence of arrivals rather than one long swell, and few
+ * enough that the cue stays an event. Any smaller and it is a metronome.
+ */
+const MACH_STEP = 4;
+
 /** How the collision warning names what is about to be hit. */
 const HAZARD_LABEL = {
   building: 'BUILDING', mast: 'MAST', rock: 'ROCK', terrain: 'TERRAIN',
@@ -998,19 +1007,40 @@ export class Game {
     const burnerOn = player.boosting || player.turboActive;
     if (burnerOn !== this._burnerWas) {
       if (burnerOn) {
-        this.audio.play('boost', { volume: 0.85 });
-        this.audio.play('burnerLight', { volume: 1.0 });   // ignition fire
-        this.audio.play('gearShift', { volume: 0.95 });    // jet gear change
+        // Both stages at once is the loudest single moment in the game, and
+        // it is louder than either one on its own — which is the whole point
+        // of a combination that is the only way to the top of the envelope.
+        const both = player.boosting && player.turboActive ? 1 : 0;
+        this.audio.play('boost', { volume: 0.95 + both * 0.05 });
+        this.audio.play('burnerLight', { volume: 1.0 + both * 0.25 });  // ignition fire
+        this.audio.play('gearShift', { volume: 0.95 });                 // jet gear change
       } else this.audio.play('boostOut', { volume: 0.9 });
       this._burnerWas = burnerOn;
     }
     if (player.mach > 16) this.audio.play('sonicBoom', { volume: 0.7 });
     if (player.aoa01 > 0.97 && player.mach < 3) this.audio.play('stallWarn', { volume: 0.8 });
 
+    /* --- climbing through the range ----------------------------------------
+     * Every MACH_STEP Mach on the way UP is marked. It fires on the crossing
+     * only, and only while the airframe is genuinely gaining — drifting back
+     * and forth across a boundary at a steady speed must not ring a bell every
+     * two seconds, which is why the band is latched rather than compared. */
+    const band = Math.floor(player.mach / MACH_STEP);
+    if (this._machBand === undefined) this._machBand = band;
+    if (band > this._machBand && player.accel01 > 0.06) {
+      this.audio.play('machStep', {
+        volume: 0.55 + clamp01(band * MACH_STEP / MACH.max) * 0.45,
+        step: clamp01(band * MACH_STEP / MACH.max),
+      });
+    }
+    this._machBand = band;
+
     this.audio.updateEngine({
       speed01: player.speed01,
       throttle: player.throttle,
       boost: player.boostBlend,
+      turbo: player.turboBlend,
+      accel: player.accel01,
       damage01: player.damage01,
       altitude01: clamp01((player.altitude - 3500) / 3500),
     });
