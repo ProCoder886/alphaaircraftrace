@@ -19,15 +19,51 @@
 
 .hud-label { font-size: 0.62em; letter-spacing: 0.26em; color: rgba(220, 240, 255, 0.62); text-transform: uppercase; }
 
-/* ══════════════════════ TOP LEFT — position & score ═══════════════════ */
-/* Every corner block is capped so it cannot grow into its neighbour. The
-   compass owns the top centre, so the two top corners each get a little under
-   half the frame, and the legend below wraps inside that rather than sliding
-   under the compass tape. */
-.hud-tl {
-  position: absolute; top: max(14px, env(safe-area-inset-top)); left: max(18px, env(safe-area-inset-left));
-  z-index: 3; max-width: min(42vw, 46rem);
+/* ---------------------------------------------------------------------------
+ * HUD GEOMETRY — the lanes every block lives inside
+ *
+ * The HUD is five anchored clusters and a centre column, and until now each
+ * one was sized by what looked right on its own. On a wide desktop that is
+ * fine; at 1280, and especially in landscape on a phone where the whole frame
+ * is 844x390, the blocks grew into each other — the score block under the
+ * compass tape, the control legend across the airspeed gauge, the radar inside
+ * the flight stick's own drag area.
+ *
+ * These four values fix that by construction rather than by nudging:
+ *
+ *   --hud-edge      distance from the frame edge, safe-area aware
+ *   --hud-gap       the minimum air between any two clusters
+ *   --hud-keepout   half the compass plus a gap — the centre column's lane,
+ *                   which no corner block may enter
+ *   --hud-corner    the width that leaves, which every corner block is capped
+ *                   to, so a corner can NEVER reach the centre whatever it
+ *                   is asked to hold
+ * ------------------------------------------------------------------------ */
+.hud {
+  --hud-edge: 18px;
+  --hud-gap: 16px;
+  --hud-keepout: calc(min(23vw, 230px) + var(--hud-gap) + 6px);
+  --hud-corner: calc(50vw - var(--hud-keepout));
+  /* Vertical: the airspeed and altitude gauges are centred and 300px tall, so
+     anything anchored to the top has to stop short of where they begin. */
+  --hud-top-max: calc(50vh - 150px - var(--hud-gap) - max(14px, env(safe-area-inset-top)));
 }
+
+/* ══════════════════════ TOP LEFT — position & score ═══════════════════ */
+.hud-tl {
+  position: absolute; top: max(14px, env(safe-area-inset-top));
+  left: max(var(--hud-edge), env(safe-area-inset-left));
+  z-index: 3;
+  max-width: var(--hud-corner);
+  /* And capped in HEIGHT, which is the half that was missing: the width cap
+     keeps the block out of the compass, but the legend opening below it made
+     the whole column tall enough to run down over the airspeed gauge. The cap
+     is on the column, not on the legend — the legend is only the last thing in
+     it — and the legend scrolls inside whatever is left. */
+  max-height: var(--hud-top-max);
+  display: flex; flex-direction: column; align-items: flex-start;
+}
+.hud-tl > .hud-controls { min-height: 0; flex: 0 1 auto; }
 .hud-position { border-bottom: 1px solid rgba(200, 230, 255, 0.24); padding-bottom: 5px; min-width: 132px; }
 .hud-position-value { display: flex; align-items: baseline; gap: 7px; margin-top: 2px; }
 .hud-position-value span { font-family: var(--font-num); font-size: 2.5em; line-height: 0.95; font-weight: 300; color: #fff; }
@@ -63,6 +99,12 @@
      one. Two rows keeps the block clear of the airspeed readout below it,
      which a three-row stack ran straight into. */
   gap: 7px; max-width: 100%;
+  /* Capped to the space above the gauges and scrolled if it needs more. The
+     legend is a reference panel with nineteen controls in it: left to grow it
+     runs straight down over the airspeed readout, which is an instrument. A
+     panel you scroll beats an instrument you cannot read. */
+  max-height: var(--hud-top-max);
+  overflow-y: auto; overscroll-behavior: contain;
   opacity: 0.86; transition: opacity 160ms linear;
 }
 .hud-controls:hover { opacity: 1; }
@@ -181,6 +223,8 @@ body.hud-hidden .panel-dial { display: none !important; }
 
 /* ══════════════════════ TOP RIGHT — timers ═══════════════════════════ */
 .hud-tr {
+  max-width: var(--hud-corner);
+  max-height: var(--hud-top-max);
   position: absolute; top: max(14px, env(safe-area-inset-top)); right: max(18px, env(safe-area-inset-right));
   text-align: right; z-index: 3; max-width: min(30vw, 22rem);
   display: flex; flex-direction: column; align-items: flex-end;
@@ -233,9 +277,15 @@ body.touch-mode .hud-brief { display: none !important; }
 .gauge-ticks line { stroke: rgba(210, 235, 255, 0.34); stroke-width: 1.2; }
 .gauge-ticks line.major { stroke: rgba(230, 250, 255, 0.7); stroke-width: 1.6; }
 
-.gauge-readout { position: absolute; top: 50%; transform: translateY(-50%); text-align: center; min-width: 90px; }
-.readout-left { left: calc(21% - 92px); }
-.readout-right { right: calc(21% - 92px); }
+/* Fixed width, not a minimum. `min-width` let a five-figure airspeed grow the
+   box to the right and slide it under the gauge it belongs to — the one
+   element it must never touch. Fixed and aligned away from the dial instead. */
+.gauge-readout {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 92px; overflow: hidden;
+}
+.readout-left { left: calc(21% - 92px - var(--hud-gap)); text-align: right; }
+.readout-right { right: calc(21% - 92px - var(--hud-gap)); text-align: left; }
 .readout-label { font-size: 0.66em; letter-spacing: 0.28em; color: var(--lime); text-transform: uppercase; }
 .readout-value { font-family: var(--font-num); font-size: 1.75em; font-weight: 300; color: #fff; line-height: 1.05; }
 .readout-unit { font-size: 0.6em; letter-spacing: 0.2em; color: rgba(215, 235, 255, 0.55); }
@@ -588,15 +638,109 @@ body.touch-mode .zoom-btn { width: 2.1em; height: 2.1em; font-size: 0.95em; }
   .hud-panel-small { min-width: 168px; }
 }
 @media (max-width: 720px), (max-height: 460px) {
-  .hud { font-size: calc(13px * var(--hud-scale)); }
-  .radar-wrap { width: 112px; height: 112px; }
-  .alt-tape { height: 96px; }
+  .hud { font-size: calc(13px * var(--hud-scale)); --hud-edge: 12px; --hud-gap: 12px; }
+  .radar-wrap { width: 96px; height: 96px; }
+  .alt-tape { height: 82px; }
   .gauge { height: 220px; }
   .gauge-left { left: 12%; } .gauge-right { right: 12%; }
-  .readout-left { left: calc(12% - 76px); } .readout-right { right: calc(12% - 76px); }
+  .readout-left { left: calc(12% - 92px - var(--hud-gap)); }
+  .readout-right { right: calc(12% - 92px - var(--hud-gap)); }
   .power-cell { width: 44px; }
   .status-stack { min-width: 158px; }
-  .hud-bc { width: min(300px, 46%); }
+  .hud-bc { width: min(240px, 34%); }
+}
+
+/* ═══════════════════ LANDSCAPE ON A PHONE — its own layout ════════════════
+ * A phone in landscape is around 844x390. That is a third of the vertical
+ * room a laptop has, and the desktop arrangement does not shrink into it — it
+ * collapses: the score block ends up under the compass tape, the airspeed
+ * readout under the radar, and the radar itself inside the flight stick's own
+ * drag area, where every attempt to read it flies the aircraft.
+ *
+ * So this is a different arrangement rather than a smaller one.
+ *
+ *   · the gauge ARCS go, and their numbers move to the frame edge. The dials
+ *     are decoration; the numbers are the instrument, and at this size there
+ *     is only room for one of the two.
+ *   · the radar lifts clear of the stick and the stick's drag zone shrinks to
+ *     match, so the two can no longer be in the same place.
+ *   · the control legend stops being an inline block and becomes what it
+ *     actually is — a panel you open, read and dismiss.
+ * ---------------------------------------------------------------------- */
+@media (max-height: 500px) {
+  /* Arcs off, numbers to the edges, and the numbers sit in the middle band
+     where nothing else is: the top band is the three corner clusters and the
+     bottom band belongs to the stick, the weapons dial and the fire buttons. */
+  .gauge { display: none; }
+  .gauge-readout { width: 84px; }
+  .readout-left { left: max(var(--hud-edge), env(safe-area-inset-left)); text-align: left; top: 46%; }
+  .readout-right { right: max(var(--hud-edge), env(safe-area-inset-right)); text-align: right; top: 46%; }
+
+  /* The corner columns get a quarter of the height rather than the formula
+     built around gauges that are no longer drawn here, and they CLIP: the cap
+     alone does not stop a flex child overflowing it, which is how the controls
+     dial ended up sitting on the airspeed readout. */
+  .hud { --hud-top-max: 26vh; }
+  .hud-tl, .hud-tr { overflow: hidden; }
+
+  /* The readouts sit below the corner columns and above the bottom band —
+     dead centre, which is the only horizontal band on a 390px-tall frame that
+     belongs to nothing else. */
+  .readout-left, .readout-right { top: 50%; }
+
+  /* The radar moves BESIDE the stick rather than above or on top of it. The
+     stick zone is a fixed 168px here (see below) precisely so this clearance
+     can be a fixed number too — a percentage zone against a fixed offset is
+     what left a five-pixel bite out of the radar at one width and not at
+     another. */
+  .hud-bl { left: calc(max(var(--hud-edge), env(safe-area-inset-left)) + 176px); }
+  .radar-wrap { width: 76px; height: 76px; }
+  .alt-tape { height: 66px; }
+
+  /* The compass gives up width so the two top corners have somewhere to be at
+     all — the lane arithmetic leaves them barely 200px each at 844. */
+  .hud-compass { width: min(38%, 280px); }
+  /* The bottom band, left to right: stick, radar, weapons dial, status stack.
+     The dial is narrowed and pushed off dead centre because the right of that
+     band is the busiest part of the frame. */
+  .hud-bc { width: min(130px, 18%); left: 44%; }
+}
+
+/* At the narrowest landscape phones — 740 logical pixels and below — the
+ * bottom-right cluster (five power cells, the boost and hull bars, the status
+ * stack) is simply too wide for the band it shares with the weapons dial. The
+ * dial cannot move any further left without landing on the radar, so this is
+ * the cluster that gives: smaller cells and a tighter stack, which costs a few
+ * points of legibility and buys the one thing that matters more, which is that
+ * nothing sits on top of anything else. */
+@media (max-width: 780px) {
+  .power-cell { width: 38px; }
+  .status-stack { min-width: 132px; }
+  .hud-bc { left: 42%; }
+}
+
+body.touch-mode .stick-zone {
+  /* Was 42% x 62% — nearly a quarter of the frame, and it reached up over the
+     radar, the panel dials and the airspeed readout. It only ever needs to
+     hold the thumb's arc around a 128px base, and it is a FIXED width so the
+     things placed beside it can clear it by a fixed number at every viewport
+     rather than at some of them. */
+  width: 168px; height: 38%;
+}
+
+@media (max-height: 560px), (max-width: 900px) {
+  /* The legend, opened, becomes a panel in the middle of the frame instead of
+     a block competing with the instruments for the same few hundred pixels.
+     `pointer-events` because the HUD layer itself has none and this one can be
+     scrolled. */
+  .hud-controls {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    margin: 0; z-index: 40;
+    width: max-content; max-width: min(92vw, 620px); max-height: 78vh;
+    background: linear-gradient(180deg, rgba(8, 26, 18, 0.95), rgba(4, 12, 10, 0.92));
+    box-shadow: 0 18px 60px rgba(0, 0, 0, 0.62), 0 0 16px rgba(93, 255, 156, 0.10) inset;
+    opacity: 1; pointer-events: auto;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
