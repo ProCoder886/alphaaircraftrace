@@ -73,7 +73,10 @@ const ICONS = {
   expand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
   pause: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="7" y="5" width="3.4" height="14" rx="1"/><rect x="13.6" y="5" width="3.4" height="14" rx="1"/></svg>',
   play: '▶', mode: '◈', diff: '▲', loc: '◎', wx: '☁', craft: '✈', daily: '★',
-  camp: '❐', ach: '✦', stats: '▤', set: '⚙', help: '?', cred: '©',
+  /* Story gets its own mark rather than sharing Campaign's. It sits directly
+   * under Play now, and two identical glyphs a row apart in a nav is how a
+   * player ends up in the wrong one. */
+  story: '❰', camp: '❐', ach: '✦', stats: '▤', set: '⚙', help: '?', cred: '©',
 };
 
 /* ---- procedural aircraft silhouette for menu cards -----------------------
@@ -528,12 +531,19 @@ export class UI {
    * MAIN MENU
    * ================================================================== */
   _buildMenuNav() {
+    /* Story sits directly under Play and above Game Mode. It is the mode with
+     * the most in it — fifteen briefed missions with their own progression —
+     * and it was buried below Aircraft, seven rows down, where a new player
+     * would never find it. Everything that configures a one-off sortie
+     * (mode, difficulty, venue, weather, airframe) follows it as a group. */
     const items = [
-      ['play', 'Play', ICONS.play], ['mode', 'Game Mode', ICONS.mode],
+      ['play', 'Play', ICONS.play],
+      ['story', 'Story Mode', ICONS.story],
+      ['mode', 'Game Mode', ICONS.mode],
       ['difficulty', 'Difficulty', ICONS.diff], ['location', 'Location', ICONS.loc],
       ['weather', 'Weather', ICONS.wx],
       ['aircraft', 'Aircraft', ICONS.craft],
-      ['story', 'Story Mode', ICONS.camp], ['campaign', 'Campaign', ICONS.camp],
+      ['campaign', 'Campaign', ICONS.camp],
       ['daily', 'Daily Challenge', ICONS.daily], ['achievements', 'Achievements', ICONS.ach],
       ['stats', 'Statistics', ICONS.stats], ['settings', 'Settings', ICONS.set],
       ['howto', 'How To Play', ICONS.help], ['credits', 'Credits', ICONS.cred],
@@ -1914,6 +1924,28 @@ export class UI {
           ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y - dy); ctx.stroke();
         }
       }
+    }
+    /* The resupply pod. Green, cross-shaped so it is unmistakably not a
+     * hostile, and pinned to the rim like everything else when it is out of
+     * range — a pod you cannot see the bearing of is a pod you will not
+     * reach inside its thirty seconds. */
+    if (s.radarPod) {
+      const q = plot(s.radarPod[0], s.radarPod[1]);
+      const x = cx + q.x, y = cy + q.y;
+      const secs = s.radarPod[2] ?? 0;
+      // Pulses harder as the window closes.
+      const urgency = clamp01(1 - secs / 10);
+      const r = (5 + urgency * 2.5) * k;
+      ctx.strokeStyle = '#53ff9c';
+      ctx.shadowColor = 'rgba(83,255,156,0.9)';
+      ctx.shadowBlur = (7 + urgency * 8) * k;
+      ctx.lineWidth = 2.2 * k;
+      ctx.beginPath();
+      ctx.moveTo(x - r, y); ctx.lineTo(x + r, y);
+      ctx.moveTo(x, y - r); ctx.lineTo(x, y + r);
+      ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, y, r * 1.5, 0, TAU); ctx.stroke();
+      ctx.shadowBlur = 0;
     }
     // checkpoints
     if (s.radarCheckpoints) {

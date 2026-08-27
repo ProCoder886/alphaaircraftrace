@@ -289,7 +289,7 @@ export class Game {
     this.pendingCampaign = null;
     this.freezeTimer = 0;
     this.lastAutoSave = 0;
-    this._radarBuf = { path: [], cps: [], rivals: [], enemies: [], traffic: [], obstacles: [] };
+    this._radarBuf = { path: [], cps: [], rivals: [], enemies: [], traffic: [], obstacles: [], pod: null };
     this._accum = 0;
     this._rafId = 0;
     this._lastNotify = 0;
@@ -790,6 +790,8 @@ export class Game {
      * player already finished. */
     this._slowT = 0;
     this._outrunT = 0;
+    this._overheatWas = false;
+    this._overheatCritWas = false;
     this._disengageT = 0;
     this._combatWarn = '';
     this._machBand = undefined;
@@ -924,7 +926,7 @@ export class Game {
     /* --- events -------------------------------------------------------- */
     this._processEvents(player.drainEvents(), dt);
     if (this.director) this._processEvents(this.director.drainEvents(), dt);
-    if (this.combat) this._processCombatEvents(this.combat.drainEvents());
+    if (this.combat) this._processCombatEvents(this.combat.drainEvents(), player);
 
     /* --- combo --------------------------------------------------------- */
     if (this.comboTimer > 0) {
@@ -1216,14 +1218,35 @@ export class Game {
     }
 
     if (over) {
-      this._overheatText = `ENGINE OVERHEAT · MACH ${player.mach.toFixed(1)} · ${Math.ceil(left)}s`;
-      this._overheatLevel = left < 15 ? 2 : 1;
-      // Two alert tiers: the standard overheat two-tone, and a faster,
-      // higher one for the last fifteen seconds.
-      this.audio.play(left < 15 ? 'overheatCritical' : 'overheat', { volume: 0.9 });
+      /* Tiers are FRACTIONS of the budget, not absolute seconds. The budget is
+       * fifteen seconds now, and the old test — critical below fifteen
+       * remaining — was true from the first frame above the redline, so the
+       * warning arrived already screaming and had nowhere left to escalate to.
+       * A warning that starts at maximum is a warning with no information in
+       * it. */
+      const critical = heat > 0.55;
+      this._overheatText = critical
+        ? `SLOW DOWN · ENGINE CRITICAL · ${Math.ceil(left)}s`
+        : `ENGINE OVERHEAT · MACH ${player.mach.toFixed(1)} · ${Math.ceil(left)}s`;
+      this._overheatLevel = critical ? 2 : 1;
+      // Two alert tiers: the standard overheat two-tone, and a faster, higher
+      // one once the airframe is past halfway through its budget.
+      this.audio.play(critical ? 'overheatCritical' : 'overheat', { volume: 0.9 });
       if (!this._overheatWas) {
-        this.ui.banner('ENGINE OVERHEAT', `REDUCE BELOW MACH ${MACH.redline}`);
+        this.ui.banner('ENGINE OVERHEAT', `DROP BELOW MACH ${MACH.redline} — ${MACH.overheatTime}s`);
+        this.ui.notify('THROTTLE BACK', 'bad', `MACH ${MACH.redline}`);
         this._overheatWas = true;
+      }
+      /* A second, unmistakable call once past halfway. The first banner is
+       * easy to fly through without registering; this one names the airbrake,
+       * because at Mach 27 easing the throttle is not enough to get under the
+       * redline before the budget runs out. */
+      if (critical && !this._overheatCritWas) {
+        this.ui.banner('ENGINE CRITICAL', 'BRAKE NOW — F — OR LOSE THE AIRFRAME');
+        this.ui.notify('AIRFRAME WILL BE DESTROYED', 'bad', `${Math.ceil(left)}s`);
+        this.audio.play('alert', { volume: 1 });
+        this.render.postfx.flash(0.30, 0xff7a2a);
+        this._overheatCritWas = true;
       }
     } else {
       // Still shows while the engine is cooling, so the pilot can see the
@@ -1232,6 +1255,7 @@ export class Game {
         ? `ENGINE COOLING · ${Math.round((1 - heat) * 100)}%` : '';
       this._overheatLevel = 0;
       this._overheatWas = false;
+      this._overheatCritWas = false;
     }
     this._heat01 = heat;
     return false;
@@ -1527,7 +1551,7 @@ export class Game {
     return false;
   }
 
-  _processCombatEvents(events) {
+  _processCombatEvents(events, player) {
     for (const ev of events) {
       switch (ev.type) {
         case 'hit':
@@ -1596,6 +1620,31 @@ export class Game {
           this.ui.banner('WEAPONS FREE', 'HOSTILES ARE ENGAGING');
           this.ui.notify('HOSTILES ENGAGING', 'bad');
           this.audio.play('lockWarn', { volume: 0.9 });
+          break;
+
+        /* ---- resupply ------------------------------------------------------
+         * Said loudly on arrival, because the pod is only useful if the player
+         * knows about it inside the first few of its thirty seconds — and said
+         * again when it goes, because a reward that expires silently teaches
+         * the player nothing about why it was not there the next time. */
+        case 'podSpawn':
+          this.ui.banner('RESUPPLY INBOUND',
+            `${ev.earned ? 'KILL STREAK' : 'AIRDROP'} · ${ev.seconds}s TO COLLECT`);
+          this.ui.notify('RESUPPLY POD AHEAD', 'good', `${ev.seconds}s`);
+          this.audio.play('powerReady', { volume: 0.95 });
+          break;
+        case 'podTaken': {
+          const before = player.health;
+          player.health = Math.min(player.maxHealth, player.health + player.maxHealth * ev.heal / 100);
+          const gained = Math.round((player.health - before) / player.maxHealth * 100);
+          this.ui.notify('HULL REPAIRED', 'good', `+${gained}%`);
+          this.render.postfx.flash(0.24, 0x53ff9c);
+          this.audio.play('unlock', { volume: 1 });
+          break;
+        }
+        case 'podMissed':
+          this.ui.notify('RESUPPLY LOST', 'bad');
+          this.audio.play('error', { volume: 0.7 });
           break;
 
         default: break;
@@ -2120,7 +2169,15 @@ export class Game {
       }
       buf.enemies.sort((a, b) => a[4] - b[4]);
       if (buf.enemies.length > RADAR.maxContacts) buf.enemies.length = RADAR.maxContacts;
-    }
+      /* The resupply pod. It has thirty seconds and a beacon you can only see
+       * if you happen to be pointing at it, so the radar carries it too —
+       * otherwise the whole feature depends on the player having read a banner
+       * and remembered which way they were facing at the time. */
+      const pod = this.combat.podPosition();
+      buf.pod = pod
+        ? [pod.x - p.position.x, pod.z - p.position.z, this.combat.podSeconds()]
+        : null;
+    } else buf.pod = null;
 
     // Active objective (rotate to the first incomplete one).
     let obj = this.objectives.find((o) => !o.complete) || this.objectives[0];
@@ -2183,6 +2240,7 @@ export class Game {
       radarCheckpoints: buf.cps,
       radarRivals: buf.rivals,
       radarEnemies: buf.enemies,
+      radarPod: buf.pod,
       radarTraffic: buf.traffic,
       radarObstacles: buf.obstacles,
     });

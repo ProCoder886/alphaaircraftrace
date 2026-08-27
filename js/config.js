@@ -232,8 +232,14 @@ export const MACH = {
    * price of staying there rather than a light that comes on the moment the
    * aircraft does what it was built to do. */
   redline: 24,                 // Mach — sustained above this and the engine cooks
-  overheatTime: 60,            // s above the redline before the engine explodes
-  coolRate: 0.45,              // heat bled per second below the redline, relative
+  /* FIFTEEN seconds above the redline, not sixty. A minute of grace is long
+   * enough that the warning reads as decoration — you can cross Mach 24, do
+   * something else entirely, and still have time to think about it. At fifteen
+   * the redline is a decision: back off now, or lose the airframe. Cooling is
+   * quicker to match, so the envelope stays usable in bursts rather than
+   * becoming a one-shot budget for the whole run. */
+  overheatTime: 15,            // s above the redline before the engine explodes
+  coolRate: 0.85,              // heat bled per second below the redline, relative
   get maxMs() { return this.msPerMach * this.max; },
   /** Simulated speed → Mach. */
   of(ms) { return ms / this.msPerMach; },
@@ -283,7 +289,14 @@ export const PHYSICS = {
    * part that was wrong: the airframe used to be at its dry ceiling within a
    * few seconds of the countdown.
    * -------------------------------------------------------------------- */
-  baseThrust: 29,              // m/s^2 at full throttle
+  /* Thrust. Raised by half over the tuning that made the climb feel like a
+   * climb: the SHAPE of the acceleration — reheat lapsing as the ceiling
+   * approaches, so the last tenth costs more than the first half — is what
+   * stops speed feeling switched on, and that shape is preserved. This just
+   * runs the same curve faster. Note that raising thrust alone also raises the
+   * terminal speed (v = sqrt(thrust/k)), so the dry ceiling is pinned by
+   * `topSpeed` rather than by where drag happens to balance. */
+  baseThrust: 40,              // m/s^2 at full throttle
   /* Drag, not thrust, is what was retuned to open the envelope up to Mach 30.
    * Terminal speed is sqrt(thrust / k), so lowering k raises the top of the
    * band while leaving low-speed acceleration — where drag is negligible —
@@ -345,7 +358,7 @@ export const PHYSICS = {
   spoolDown: 2.20,
   burnerLight: 0.55,           // s — afterburner light-off delay
   stallSink: 115,              // m/s of mush with no lift left
-  boostAccel: 58,
+  boostAccel: 87,
   /* ---- how reheat actually accelerates -----------------------------------
    * The old model had none of this and it showed: nitrous was a switch that
    * put the aircraft at its ceiling in about three seconds, which reads as
@@ -369,8 +382,14 @@ export const PHYSICS = {
    * roughly 3 before.
    * -------------------------------------------------------------------- */
   turboThrust: 1.2,            // turbo's extra thrust, as a multiple of boostAccel
-  reheatLapsePower: 2.8,       // how sharply thrust falls toward the ceiling
-  reheatLapseFloor: 0.34,      // fraction of reheat thrust left at the ceiling
+  /* Raised together with thrust. Half again the acceleration would otherwise
+   * flatten the curve into a ramp — the taper is what makes the top of the
+   * envelope feel earned — so the lapse now bites LATER and HARDER: thrust
+   * holds most of the way up and then falls away sharply at the ceiling,
+   * which is both closer to a real engine and keeps the last tenth of the
+   * range costing more than the first half even at the new pace. */
+  reheatLapsePower: 5.0,       // how sharply thrust falls toward the ceiling
+  reheatLapseFloor: 0.18,      // fraction of reheat thrust left at the ceiling
   turboSpool: 2.6,             // s for the turbo stage to light fully
   /* Nitrous burn rate. Halved: the meter used to empty in under four seconds
    * of held Space, which made the boost a tap rather than something you fly
@@ -1225,32 +1244,29 @@ export const COMBAT = {
    * -------------------------------------------------------------------- */
   enemyDrawRange: 26000,       // m — beyond this a hostile is simulated, not drawn
   enemyDrawBudget: 28,         // hard cap on hostile meshes drawn at once
-  /* ---- how tightly a wing flies -----------------------------------------
-   * The formation tables below are written in metres at full combat spread.
-   * Flown at that scale a wing is seven to ten kilometres across, which is
-   * realistic and unreadable: on a radar sized for the whole engagement each
-   * fighter is a lone dot several rings from its own wingmen, and a formation
-   * you cannot see the shape of is not a formation. Scaling the whole table
-   * keeps every shape exactly as designed — the finger-four is still a
-   * finger-four — and brings a wing down to something that arrives as a
-   * CLUSTER you can read at a glance and then pick apart.
-   * -------------------------------------------------------------------- */
-  formationScale: 0.20,        // multiplies every offset in FORMATIONS
-  /* ---- keeping them apart -----------------------------------------------
-   * Scaling the table sets where they START; this is what stops them ending up
-   * in the same cubic metre. Every hostile is pursuing the same aircraft, so
-   * without a separation term the whole wing converges on the player's offsets
-   * and arrives as one point. Each fighter pushes off any neighbour closer
-   * than `spreadMin` and stops caring past `spreadMax` — a band chosen so the
-   * squadron holds a tight lattice rather than dispersing across the map.
+  /* ---- keeping the rank a rank ------------------------------------------
+   * The formation lays out where they START; this is what stops them ending
+   * up in the same cubic metre. Every hostile is pursuing the same aircraft,
+   * so without a separation term the whole rank converges on the player's
+   * offsets and arrives as one point. Each fighter pushes off any neighbour
+   * closer than `spreadMin` and stops caring past `spreadMax`.
    *
-   * The check is strided rather than exhaustive: a hundred aircraft each
-   * testing ninety-nine neighbours every frame is ten thousand distance
-   * computations for a force that changes slowly. `spreadSamples` peers per
-   * frame, on a rotating offset, converges to the same lattice.
+   * The band is now matched to the formation's own `lane` spacing — 1 to 3 km
+   * between neighbours — so separation holds the line the formation drew
+   * rather than pulling it wider than it was laid out.
+   *
+   * The check is strided rather than exhaustive: eighty aircraft each testing
+   * seventy-nine neighbours every frame is thousands of distance computations
+   * for a force that changes slowly. `spreadSamples` peers per frame, on a
+   * rotating offset, converges to the same lattice.
    * -------------------------------------------------------------------- */
-  spreadMin: 620,              // m — closer than this and they push apart
-  spreadMax: 2100,             // m — past this a neighbour is not a neighbour
+  /* Ranks per block before the formation stacks instead of deepening. See
+   * EnemyFighter.formationOffset — this is what keeps an eighty-four ship
+   * squadron inside the spawn ceiling instead of trailing out of it. */
+  formationRanks: 6,
+  formationStack: 760,         // m of altitude between one block and the next
+  spreadMin: 900,              // m — closer than this and they push apart
+  spreadMax: 2600,             // m — past this a neighbour is not a neighbour
   spreadForce: 2.2,            // how hard the push is, in offset metres/second
   spreadSamples: 14,           // peers each fighter checks per frame
   /** Seconds after a kill before that slot is refilled. */
@@ -1262,11 +1278,12 @@ export const COMBAT = {
    * coin flip you lose — and at Mach 25 closure a hostile that spawns behind
    * you is on your tail before the countdown banner has faded.
    *
-   * Seven to ten kilometres is the window. Nearer and there is no time to
-   * point the aircraft; further and the first minute of every sortie is spent
-   * flying toward an empty horizon. Within that window the wing holds the
-   * tight lattice `formationScale` sets, so a wave arrives as a readable
-   * cluster in front of you and the geometry below decides where it forms.
+   * The OPENING wave is placed at exactly `spawnAheadMin` — seven kilometres,
+   * dead ahead, the whole squadron on one front. There is nothing to gain from
+   * scattering the first contact of a sortie across a three-kilometre band:
+   * the player wants to see what they are flying into. Reinforcements after it
+   * draw from the full seven-to-ten window, so later waves arrive with some
+   * variety rather than materialising on a line.
    * -------------------------------------------------------------------- */
   approach: { head: 0.34, side: 0.26, diagonal: 0.24, vertical: 0.16 },
   spawnAheadMin: 7000,         // m — closest a hostile may ever appear
@@ -1320,6 +1337,25 @@ export const COMBAT = {
    * ceiling on the leader, not a speed everyone is given.
    * -------------------------------------------------------------------- */
   paceMach: 24.5,
+  /* ---- resupply ----------------------------------------------------------
+   * A hull that only ever goes down turns a long sortie into a countdown you
+   * cannot influence: play well for six minutes and you are still on the same
+   * downward line, just further along it. A pod is the one lever the player
+   * has over that, and it is deliberately not generous.
+   *
+   * It is EARNED, two ways. Kill `podStreak` hostiles and one is released;
+   * otherwise one comes anyway every `podInterval` seconds so a bad run is
+   * not left with nothing. Either way it drops ahead of the aircraft and lives
+   * for `podLife` — thirty seconds, which at combat speed is a real detour and
+   * a real decision, because turning for it means turning away from the fight.
+   * -------------------------------------------------------------------- */
+  podStreak: 4,                // kills that release one
+  podInterval: 115,            // s — one arrives anyway on this cadence
+  podLife: 30,                 // s the pod stays in the air before it is gone
+  podHeal: 34,                 // hull points restored, as a percentage
+  podAhead: 2600,              // m ahead of the player it materialises
+  podRadius: 240,              // m — how close you have to fly to take it
+  podWarn: 10,                 // s left at which the HUD starts counting down
   /** Enemy liveries — the recolours the same three airframes are issued in. */
   liveries: [
     0x2fd96b, 0x3aa0ff, 0xff5fb0, 0xffd63a, 0xff8a26, 0x1b1d22,
@@ -1944,7 +1980,7 @@ export const DEFAULT_SAVE = {
   selectedMode: 'battle',
   /** Highest story mission cleared. 0 means only mission 1 is available. */
   storyProgress: 0,
-  selectedDifficulty: 'elite',
+  selectedDifficulty: 'hard',
   selectedLocation: 'forest',
   /* `random` is not a weather state — it is the instruction to draw one from
    * the selected location's own pool at launch. It is the shipping default. */
@@ -2001,7 +2037,7 @@ export const DEFAULT_SAVE = {
 
 export const DEFAULTS = {
   mode: 'battle',
-  difficulty: 'elite',
+  difficulty: 'hard',
   /* Emerald Delta is the shipping venue: the widest corridors, the softest
    * terrain and the only weather pool with no state that takes the horizon
    * away, so a first launch shows the game at its most readable.

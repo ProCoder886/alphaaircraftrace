@@ -2566,6 +2566,14 @@ export class Trail {
       side: THREE.DoubleSide,
       uniforms: {
         uColor: { value: new THREE.Color(color) },
+        /* The far end of the ribbon. A jet exhaust is a small hot core that
+         * becomes pale vapour almost immediately and then thins away — it is
+         * NOT a coloured stripe of uniform tint hanging behind the aircraft,
+         * which is what a single-colour trail always looks like. Two colours
+         * and a fast ramp between them is most of what makes it read as
+         * exhaust rather than as a ribbon. */
+        uTail: { value: new THREE.Color(opts.tail ?? 0xdde6ee) },
+        uHeat: { value: opts.heat ?? 1 },
         uWidth: { value: width },
         uOpacity: { value: opts.opacity ?? 1 },
         uTaper: { value: opts.taper ?? 1 },
@@ -2586,11 +2594,19 @@ export class Trail {
           gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
         }`,
       fragmentShader: /* glsl */`
-        uniform vec3 uColor; uniform float uOpacity;
+        uniform vec3 uColor, uTail; uniform float uOpacity, uHeat;
         varying float vT;
         void main(){
-          float a = pow(vT, 2.2) * uOpacity;
-          gl_FragColor = vec4(uColor * (0.5 + a), a);
+          /* vT is 1 at the nozzle and 0 at the far end. The tint therefore
+           * lives only in the first fraction of the ribbon's length — a sixth
+           * power is deliberately abrupt — and everything behind it is pale
+           * vapour cooling and spreading, which is what an exhaust plume
+           * actually does within a few airframe lengths of the nozzle. */
+          float core = pow(vT, 6.0) * uHeat;
+          float body = pow(vT, 2.2);
+          vec3 c = mix(uTail, uColor, clamp(core, 0.0, 1.0));
+          float a = body * uOpacity;
+          gl_FragColor = vec4(c * (0.5 + a), a);
         }`,
     });
     this.mesh = new THREE.Mesh(geo, this.material);
@@ -2903,6 +2919,131 @@ export class BurstParticles {
  * Fully GPU driven: positions wrap around the camera in the vertex shader so
  * there is zero per-frame CPU cost regardless of particle count.
  */
+/* ===========================================================================
+ * CLOUD BANKS
+ * ------------------------------------------------------------------------
+ * The sky as something you fly THROUGH rather than something painted on the
+ * inside of the dome.
+ *
+ * The sky shader already draws a convincing cloud band, but it is infinitely
+ * far away: it never passes the aircraft, never occludes a hostile, and never
+ * gives the eye a fixed object to measure Mach 25 against. Which is a problem,
+ * because at altitude with a distant horizon there is nothing else nearby —
+ * the terrain is kilometres below and the sky does not move.
+ *
+ * These are real billboards in world space, banded into two or three layers,
+ * drifting on the wind and wrapped around the camera the same way rain is, so
+ * the field is always populated without ever being simulated beyond the box.
+ * Flying through one is the cheapest sense of speed in the game.
+ * ======================================================================== */
+export class CloudField {
+  constructor(count, texture, opts = {}) {
+    this.count = count;
+    const base = new THREE.PlaneGeometry(1, 1);
+    const geo = new THREE.InstancedBufferGeometry();
+    geo.index = base.index;
+    geo.attributes.position = base.attributes.position;
+    geo.attributes.uv = base.attributes.uv;
+    const off = new Float32Array(count * 3);
+    const seed = new Float32Array(count * 2);
+    for (let i = 0; i < count; i++) {
+      off[i * 3] = Math.random();
+      /* Banded, not uniform. Real cloud sits in decks, and a uniform vertical
+       * scatter reads as fog with lumps in it rather than as weather with a
+       * base and a top you can climb over. Three decks, biased so the lowest
+       * is the busiest. */
+      const deck = Math.random();
+      const band = deck < 0.5 ? 0.18 : deck < 0.82 ? 0.5 : 0.82;
+      off[i * 3 + 1] = clamp01(band + (Math.random() - 0.5) * 0.16);
+      off[i * 3 + 2] = Math.random();
+      seed[i * 2] = Math.random();
+      seed[i * 2 + 1] = 0.55 + Math.random() * 0.9;      // per-puff size
+    }
+    geo.setAttribute('aOffset', new THREE.InstancedBufferAttribute(off, 3));
+    geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seed, 2));
+    geo.instanceCount = count;
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e7);
+    this.geometry = geo;
+
+    this.uniforms = {
+      uTime: { value: 0 },
+      uCam: { value: new THREE.Vector3() },
+      uBox: { value: new THREE.Vector3(opts.box ?? 14000, opts.boxY ?? 3400, opts.box ?? 14000) },
+      uDrift: { value: new THREE.Vector3() },
+      uSize: { value: opts.size ?? 620 },
+      uColor: { value: new THREE.Color(opts.color ?? 0xf2f6fa) },
+      uShade: { value: new THREE.Color(opts.shade ?? 0x9fb0c2) },
+      uOpacity: { value: 0 },
+      uMap: { value: texture },
+      /* Puffs nearer than this dissolve instead of slapping across the whole
+       * screen as the aircraft passes through one. Without it, entering a
+       * cloud is a single frame of full-screen white. */
+      uFadeNear: { value: opts.fadeNear ?? 900 },
+      uBase: { value: opts.base ?? 1800 },   // world Y of the bottom deck
+    };
+
+    this.material = new THREE.ShaderMaterial({
+      uniforms: this.uniforms,
+      transparent: true, depthWrite: false, blending: THREE.NormalBlending,
+      side: THREE.DoubleSide,
+      vertexShader: /* glsl */`
+        attribute vec3 aOffset; attribute vec2 aSeed;
+        uniform float uTime, uSize, uFadeNear, uBase;
+        uniform vec3 uCam, uBox, uDrift;
+        varying vec2 vUv; varying float vFade; varying float vLit;
+        void main(){
+          vUv = uv;
+          vec3 world = aOffset * uBox + uDrift * uTime;
+          // Wrap the field around the camera in X and Z only — the decks are
+          // meant to stay at their altitude, not follow the aircraft up.
+          vec3 rel = world - uCam + uBox * 0.5;
+          rel.x = mod(mod(rel.x, uBox.x) + uBox.x, uBox.x) - uBox.x * 0.5;
+          rel.z = mod(mod(rel.z, uBox.z) + uBox.z, uBox.z) - uBox.z * 0.5;
+          vec3 center = vec3(uCam.x + rel.x, uBase + aOffset.y * uBox.y, uCam.z + rel.z);
+
+          float d = distance(center, uCam);
+          vFade = smoothstep(0.0, uFadeNear, d) * (1.0 - smoothstep(uBox.x * 0.34, uBox.x * 0.5, d));
+          // Higher decks catch more light.
+          vLit = aOffset.y;
+
+          float sz = uSize * aSeed.y;
+          vec3 toCam = normalize(uCam - center);
+          vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), toCam));
+          vec3 up = cross(toCam, right);
+          vec3 wp = center + (right * position.x + up * position.y * 0.62) * sz;
+          gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
+        }`,
+      fragmentShader: /* glsl */`
+        uniform sampler2D uMap; uniform vec3 uColor, uShade; uniform float uOpacity;
+        varying vec2 vUv; varying float vFade; varying float vLit;
+        void main(){
+          float a = texture2D(uMap, vUv).a * uOpacity * vFade;
+          if (a < 0.004) discard;
+          gl_FragColor = vec4(mix(uShade, uColor, 0.35 + vLit * 0.65), a);
+        }`,
+    });
+    this.points = new THREE.Mesh(geo, this.material);
+    this.points.frustumCulled = false;
+    this.points.renderOrder = 3;
+    this.time = 0;
+  }
+
+  setCount(n) { this.geometry.instanceCount = Math.max(0, Math.min(this.count, Math.floor(n))); }
+
+  update(dt, camPos, windVec) {
+    this.time += dt;
+    this.uniforms.uTime.value = this.time;
+    this.uniforms.uCam.value.copy(camPos);
+    if (windVec) this.uniforms.uDrift.value.copy(windVec).multiplyScalar(3.2);
+  }
+
+  dispose() {
+    this.points.parent?.remove(this.points);
+    this.geometry.dispose();
+    this.material.dispose();
+  }
+}
+
 export class StreakField {
   constructor(count, texture, opts = {}) {
     this.count = count;
@@ -3218,6 +3359,18 @@ export class VFX {
       { gravity: -1.5, scale: 900, blending: THREE.NormalBlending });
     scene.add(this.sparks.points, this.smoke.points);
 
+    /* Cloud banks. Budgeted off the same weather-particle allowance as rain,
+     * at a fraction of the count: these are a few hundred very large
+     * billboards rather than thousands of small ones, so they cost far less
+     * than the number suggests and are switched off entirely by weather that
+     * has no banks in it. */
+    this.clouds = new CloudField(
+      Math.max(40, Math.round(quality.weatherParticles * 0.5)),
+      textures.cloudPuff(256, 11),
+      { box: 15000, boxY: 3200, size: 700, base: 1500 },
+    );
+    scene.add(this.clouds.points);
+
     this.rain = new StreakField(Math.max(64, quality.weatherParticles), streak,
       { box: 220, boxY: 190, fallSpeed: 105, width: 0.10, length: 7.0, color: 0xbfd8ee, opacity: 0.42, fadeNear: 3 });
     this.snow = new StreakField(Math.max(64, Math.floor(quality.weatherParticles * 0.8)), glow,
@@ -3293,6 +3446,17 @@ export class VFX {
     const w = WEATHER[weatherId] || WEATHER.clear;
     const budget = this.quality.weatherParticles * severity;
     const rate = w.precipRate;
+    /* Cloud banks. `banks` is the multiplier the two cloud-structure states
+     * carry; everything else gets a bank presence proportional to how cloudy
+     * it is, so a clear sky has a handful of distant puffs and an overcast one
+     * is genuinely something you fly through. Fog states get the most of all —
+     * a fog bank IS cloud, it is just cloud at your altitude. */
+    const banks = w.banks ?? (w.fog >= 1 ? 1.5 : clamp01(w.cloud) * 0.75);
+    this.clouds.setCount(this.clouds.count * clamp01(banks * severity));
+    this.clouds.uniforms.uOpacity.value = clamp01(0.16 + banks * 0.30);
+    // A fog bank sits on the deck; ordinary cloud sits well above it.
+    this.clouds.uniforms.uBase.value = w.fog >= 1 ? 260 : 1500;
+    this.clouds.uniforms.uBox.value.y = w.fog >= 1 ? 1800 : 3200;
     this.rain.setCount(w.precip === 'rain' ? budget * rate : 0);
     this.snow.setCount(w.precip === 'snow' ? budget * 0.85 * rate : 0);
     this.dust.setCount(w.precip === 'dust' ? budget * 0.6 * rate : 0);
@@ -3524,6 +3688,7 @@ export class VFX {
     this.snow.update(dt, cp, windVec);
     this.dust.update(dt, cp, windVec);
     this.speedField.update(dt, cp, null);
+    this.clouds.update(dt, cp, windVec);
     for (const t of this.trails) t.build();
     for (const e of this.explosionPool) e.update(dt);
   }
@@ -3532,6 +3697,7 @@ export class VFX {
     this._defer.length = 0;
     this.sparks.dispose(); this.smoke.dispose();
     this.rain.dispose(); this.snow.dispose(); this.dust.dispose(); this.speedField.dispose();
+    this.clouds.dispose();
     for (const e of this.explosionPool) e.dispose();
     for (const t of this.trails) t.dispose();
     this.trails.length = 0;
@@ -3674,9 +3840,16 @@ export class RenderSystem {
 
     this.viewRange = 26000 * this.quality.viewDistance * lerp(0.35, 1.15, w.vis) * (biome.ceiling ? 0.35 : 1);
     this.scene.fog.color.copy(this.sky.fogColor);
-    // Aerial perspective should read as depth, not as a white sheet over the
-    // mid-distance — keep terrain colour alive well past the near field.
-    this.scene.fog.density = 2.35 / this.viewRange;
+    /* Aerial perspective should read as depth, not as a white sheet over the
+     * mid-distance — keep terrain colour alive well past the near field.
+     *
+     * `w.fog` is the weather's own fog STRENGTH and it was going unused: every
+     * state was fogged purely by its visibility figure, so a Fog Bank rated
+     * 1.20 looked like ordinary haze and the difference between the fog states
+     * and the clear ones was a number in a table nobody could see. It now
+     * thickens the near field on top of the visibility range, which is what
+     * makes flying into a bank feel like flying into something. */
+    this.scene.fog.density = (2.35 / this.viewRange) * lerp(0.85, 2.4, clamp01((w.fog ?? 0.4) / 1.3));
     this.camera.far = clamp(this.viewRange * 1.5, 6000, WORLD.farPlane);
     this.camera.updateProjectionMatrix();
     this.renderer.setClearColor(this.sky.fogColor, 1);

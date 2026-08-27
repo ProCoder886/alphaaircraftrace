@@ -153,6 +153,91 @@ class HeavyBatch {
 }
 
 /* ===========================================================================
+ * RESUPPLY PODS
+ * ------------------------------------------------------------------------
+ * The one thing in a sortie that puts hull back on the aircraft.
+ *
+ * A pod is a slowly tumbling crate with a cross on it and a beacon column
+ * above it, so it can be found from a long way off without a HUD marker
+ * carrying the whole job. It is taken by PROXIMITY rather than by threading a
+ * ring: the player is being shot at, and asking them to fly through a hoop
+ * while a squadron is on them turns a reward into a punishment.
+ *
+ * It expires. Thirty seconds is long enough to be reachable from most of the
+ * airspace and short enough that taking it means breaking off now, which is
+ * the decision the pod exists to create.
+ * ======================================================================== */
+class HealthPod {
+  constructor(scene, pos) {
+    this.pos = pos.clone();
+    this.life = COMBAT.podLife;
+    this.taken = false;
+    this.group = new THREE.Group();
+    this.group.position.copy(pos);
+
+    const green = 0x53ff9c;
+    // The crate.
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(30, 30, 30),
+      new THREE.MeshStandardMaterial({
+        color: 0x14301f, emissive: green, emissiveIntensity: 0.5,
+        metalness: 0.3, roughness: 0.55,
+      }),
+    );
+    this.group.add(body);
+    // A cross on every face, so it reads from any bearing.
+    const crossMat = new THREE.MeshBasicMaterial({ color: green, toneMapped: false });
+    for (const [rx, ry] of [[0, 0], [0, Math.PI / 2], [0, Math.PI], [0, -Math.PI / 2],
+                            [Math.PI / 2, 0], [-Math.PI / 2, 0]]) {
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(21, 6.5, 1.4), crossMat);
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(6.5, 21, 1.4), crossMat);
+      for (const m of [arm, leg]) {
+        m.position.set(0, 0, 15.6);
+        const pivot = new THREE.Group();
+        pivot.rotation.set(rx, ry, 0);
+        pivot.add(m);
+        this.group.add(pivot);
+      }
+    }
+    /* The beacon. A pod is thirty metres across and the airspace is measured
+     * in kilometres, so without a column of light above it the pod is
+     * invisible from anywhere it would be useful to see it from. */
+    const beam = new THREE.Mesh(
+      new THREE.CylinderGeometry(11, 26, 1400, 10, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: green, transparent: true, opacity: 0.20, side: THREE.DoubleSide,
+        depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false,
+      }),
+    );
+    beam.position.y = 700;
+    this.beam = beam;
+    this.group.add(beam);
+    this.group.renderOrder = 6;
+    scene.add(this.group);
+  }
+
+  update(dt) {
+    this.life -= dt;
+    this.group.rotation.y += dt * 0.9;
+    this.group.rotation.x += dt * 0.35;
+    // Bobbing, and a beacon that pulses harder as the window closes.
+    const t = COMBAT.podLife - this.life;
+    this.group.position.y = this.pos.y + Math.sin(t * 1.6) * 9;
+    const urgency = clamp01(1 - this.life / COMBAT.podWarn);
+    this.beam.material.opacity = (0.14 + Math.sin(t * (3 + urgency * 9)) * 0.06 + urgency * 0.12);
+    return this.life > 0;
+  }
+
+  dispose() {
+    this.group.parent?.remove(this.group);
+    this.group.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+  }
+}
+
+/* ===========================================================================
  * MISSILE GUIDE PATH
  * ------------------------------------------------------------------------
  * The line the next guided round will fly, drawn before you commit to the
@@ -246,69 +331,43 @@ export class WeaponGuide {
  *   · evasive and offensive manoeuvres scaled by difficulty
  * ======================================================================== */
 
-/** Formation offsets in (lateral, vertical, distance) path space. */
 /* ===========================================================================
  * FORMATIONS
  * ------------------------------------------------------------------------
- * Slot offsets as [lateral, vertical, along] in metres at FULL COMBAT SPREAD.
- * Nothing flies at these numbers directly: `COMBAT.formationScale` multiplies
- * every one of them at the point of use, and the table is written unscaled so
- * the shapes stay readable as geometry and the tightness stays one edit.
+ * Every formation in the game is now a set of STRAIGHT RANKS.
  *
- * The figures below are the honest ones — a real finger-four is kilometres
- * across. Flown at full scale, though, a wing is spread wider than the radar
- * has rings: each fighter is a lone dot nowhere near its own wingmen, the
- * shape is invisible, and there is nothing to read. Scaling the whole table
- * keeps the geometry — the stepped pairs, the wall with no way through the
- * middle, the ring that comes from every bearing — and brings the wing down to
- * something that arrives as a CLUSTER, which is the thing the player is
- * actually meant to see coming and then pick apart.
+ * The shapes this replaces — the finger-four, the box you were inside, the
+ * ring that came from every bearing — were good geometry and bad to fly
+ * against. Scattered across kilometres of sky at a dozen different bearings,
+ * a squadron reads as noise: no line to follow, nothing to bracket, and a
+ * radar full of unrelated dots. A rank is legible. You can see where it ends,
+ * pick a side, and work down it.
  *
- * Eight formations, not four, and they are drawn per wave, so a squadron
- * arrives with a shape you have to read rather than a wall you memorise.
+ * A formation is described by four numbers rather than a table of offsets,
+ * because the squadron is thirty to eighty aircraft and no hand-written table
+ * survives that. Slots fill left to right along a rank, then start the next
+ * rank AHEAD of the last — never behind, so the whole squadron stays in front
+ * of the player where it was put.
+ *
+ *   row      aircraft per rank
+ *   lane     metres between neighbours in a rank — the 1-3 km the brief asks
+ *            for, and the number that decides how wide the squadron looks
+ *   rank     metres between one rank and the next, measured along the route
+ *   stagger  along-track step per column, which is what turns a straight rank
+ *            into a straight diagonal without bending it
  * ======================================================================== */
 const FORMATIONS = {
-  /* Finger-four at combat spread: two pairs stepped back and out. */
-  finger: [
-    [0, 0, 0], [7400, 900, -3200], [-7800, -700, -3600], [15200, 1600, -7400],
-    [-15600, -1400, -7800], [22000, 500, -11000],
-  ],
-  /* Line abreast — a wall eight kilometres wide, no way through the middle. */
-  line: [
-    [0, 0, 0], [8000, 0, -600], [-8000, 0, -600], [16000, 400, -1200],
-    [-16000, -400, -1200], [24000, 0, -1800],
-  ],
-  /* Trail — a queue, each covering the one ahead, strung down the route. */
-  trail: [
-    [0, 0, 0], [900, -1100, -8000], [-900, 1200, -16000], [1200, -1500, -24000],
-    [-1200, 1400, -32000], [0, 0, -40000],
-  ],
-  /* Pincer — split high and low, converging on the merge. */
-  pincer: [
-    [0, 4200, -3000], [0, -4200, -3000], [8600, 2600, -7000], [-8600, -2600, -7000],
-    [17000, 3400, -12000], [-17000, -3400, -12000],
-  ],
-  /* Box — four corners of a ten-kilometre cube, and you are inside it. */
-  box: [
-    [7500, 3600, 4000], [-7500, 3600, 4000], [7500, -3600, -4000], [-7500, -3600, -4000],
-    [9500, 0, 0], [-9500, 0, 0],
-  ],
-  /* Wall — a vertical curtain: same ground track, stacked through the block. */
-  wall: [
-    [0, 0, 0], [1800, 5200, -900], [-1800, -5200, -900], [3600, 10000, -1800],
-    [-3600, -10000, -1800], [0, 15000, -2600],
-  ],
-  /* Echelon — a diagonal stair, so the whole wing has a shot down the line. */
-  echelon: [
-    [0, 0, 0], [7200, 1800, -5400], [14400, 3600, -10800], [21600, 5400, -16200],
-    [28800, 7200, -21600], [36000, 9000, -27000],
-  ],
-  /* Encirclement — six bearings on a nine-kilometre ring, every direction at
-   * once. The one the brief calls the hardest merge in the game. */
-  ring: [
-    [9000, 0, 0], [4500, 3000, -7800], [-4500, 3000, -7800],
-    [-9000, 0, 0], [-4500, -3000, 7800], [4500, -3000, 7800],
-  ],
+  /* Line abreast — one straight rank, and the one the brief describes. */
+  line:    { row: 5, lane: 1600, rank: 1100, stagger: 0 },
+  /* The same rank opened to the top of the band: still straight, more sky. */
+  wide:    { row: 4, lane: 2400, rank: 1200, stagger: 0 },
+  /* Echelon — a straight diagonal. Every aircraft on one bearing from the
+   * next, so the whole rank has a clear shot down the line. */
+  echelon: { row: 4, lane: 1500, rank: 1000, stagger: 560 },
+  /* Column — narrow ranks, one behind another. Deep rather than wide. */
+  column:  { row: 3, lane: 1900, rank: 900,  stagger: 0 },
+  /* Broad front — the widest rank that still holds together as one line. */
+  front:   { row: 6, lane: 1200, rank: 1150, stagger: 0 },
 };
 const FORMATION_IDS = Object.keys(FORMATIONS);
 
@@ -408,29 +467,40 @@ export class EnemyFighter extends AIRacer {
   /**
    * Slot offset for this fighter inside its formation.
    *
-   * The table is written at full combat spread and flown at
-   * `COMBAT.formationScale` of it, so every shape keeps its geometry while a
-   * wing arrives as a cluster you can read on the radar instead of a scatter
-   * of unrelated dots several rings apart.
+   * Ranks fill left to right and then step AHEAD, never behind: the squadron
+   * is placed in front of the player deliberately and it has to stay there,
+   * so a deep formation is deep into the distance rather than wrapped back
+   * around the aircraft it is supposed to be ahead of.
+   *
+   * The vertical term is small and deliberate. Perfectly co-planar ranks read
+   * as a cardboard cut-out from the cockpit and, worse, let one warhead take a
+   * whole rank; a couple of hundred metres of stack keeps the line a line
+   * while giving it some body.
    */
   formationOffset() {
-    const f = FORMATIONS[this.formationId] || FORMATIONS.finger;
-    const base = f[this.formationSlot % f.length];
-    const wing = Math.floor(this.formationSlot / f.length);
-    const k = COMBAT.formationScale;
-    if (!wing) return [base[0] * k, base[1] * k, base[2] * k];
-    /* Wings past the first repeat the shape one element further out and one
-     * further back, alternating sides — a squadron of thirty does not fit in a
-     * six-slot table. The repeat steps are scaled by the same factor as the
-     * table itself, or the second wing would sit ten kilometres off a shape
-     * that is now one and a half across, and the cluster would be a cluster
-     * plus a scattering of strays. */
-    const side = wing % 2 ? 1 : -1;
-    const step = Math.ceil(wing / 2);
+    const f = FORMATIONS[this.formationId] || FORMATIONS.line;
+    /* Ranks are capped and then the formation STACKS rather than growing
+     * deeper. A Legendary squadron is eighty-four airframes: at five to a rank
+     * that is seventeen ranks, which runs the tail of the formation twenty
+     * kilometres down the route and out through the spawn ceiling. Blocks of
+     * `formationRanks` keep the depth bounded; each new block sits above the
+     * last and half a lane across, which costs no depth, almost no width, and
+     * reads from the cockpit as a squadron with layers to it. */
+    const perBlock = f.row * COMBAT.formationRanks;
+    const block = Math.floor(this.formationSlot / perBlock);
+    const within = this.formationSlot % perBlock;
+    const row = Math.floor(within / f.row);
+    const col = within % f.row;
+    // Centre the rank on the route so the squadron sits across the player's
+    // nose rather than growing off to one side of it.
+    const mid = (f.row - 1) / 2;
     return [
-      (base[0] + side * step * 4200) * k,
-      (base[1] + side * step * 900) * k,
-      (base[2] - step * 3600) * k,
+      (col - mid) * f.lane + (block % 2 ? f.lane * 0.5 : 0),
+      (col - mid) * 90 + (row % 2 ? 220 : -220) + block * COMBAT.formationStack,
+      /* `col`, not `col - mid`: a stagger measured from the centre would put
+       * half the rank BEHIND the front of the formation, and the whole point
+       * of placing the squadron ahead is that all of it is ahead. */
+      row * f.rank + col * f.stagger,
     ];
   }
 
@@ -813,6 +883,16 @@ export class CombatSystem {
     this.heavies = new HeavyBatch(render.scene);
     this.guide = new WeaponGuide(render.scene);
 
+    /* ---- resupply ---------------------------------------------------------
+     * Pods are released by a kill streak or, failing that, by a long timer, so
+     * a player who is struggling still sees one eventually. The streak counter
+     * is reset when a pod is released rather than when one is taken: earning it
+     * is the achievement, and missing the window is the cost of not breaking
+     * off for it. */
+    this.pods = [];
+    this.podStreak = 0;
+    this.podTimer = COMBAT.podInterval;
+
     /** @type {Array<Object>} live projectiles, both cannon and heavy */
     this.shots = [];
     this.enemies = [];
@@ -988,8 +1068,15 @@ export class CombatSystem {
      * placed behind the player or nearer than the floor. Being bounced from
      * behind before you have any speed is not a hard merge, it is a coin flip
      * you lose. */
+    /* The OPENING wave forms at exactly the floor — seven kilometres, the whole
+     * squadron on one front — so the first thing a sortie shows the player is
+     * a line they can read. Reinforcements draw from the full window, so later
+     * waves arrive with variety instead of materialising on a rule. */
+    const base = () => (this.wave <= 1
+      ? COMBAT.spawnAheadMin
+      : this.rng.float(COMBAT.spawnAheadMin, COMBAT.spawnAheadMax));
     const ahead = (extra = 0) => clamp(
-      this.rng.float(COMBAT.spawnAheadMin, COMBAT.spawnAheadMax) + extra + off[2],
+      base() + extra + off[2],
       COMBAT.spawnAheadMin, COMBAT.spawnAheadCeil,
     );
 
@@ -1313,7 +1400,64 @@ export class CombatSystem {
     this._updateEnemies(dt, player);
     this._updateShots(dt, player);
     this._updateGuide(dt, player);
+    this._updatePods(dt, player);
   }
+
+  /**
+   * Release, age out and collect resupply pods.
+   *
+   * Only ever ONE in the air. Two pods at once turns a decision into a milk
+   * round, and the whole value of the thing is that taking it means turning
+   * away from the fight right now.
+   */
+  _updatePods(dt, player) {
+    if (!player || !player.alive) return;
+
+    // --- release ---------------------------------------------------------
+    this.podTimer -= dt;
+    const earned = this.podStreak >= COMBAT.podStreak;
+    if (!this.pods.length && (earned || this.podTimer <= 0)) {
+      this.podTimer = COMBAT.podInterval;
+      this.podStreak = 0;
+      /* Ahead and a little high — in front of the aircraft so it can be
+       * reached by flying rather than by turning round, and above it so the
+       * beacon is against sky instead of buried in terrain. */
+      _v.set(0, 0, -1).applyQuaternion(player.quaternion);
+      _v3.copy(player.position)
+        .addScaledVector(_v, COMBAT.podAhead)
+        .add(_v2.set(this.rng.float(-500, 500), this.rng.float(180, 620), this.rng.float(-500, 500)));
+      const ground = this.world?.terrainHeight?.(_v3.x, _v3.z) ?? 0;
+      _v3.y = Math.max(_v3.y, ground + 420);
+      this.pods.push(new HealthPod(this.render.scene, _v3));
+      this.events.push({ type: 'podSpawn', earned, seconds: COMBAT.podLife });
+    }
+
+    // --- age, and collect -------------------------------------------------
+    for (let i = this.pods.length - 1; i >= 0; i--) {
+      const pod = this.pods[i];
+      const alive = pod.update(dt);
+      const d = pod.group.position.distanceTo(player.position);
+      if (!pod.taken && d < COMBAT.podRadius) {
+        pod.taken = true;
+        this.render.vfx.explode(pod.group.position, 16, 0x53ff9c);
+        this.render.vfx.sparkBurst(pod.group.position, null, 40, 0xa8ffd0);
+        this.events.push({ type: 'podTaken', heal: COMBAT.podHeal });
+        pod.dispose();
+        this.pods.splice(i, 1);
+        continue;
+      }
+      if (!alive) {
+        this.events.push({ type: 'podMissed' });
+        pod.dispose();
+        this.pods.splice(i, 1);
+      }
+    }
+  }
+
+  /** Seconds left on the live pod, or null when there is not one. */
+  podSeconds() { return this.pods.length ? Math.max(0, this.pods[0].life) : null; }
+  /** World position of the live pod, for the HUD marker and the radar. */
+  podPosition() { return this.pods.length ? this.pods[0].group.position : null; }
 
   _updateLock(dt, player) {
     if (this.lockTarget && !this.lockTarget.alive) this.lockTarget = null;
@@ -1651,6 +1795,7 @@ export class CombatSystem {
         this.events.push({ type: 'hit', weapon: w, amount, target: victim, fromPlayer: s.fromPlayer });
         if (before && !victim.alive && s.fromPlayer) {
           this.kills++;
+          this.podStreak++;
           this.events.push({ type: 'kill', target: victim, weapon: w });
         }
       }
@@ -1734,6 +1879,8 @@ export class CombatSystem {
   dispose() {
     for (const e of this.enemies) e.dispose();
     this.enemies.length = 0;
+    for (const p of this.pods) p.dispose();
+    this.pods.length = 0;
     this.shots.length = 0;
     this.tracers.dispose();
     this.heavies.dispose();

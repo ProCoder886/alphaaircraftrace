@@ -27,7 +27,11 @@ const _q = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
 const _up = new THREE.Vector3(0, 1, 0);
 /** Nitrous burns green — the trail colour the reheat washes the exhaust to. */
-const NITROUS_GREEN = new THREE.Color(0x2bff86);
+const NITROUS_GREEN = new THREE.Color(0x8effc0);
+/* What an exhaust plume turns into a few airframe lengths behind the nozzle:
+ * pale, faintly blue, and almost colourless. Both ends of every engine trail
+ * are mixed against this. */
+const TRAIL_VAPOUR = new THREE.Color(0xdde6ee);
 
 /* ===========================================================================
  * INPUT
@@ -359,10 +363,16 @@ export class AircraftVisual {
       // lengths buried the airframe under two enormous stripes.
       const segs = Math.max(8, Math.round(render.quality.preset.trailSegments * (detail >= 2 ? 0.5 : 0.28)));
       for (const n of this.nozzles) {
-        const t = render.vfx.createTrail(spec.colors.trail, this.engineRadius * 0.95, segs,
-          { minDist: 2.2, opacity: 0, taper: 2.4 });
+        /* The airframe's trail colour, washed most of the way to white. The
+         * raw livery tint is chosen so the AIRCRAFT reads against terrain, and
+         * a plume in that colour is a saturated stripe — the one thing real
+         * exhaust never looks like. Lightened here it becomes a tint on the
+         * hot core, with the shader turning it to vapour behind that. */
+        const tint = new THREE.Color(spec.colors.trail).lerp(TRAIL_VAPOUR, 0.42);
+        const t = render.vfx.createTrail(tint.getHex(), this.engineRadius * 0.95, segs,
+          { minDist: 2.2, opacity: 0, taper: 2.4, tail: TRAIL_VAPOUR.getHex() });
         t.anchor = n.clone();
-        t.baseColor = new THREE.Color(spec.colors.trail);
+        t.baseColor = tint;
         this.engineTrails.push(t);
       }
       if (detail >= 2) {
@@ -432,7 +442,9 @@ export class AircraftVisual {
    * @param {number} hex
    */
   setTrailColor(hex) {
-    const tint = new THREE.Color(hex);
+    // Lightened the same way the player's own plume is, so a hostile ribbon is
+    // vapour with a tint in it rather than a coloured stripe across the sky.
+    const tint = new THREE.Color(hex).lerp(TRAIL_VAPOUR, 0.42);
     for (const t of this.engineTrails) {
       t.baseColor = tint.clone();
       t.material.uniforms.uColor.value.copy(tint);
@@ -521,9 +533,13 @@ export class AircraftVisual {
       t.push(this._wp);
       t.setOpacity(damp(t.material.uniforms.uOpacity.value, trailOpacity, 6, dt));
       t.setWidth(this.engineRadius * (0.24 + mach01 * 0.16 + boost01 * 0.34 + hot * 0.30));
-      // Nitrous burns green. The blend is smoothed by the burner spool, so the
-      // ribbon washes from exhaust colour to green as the reheat lights.
+      /* Nitrous burns green — in the CORE. The shader keeps the tint to the
+       * first fraction of the ribbon, so lighting the burner turns the flame
+       * green without painting a green stripe across the sky behind it. The
+       * core also burns hotter and further back as the reheat comes up, which
+       * is the `uHeat` term. */
       t.material.uniforms.uColor.value.lerpColors(t.baseColor, NITROUS_GREEN, boost01);
+      t.material.uniforms.uHeat.value = 1 + boost01 * 1.7 + hot * 1.2;
     }
     // Wingtip vapour appears under load or at altitude — the physical cue that
     // the airframe is actually working.
